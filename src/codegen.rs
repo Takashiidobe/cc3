@@ -1,5 +1,7 @@
 use crate::ast::{BinaryOp, Expr, ExprKind, Program, Stmt, StmtKind, UnaryOp};
 
+const ARG_REGS: [&str; 6] = ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"];
+
 pub struct Codegen {
     buffer: String,
     label_counter: usize,
@@ -117,7 +119,16 @@ impl Codegen {
                     }
                 }
             }
-            ExprKind::Call(name) => {
+            ExprKind::Call { name, args } => {
+                let mut nargs = 0;
+                for arg in args {
+                    self.gen_expr(arg, program);
+                    self.emit_line("  push %rax");
+                    nargs += 1;
+                }
+                for i in (0..nargs).rev() {
+                    self.emit_line(&format!("  pop {}", ARG_REGS[i]));
+                }
                 self.emit_line("  mov $0, %rax");
                 self.emit_line(&format!("  call {}", name));
             }

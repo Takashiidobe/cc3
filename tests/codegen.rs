@@ -68,9 +68,26 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
 
     std::fs::write(
         &helper_src,
-        "int ret3() { return 3; }\nint ret5() { return 5; }\n",
+        concat!(
+            "int ret3() { return 3; }\n",
+            "int ret5() { return 5; }\n",
+            "int add(int x, int y) { return x + y; }\n",
+            "int sub(int x, int y) { return x - y; }\n",
+            "int add6(int a, int b, int c, int d, int e, int f) {\n",
+            "  return a + b + c + d + e + f;\n",
+            "}\n",
+        ),
     )?;
-    std::fs::write(&helper_header, "int ret3();\nint ret5();\n")?;
+    std::fs::write(
+        &helper_header,
+        concat!(
+            "int ret3();\n",
+            "int ret5();\n",
+            "int add(int x, int y);\n",
+            "int sub(int x, int y);\n",
+            "int add6(int a, int b, int c, int d, int e, int f);\n",
+        ),
+    )?;
     let helper_out = StdCommand::new("clang")
         .arg("-c")
         .arg("-o")

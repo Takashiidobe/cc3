@@ -401,14 +401,12 @@ impl<'a> Parser<'a> {
                 self.expect_punct(Punct::RParen)?;
                 Ok(expr)
             }
-            TokenKind::Ident(name) => {
+            TokenKind::Ident(ref name) => {
                 if matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LParen)) {
-                    self.pos += 1;
-                    self.expect_punct(Punct::LParen)?;
-                    self.expect_punct(Punct::RParen)?;
-                    return Ok(self.expr_at(ExprKind::Call(name), token.location));
+                    return self.parse_funcall(token);
                 }
 
+                let name = name.clone();
                 let idx = match self.find_var(&name) {
                     Some(idx) => idx,
                     None => return Err(self.error_at(token.location, "undefined variable")),
@@ -572,6 +570,37 @@ impl<'a> Parser<'a> {
         let offset = -8 * (self.locals.len() as i32 + 1);
         self.locals.push(Obj { name, ty, offset });
         self.locals.len() - 1
+    }
+
+    fn parse_funcall(&mut self, name_token: Token) -> CompileResult<Expr> {
+        let name = match name_token.kind {
+            TokenKind::Ident(name) => name,
+            _ => unreachable!("parse_funcall expects identifier token"),
+        };
+
+        self.pos += 1;
+        self.expect_punct(Punct::LParen)?;
+
+        let mut args = Vec::new();
+        if !self.check_punct(Punct::RParen) {
+            loop {
+                let arg = self.parse_assign()?;
+                args.push(arg);
+                if args.len() > 6 {
+                    return Err(self.error_at(
+                        name_token.location,
+                        "function call can have up to 6 arguments",
+                    ));
+                }
+                if self.consume_punct(Punct::Comma) {
+                    continue;
+                }
+                break;
+            }
+        }
+
+        self.expect_punct(Punct::RParen)?;
+        Ok(self.expr_at(ExprKind::Call { name, args }, name_token.location))
     }
 
     fn new_add(
@@ -751,7 +780,12 @@ impl<'a> Parser<'a> {
                 .get(*idx)
                 .map(|obj| obj.ty.clone())
                 .unwrap_or(Type::Int),
-            ExprKind::Call(_) => Type::Int,
+            ExprKind::Call { args, .. } => {
+                for arg in args {
+                    self.add_type_expr(arg)?;
+                }
+                Type::Int
+            }
             ExprKind::Unary { expr, .. } => {
                 self.add_type_expr(expr)?;
                 expr.ty.clone().unwrap_or(Type::Int)

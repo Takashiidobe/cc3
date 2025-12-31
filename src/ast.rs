@@ -46,7 +46,10 @@ pub enum ExprKind {
         op: UnaryOp,
         expr: Box<Expr>,
     },
-    Call(String),
+    Call {
+        name: String,
+        args: Vec<Expr>,
+    },
     Addr(Box<Expr>),
     Deref(Box<Expr>),
     Var(usize),
