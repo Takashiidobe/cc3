@@ -73,6 +73,10 @@ impl<'a> Parser<'a> {
             return Ok(Stmt::Decl(idx));
         }
 
+        if self.consume_punct(Punct::Semi) {
+            return Ok(Stmt::Block(Vec::new()));
+        }
+
         let expr = self.parse_expr()?;
         self.expect_punct(Punct::Semi)?;
         Ok(Stmt::Expr(expr))
