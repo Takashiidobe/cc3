@@ -42,7 +42,7 @@ impl<'a> Parser<'a> {
         self.expect_eof()?;
 
         for stmt in &mut body {
-            self.add_type_stmt(stmt);
+            self.add_type_stmt(stmt)?;
         }
 
         let stack_size = align_to(self.locals.len() as i32 * 8, 16);
@@ -55,6 +55,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_stmt(&mut self) -> CompileResult<Stmt> {
+        if matches!(self.peek().kind, TokenKind::Keyword(Keyword::Int)) {
+            return self.parse_declaration();
+        }
+
         if self.consume_keyword(Keyword::Return) {
             let expr = self.parse_expr()?;
             self.expect_punct(Punct::Semi)?;
@@ -126,14 +130,56 @@ impl<'a> Parser<'a> {
             return Ok(self.stmt_last(StmtKind::Block(stmts)));
         }
 
-        if self.consume_keyword(Keyword::Int) {
-            let name = self.expect_ident()?;
-            let idx = self.find_var(&name).unwrap_or_else(|| self.new_lvar(name));
-            self.expect_punct(Punct::Semi)?;
-            return Ok(self.stmt_last(StmtKind::Decl(idx)));
+        self.parse_expr_stmt()
+    }
+
+    fn parse_declaration(&mut self) -> CompileResult<Stmt> {
+        let location = self.peek().location;
+        self.expect_keyword(Keyword::Int)?;
+
+        let mut stmts = Vec::new();
+        let mut first = true;
+
+        while !self.check_punct(Punct::Semi) {
+            if !first {
+                self.expect_punct(Punct::Comma)?;
+            }
+            first = false;
+
+            let (ty, name_token) = self.parse_declarator(Type::Int)?;
+            let name = match name_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => unreachable!("parse_declarator only returns identifiers"),
+            };
+            let idx = self.new_lvar(name, ty);
+            stmts.push(self.stmt_at(StmtKind::Decl(idx), name_token.location));
+
+            if self.consume_punct(Punct::Assign) {
+                let assign_location = self.last_location();
+                let rhs = self.parse_assign()?;
+                let lhs = self.expr_at(ExprKind::Var(idx), name_token.location);
+                let assign = self.expr_at(
+                    ExprKind::Assign {
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    assign_location,
+                );
+                stmts.push(self.stmt_at(StmtKind::Expr(assign), assign_location));
+            }
         }
 
-        self.parse_expr_stmt()
+        self.expect_punct(Punct::Semi)?;
+        Ok(self.stmt_at(StmtKind::Block(stmts), location))
+    }
+
+    fn parse_declarator(&mut self, mut ty: Type) -> CompileResult<(Type, Token)> {
+        while self.consume_punct(Punct::Star) {
+            ty = Type::Ptr(Box::new(ty));
+        }
+
+        let token = self.expect_ident_token()?;
+        Ok((ty, token))
     }
 
     fn parse_expr_stmt(&mut self) -> CompileResult<Stmt> {
@@ -356,9 +402,10 @@ impl<'a> Parser<'a> {
                 Ok(expr)
             }
             TokenKind::Ident(name) => {
-                let idx = self
-                    .find_var(&name)
-                    .unwrap_or_else(|| self.new_lvar(name.clone()));
+                let idx = match self.find_var(&name) {
+                    Some(idx) => idx,
+                    None => return Err(self.error_at(token.location, "undefined variable")),
+                };
                 self.pos += 1;
                 Ok(self.expr_at(ExprKind::Var(idx), token.location))
             }
@@ -399,6 +446,17 @@ impl<'a> Parser<'a> {
                 Ok(name)
             }
             _ => Err(self.error_expected("identifier")),
+        }
+    }
+
+    fn expect_ident_token(&mut self) -> CompileResult<Token> {
+        let token = self.peek().clone();
+        match token.kind {
+            TokenKind::Ident(_) => {
+                self.pos += 1;
+                Ok(token)
+            }
+            _ => Err(self.error_expected("a variable name")),
         }
     }
 
@@ -497,9 +555,9 @@ impl<'a> Parser<'a> {
         self.locals.iter().position(|var| var.name == name)
     }
 
-    fn new_lvar(&mut self, name: String) -> usize {
+    fn new_lvar(&mut self, name: String, ty: Type) -> usize {
         let offset = -8 * (self.locals.len() as i32 + 1);
-        self.locals.push(Obj { name, offset });
+        self.locals.push(Obj { name, ty, offset });
         self.locals.len() - 1
     }
 
@@ -509,8 +567,8 @@ impl<'a> Parser<'a> {
         mut rhs: Expr,
         location: crate::error::SourceLocation,
     ) -> CompileResult<Expr> {
-        self.add_type_expr(&mut lhs);
-        self.add_type_expr(&mut rhs);
+        self.add_type_expr(&mut lhs)?;
+        self.add_type_expr(&mut rhs)?;
 
         let mut lhs_ty = lhs.ty.clone().unwrap_or(Type::Int);
         let mut rhs_ty = rhs.ty.clone().unwrap_or(Type::Int);
@@ -553,7 +611,7 @@ impl<'a> Parser<'a> {
             },
             location,
         );
-        self.add_type_expr(&mut expr);
+        self.add_type_expr(&mut expr)?;
         Ok(expr)
     }
 
@@ -563,8 +621,8 @@ impl<'a> Parser<'a> {
         mut rhs: Expr,
         location: crate::error::SourceLocation,
     ) -> CompileResult<Expr> {
-        self.add_type_expr(&mut lhs);
-        self.add_type_expr(&mut rhs);
+        self.add_type_expr(&mut lhs)?;
+        self.add_type_expr(&mut rhs)?;
 
         let lhs_ty = lhs.ty.clone().unwrap_or(Type::Int);
         let rhs_ty = rhs.ty.clone().unwrap_or(Type::Int);
@@ -599,7 +657,7 @@ impl<'a> Parser<'a> {
                 },
                 location,
             );
-            self.add_type_expr(&mut expr);
+            self.add_type_expr(&mut expr)?;
             return Ok(expr);
         }
 
@@ -623,26 +681,26 @@ impl<'a> Parser<'a> {
                 },
                 location,
             );
-            self.add_type_expr(&mut expr);
+            self.add_type_expr(&mut expr)?;
             return Ok(expr);
         }
 
         Err(self.error_at(location, "invalid operands"))
     }
 
-    fn add_type_stmt(&self, stmt: &mut Stmt) {
+    fn add_type_stmt(&self, stmt: &mut Stmt) -> CompileResult<()> {
         match &mut stmt.kind {
-            StmtKind::Return(expr) => self.add_type_expr(expr),
+            StmtKind::Return(expr) => self.add_type_expr(expr)?,
             StmtKind::Block(stmts) => {
                 for stmt in stmts {
-                    self.add_type_stmt(stmt);
+                    self.add_type_stmt(stmt)?;
                 }
             }
             StmtKind::If { cond, then, els } => {
-                self.add_type_expr(cond);
-                self.add_type_stmt(then);
+                self.add_type_expr(cond)?;
+                self.add_type_stmt(then)?;
                 if let Some(els) = els {
-                    self.add_type_stmt(els);
+                    self.add_type_stmt(els)?;
                 }
             }
             StmtKind::For {
@@ -652,52 +710,59 @@ impl<'a> Parser<'a> {
                 body,
             } => {
                 if let Some(init) = init {
-                    self.add_type_stmt(init);
+                    self.add_type_stmt(init)?;
                 }
                 if let Some(cond) = cond {
-                    self.add_type_expr(cond);
+                    self.add_type_expr(cond)?;
                 }
                 if let Some(inc) = inc {
-                    self.add_type_expr(inc);
+                    self.add_type_expr(inc)?;
                 }
-                self.add_type_stmt(body);
+                self.add_type_stmt(body)?;
             }
-            StmtKind::Expr(expr) => self.add_type_expr(expr),
+            StmtKind::Expr(expr) => self.add_type_expr(expr)?,
             StmtKind::Decl(_) => {}
         }
+        Ok(())
     }
 
-    fn add_type_expr(&self, expr: &mut Expr) {
+    fn add_type_expr(&self, expr: &mut Expr) -> CompileResult<()> {
         if expr.ty.is_some() {
-            return;
+            return Ok(());
         }
 
         let ty = match &mut expr.kind {
             ExprKind::Num(_) => Type::Int,
-            ExprKind::Var(_) => Type::Int,
+            ExprKind::Var(idx) => self
+                .locals
+                .get(*idx)
+                .map(|obj| obj.ty.clone())
+                .unwrap_or(Type::Int),
             ExprKind::Unary { expr, .. } => {
-                self.add_type_expr(expr);
+                self.add_type_expr(expr)?;
                 expr.ty.clone().unwrap_or(Type::Int)
             }
             ExprKind::Addr(expr) => {
-                self.add_type_expr(expr);
+                self.add_type_expr(expr)?;
                 Type::Ptr(Box::new(expr.ty.clone().unwrap_or(Type::Int)))
             }
             ExprKind::Deref(expr) => {
-                self.add_type_expr(expr);
+                self.add_type_expr(expr)?;
                 match expr.ty.clone().unwrap_or(Type::Int) {
                     Type::Ptr(base) => *base,
-                    _ => Type::Int,
+                    _ => {
+                        return Err(self.error_at(expr.location, "invalid pointer dereference"));
+                    }
                 }
             }
             ExprKind::Assign { lhs, rhs } => {
-                self.add_type_expr(lhs);
-                self.add_type_expr(rhs);
+                self.add_type_expr(lhs)?;
+                self.add_type_expr(rhs)?;
                 lhs.ty.clone().unwrap_or(Type::Int)
             }
             ExprKind::Binary { op, lhs, rhs } => {
-                self.add_type_expr(lhs);
-                self.add_type_expr(rhs);
+                self.add_type_expr(lhs)?;
+                self.add_type_expr(rhs)?;
                 match op {
                     BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => Type::Int,
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
@@ -708,6 +773,7 @@ impl<'a> Parser<'a> {
         };
 
         expr.ty = Some(ty);
+        Ok(())
     }
 }
 

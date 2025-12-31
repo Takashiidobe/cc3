@@ -80,6 +80,7 @@ pub enum BinaryOp {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Obj {
     pub name: String,
+    pub ty: Type,
     pub offset: i32,
 }
 
