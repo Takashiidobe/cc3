@@ -57,6 +57,15 @@ impl<'a> Parser<'a> {
             return Ok(Stmt::Return(expr));
         }
 
+        if self.consume_punct(Punct::LBrace) {
+            let mut stmts = Vec::new();
+            while !self.check_punct(Punct::RBrace) {
+                stmts.push(self.parse_stmt()?);
+            }
+            self.expect_punct(Punct::RBrace)?;
+            return Ok(Stmt::Block(stmts));
+        }
+
         if self.consume_keyword(Keyword::Int) {
             let name = self.expect_ident()?;
             let idx = self.find_var(&name).unwrap_or_else(|| self.new_lvar(name));

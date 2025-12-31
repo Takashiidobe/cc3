@@ -8,6 +8,7 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Return(Expr),
+    Block(Vec<Stmt>),
     Expr(Expr),
     Decl(usize),
 }

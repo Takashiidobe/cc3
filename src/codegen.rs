@@ -45,6 +45,11 @@ impl Codegen {
                 self.emit_epilogue();
                 self.emit_line("  ret");
             }
+            Stmt::Block(stmts) => {
+                for stmt in stmts {
+                    self.gen_stmt(stmt, program);
+                }
+            }
             Stmt::Expr(expr) => {
                 self.gen_expr(expr, program);
             }
