@@ -1,0 +1,159 @@
+subject: Add && and ||
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 8c288a6..72bbcc6 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -111,6 +111,8 @@ typedef enum {
+   ND_DEREF,     // unary *
+   ND_NOT,       // !
+   ND_BITNOT,    // ~
++  ND_LOGAND,    // &&
++  ND_LOGOR,     // ||
+   ND_RETURN,    // "return"
+   ND_IF,        // "if"
+   ND_FOR,       // "for" or "while"
+diff --git a/codegen.c b/codegen.c
+index bf0785e..57dfbaf 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -220,6 +220,36 @@ static void gen_expr(Node *node) {
+     gen_expr(node->lhs);
+     println("  not %%rax");
+     return;
++  case ND_LOGAND: {
++    int c = count();
++    gen_expr(node->lhs);
++    println("  cmp $0, %%rax");
++    println("  je .L.false.%d", c);
++    gen_expr(node->rhs);
++    println("  cmp $0, %%rax");
++    println("  je .L.false.%d", c);
++    println("  mov $1, %%rax");
++    println("  jmp .L.end.%d", c);
++    println(".L.false.%d:", c);
++    println("  mov $0, %%rax");
++    println(".L.end.%d:", c);
++    return;
++  }
++  case ND_LOGOR: {
++    int c = count();
++    gen_expr(node->lhs);
++    println("  cmp $0, %%rax");
++    println("  jne .L.true.%d", c);
++    gen_expr(node->rhs);
++    println("  cmp $0, %%rax");
++    println("  jne .L.true.%d", c);
++    println("  mov $0, %%rax");
++    println("  jmp .L.end.%d", c);
++    println(".L.true.%d:", c);
++    println("  mov $1, %%rax");
++    println(".L.end.%d:", c);
++    return;
++  }
+   case ND_FUNCALL: {
+     int nargs = 0;
+     for (Node *arg = node->args; arg; arg = arg->next) {
+diff --git a/parse.c b/parse.c
+index 9648507..ea2fc50 100644
+--- a/parse.c
++++ b/parse.c
+@@ -77,6 +77,8 @@ static Node *stmt(Token **rest, Token *tok);
+ static Node *expr_stmt(Token **rest, Token *tok);
+ static Node *expr(Token **rest, Token *tok);
+ static Node *assign(Token **rest, Token *tok);
++static Node *logor(Token **rest, Token *tok);
++static Node *logand(Token **rest, Token *tok);
+ static Node *bitor(Token **rest, Token *tok);
+ static Node *bitxor(Token **rest, Token *tok);
+ static Node *bitand(Token **rest, Token *tok);
+@@ -699,10 +701,10 @@ static Node *to_assign(Node *binary) {
+   return new_binary(ND_COMMA, expr1, expr2, tok);
+ }
+ 
+-// assign    = bitor (assign-op assign)?
++// assign    = logor (assign-op assign)?
+ // assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^="
+ static Node *assign(Token **rest, Token *tok) {
+-  Node *node = bitor(&tok, tok);
++  Node *node = logor(&tok, tok);
+ 
+   if (equal(tok, "="))
+     return new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+@@ -735,6 +737,28 @@ static Node *assign(Token **rest, Token *tok) {
+   return node;
+ }
+ 
++// logor = logand ("||" logand)*
++static Node *logor(Token **rest, Token *tok) {
++  Node *node = logand(&tok, tok);
++  while (equal(tok, "||")) {
++    Token *start = tok;
++    node = new_binary(ND_LOGOR, node, logand(&tok, tok->next), start);
++  }
++  *rest = tok;
++  return node;
++}
++
++// logand = bitor ("&&" bitor)*
++static Node *logand(Token **rest, Token *tok) {
++  Node *node = bitor(&tok, tok);
++  while (equal(tok, "&&")) {
++    Token *start = tok;
++    node = new_binary(ND_LOGAND, node, bitor(&tok, tok->next), start);
++  }
++  *rest = tok;
++  return node;
++}
++
+ // bitor = bitxor ("|" bitxor)*
+ static Node *bitor(Token **rest, Token *tok) {
+   Node *node = bitxor(&tok, tok);
+diff --git a/test/control.c b/test/control.c
+index f27059a..ae6b2e7 100644
+--- a/test/control.c
++++ b/test/control.c
+@@ -27,6 +27,15 @@ int main() {
+   ASSERT(55, ({ int j=0; for (int i=0; i<=10; i=i+1) j=j+i; j; }));
+   ASSERT(3, ({ int i=3; int j=0; for (int i=0; i<=10; i=i+1) j=j+i; i; }));
+ 
++  ASSERT(1, 0||1);
++  ASSERT(1, 0||(2-2)||5);
++  ASSERT(0, 0||0);
++  ASSERT(0, 0||(2-2));
++
++  ASSERT(0, 0&&1);
++  ASSERT(0, (2-2)&&5);
++  ASSERT(1, 1&&5);
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 04be712..265cf90 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -117,7 +117,7 @@ static int from_hex(char c) {
+ static int read_punct(char *p) {
+   static char *kw[] = {
+     "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=", "++", "--",
+-    "%=", "&=", "|=", "^=",
++    "%=", "&=", "|=", "^=", "&&", "||",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+diff --git a/type.c b/type.c
+index eef2059..c07f26d 100644
+--- a/type.c
++++ b/type.c
+@@ -129,6 +129,8 @@ void add_type(Node *node) {
+     node->ty = ty_long;
+     return;
+   case ND_NOT:
++  case ND_LOGOR:
++  case ND_LOGAND:
+     node->ty = ty_int;
+     return;
+   case ND_BITNOT:

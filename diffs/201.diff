@@ -1,0 +1,241 @@
+subject: Allow to call a fucntion returning a struct
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index e72e8df..0261919 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -222,6 +222,7 @@ struct Node {
+   Type *func_ty;
+   Node *args;
+   bool pass_by_stack;
++  Obj *ret_buffer;
+ 
+   // Goto or labeled statement
+   char *label;
+diff --git a/codegen.c b/codegen.c
+index d0684a4..31b4925 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -112,6 +112,12 @@ static void gen_addr(Node *node) {
+     gen_addr(node->lhs);
+     println("  add $%d, %%rax", node->member->offset);
+     return;
++  case ND_FUNCALL:
++    if (node->ret_buffer) {
++      gen_expr(node);
++      return;
++    }
++    break;
+   }
+ 
+   error_tok(node->tok, "not an lvalue");
+@@ -391,10 +397,16 @@ static void push_args2(Node *args, bool first_pass) {
+ //
+ // - If a function is variadic, set the number of floating-point type
+ //   arguments to RAX.
+-static int push_args(Node *args) {
++static int push_args(Node *node) {
+   int stack = 0, gp = 0, fp = 0;
+ 
+-  for (Node *arg = args; arg; arg = arg->next) {
++  // If the return type is a large struct/union, the caller passes
++  // a pointer to a buffer as if it were the first argument.
++  if (node->ret_buffer && node->ty->size > 16)
++    gp++;
++
++  // Load as many arguments to the registers as possible.
++  for (Node *arg = node->args; arg; arg = arg->next) {
+     Type *ty = arg->ty;
+ 
+     switch (ty->kind) {
+@@ -437,11 +449,56 @@ static int push_args(Node *args) {
+     stack++;
+   }
+ 
+-  push_args2(args, true);
+-  push_args2(args, false);
++  push_args2(node->args, true);
++  push_args2(node->args, false);
++
++  // If the return type is a large struct/union, the caller passes
++  // a pointer to a buffer as if it were the first argument.
++  if (node->ret_buffer && node->ty->size > 16) {
++    println("  lea %d(%%rbp), %%rax", node->ret_buffer->offset);
++    push();
++  }
++
+   return stack;
+ }
+ 
++static void copy_ret_buffer(Obj *var) {
++  Type *ty = var->ty;
++  int gp = 0, fp = 0;
++
++  if (has_flonum1(ty)) {
++    assert(ty->size == 4 || 8 <= ty->size);
++    if (ty->size == 4)
++      println("  movss %%xmm0, %d(%%rbp)", var->offset);
++    else
++      println("  movsd %%xmm0, %d(%%rbp)", var->offset);
++    fp++;
++  } else {
++    for (int i = 0; i < MIN(8, ty->size); i++) {
++      println("  mov %%al, %d(%%rbp)", var->offset + i);
++      println("  shr $8, %%rax");
++    }
++    gp++;
++  }
++
++  if (ty->size > 8) {
++    if (has_flonum2(ty)) {
++      assert(ty->size == 12 || ty->size == 16);
++      if (ty->size == 12)
++        println("  movss %%xmm%d, %d(%%rbp)", fp, var->offset + 8);
++      else
++        println("  movsd %%xmm%d, %d(%%rbp)", fp, var->offset + 8);
++    } else {
++      char *reg1 = (gp == 0) ? "%al" : "%dl";
++      char *reg2 = (gp == 0) ? "%rax" : "%rdx";
++      for (int i = 8; i < MIN(16, ty->size); i++) {
++        println("  mov %s, %d(%%rbp)", reg1, var->offset + i);
++        println("  shr $8, %s", reg2);
++      }
++    }
++  }
++}
++
+ // Generate code for a given node.
+ static void gen_expr(Node *node) {
+   println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
+@@ -578,10 +635,16 @@ static void gen_expr(Node *node) {
+     return;
+   }
+   case ND_FUNCALL: {
+-    int stack_args = push_args(node->args);
++    int stack_args = push_args(node);
+     gen_expr(node->lhs);
+ 
+     int gp = 0, fp = 0;
++
++    // If the return type is a large struct/union, the caller passes
++    // a pointer to a buffer as if it were the first argument.
++    if (node->ret_buffer && node->ty->size > 16)
++      pop(argreg64[gp++]);
++
+     for (Node *arg = node->args; arg; arg = arg->next) {
+       Type *ty = arg->ty;
+ 
+@@ -646,6 +709,14 @@ static void gen_expr(Node *node) {
+         println("  movswl %%ax, %%eax");
+       return;
+     }
++
++    // If the return type is a small struct, a value is returned
++    // using up to two registers.
++    if (node->ret_buffer && node->ty->size <= 16) {
++      copy_ret_buffer(node->ret_buffer);
++      println("  lea %d(%%rbp), %%rax", node->ret_buffer->offset);
++    }
++
+     return;
+   }
+   }
+diff --git a/parse.c b/parse.c
+index 5ff6f13..94ff997 100644
+--- a/parse.c
++++ b/parse.c
+@@ -2236,6 +2236,11 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
+   node->func_ty = ty;
+   node->ty = ty->return_ty;
+   node->args = head.next;
++
++  // If a function returns a struct, it is caller's responsibility
++  // to allocate a space for the return value.
++  if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION)
++    node->ret_buffer = new_lvar("", node->ty);
+   return node;
+ }
+ 
+diff --git a/test/common b/test/common
+index 6d01816..c60a42a 100644
+--- a/test/common
++++ b/test/common
+@@ -92,3 +92,26 @@ int struct_test7(Ty7 x, int n) {
+   default: return x.c;
+   }
+ }
++
++Ty4 struct_test24(void) {
++  return (Ty4){10, 20, 30, 40};
++}
++
++Ty5 struct_test25(void) {
++  return (Ty5){10, 20, 30};
++}
++
++Ty6 struct_test26(void) {
++  return (Ty6){10, 20, 30};
++}
++
++typedef struct { unsigned char a[10]; } Ty20;
++typedef struct { unsigned char a[20]; } Ty21;
++
++Ty20 struct_test27(void) {
++  return (Ty20){10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
++}
++
++Ty21 struct_test28(void) {
++  return (Ty21){1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20};
++}
+diff --git a/test/function.c b/test/function.c
+index 150ddfc..2f6f00a 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -168,6 +168,15 @@ int struct_test15(Ty5 x, int n) {
+   }
+ }
+ 
++typedef struct { unsigned char a[10]; } Ty20;
++typedef struct { unsigned char a[20]; } Ty21;
++
++Ty4 struct_test24(void);
++Ty5 struct_test25(void);
++Ty6 struct_test26(void);
++Ty20 struct_test27(void);
++Ty21 struct_test28(void);
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -288,6 +297,29 @@ int main() {
+   ASSERT(20, ({ Ty5 x={10,20,30}; struct_test15(x, 1); }));
+   ASSERT(30, ({ Ty5 x={10,20,30}; struct_test15(x, 2); }));
+ 
++  ASSERT(10, struct_test24().a);
++  ASSERT(20, struct_test24().b);
++  ASSERT(30, struct_test24().c);
++  ASSERT(40, struct_test24().d);
++
++  ASSERT(10, struct_test25().a);
++  ASSERT(20, struct_test25().b);
++  ASSERT(30, struct_test25().c);
++
++  ASSERT(10, struct_test26().a[0]);
++  ASSERT(20, struct_test26().a[1]);
++  ASSERT(30, struct_test26().a[2]);
++
++  ASSERT(10, struct_test27().a[0]);
++  ASSERT(60, struct_test27().a[5]);
++  ASSERT(100, struct_test27().a[9]);
++
++  ASSERT(1, struct_test28().a[0]);
++  ASSERT(5, struct_test28().a[4]);
++  ASSERT(10, struct_test28().a[9]);
++  ASSERT(15, struct_test28().a[14]);
++  ASSERT(20, struct_test28().a[19]);
++
+   printf("OK\n");
+   return 0;
+ }

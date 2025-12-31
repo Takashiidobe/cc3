@@ -1,0 +1,180 @@
+subject: Add switch-case
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index d2425ff..e1950cd 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -116,6 +116,8 @@ typedef enum {
+   ND_RETURN,    // "return"
+   ND_IF,        // "if"
+   ND_FOR,       // "for" or "while"
++  ND_SWITCH,    // "switch"
++  ND_CASE,      // "case"
+   ND_BLOCK,     // { ... }
+   ND_GOTO,      // "goto"
+   ND_LABEL,     // Labeled statement
+@@ -164,8 +166,15 @@ struct Node {
+   char *unique_label;
+   Node *goto_next;
+ 
+-  Obj *var;      // Used if kind == ND_VAR
+-  int64_t val;   // Used if kind == ND_NUM
++  // Switch-cases
++  Node *case_next;
++  Node *default_case;
++
++  // Variable
++  Obj *var;
++
++  // Numeric literal
++  int64_t val;
+ };
+ 
+ Node *new_cast(Node *expr, Type *ty);
+diff --git a/codegen.c b/codegen.c
+index 6fc7bb5..e2602bc 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -369,6 +369,26 @@ static void gen_stmt(Node *node) {
+     println("%s:", node->brk_label);
+     return;
+   }
++  case ND_SWITCH:
++    gen_expr(node->cond);
++
++    for (Node *n = node->case_next; n; n = n->case_next) {
++      char *reg = (node->cond->ty->size == 8) ? "%rax" : "%eax";
++      println("  cmp $%ld, %s", n->val, reg);
++      println("  je %s", n->label);
++    }
++
++    if (node->default_case)
++      println("  jmp %s", node->default_case->label);
++
++    println("  jmp %s", node->brk_label);
++    gen_stmt(node->then);
++    println("%s:", node->brk_label);
++    return;
++  case ND_CASE:
++    println("%s:", node->label);
++    gen_stmt(node->lhs);
++    return;
+   case ND_BLOCK:
+     for (Node *n = node->body; n; n = n->next)
+       gen_stmt(n);
+diff --git a/parse.c b/parse.c
+index 6b017d9..fc72e88 100644
+--- a/parse.c
++++ b/parse.c
+@@ -75,6 +75,10 @@ static Node *labels;
+ static char *brk_label;
+ static char *cont_label;
+ 
++// Points to a node representing a switch if we are parsing
++// a switch statement. Otherwise, NULL.
++static Node *current_switch;
++
+ static bool is_typename(Token *tok);
+ static Type *declspec(Token **rest, Token *tok, VarAttr *attr);
+ static Type *enum_specifier(Token **rest, Token *tok);
+@@ -583,6 +587,9 @@ static bool is_typename(Token *tok) {
+ 
+ // stmt = "return" expr ";"
+ //      | "if" "(" expr ")" stmt ("else" stmt)?
++//      | "switch" "(" expr ")" stmt
++//      | "case" num ":" stmt
++//      | "default" ":" stmt
+ //      | "for" "(" expr-stmt expr? ";" expr? ")" stmt
+ //      | "while" "(" expr ")" stmt
+ //      | "goto" ident ";"
+@@ -614,6 +621,52 @@ static Node *stmt(Token **rest, Token *tok) {
+     return node;
+   }
+ 
++  if (equal(tok, "switch")) {
++    Node *node = new_node(ND_SWITCH, tok);
++    tok = skip(tok->next, "(");
++    node->cond = expr(&tok, tok);
++    tok = skip(tok, ")");
++
++    Node *sw = current_switch;
++    current_switch = node;
++
++    char *brk = brk_label;
++    brk_label = node->brk_label = new_unique_name();
++
++    node->then = stmt(rest, tok);
++
++    current_switch = sw;
++    brk_label = brk;
++    return node;
++  }
++
++  if (equal(tok, "case")) {
++    if (!current_switch)
++      error_tok(tok, "stray case");
++    int val = get_number(tok->next);
++
++    Node *node = new_node(ND_CASE, tok);
++    tok = skip(tok->next->next, ":");
++    node->label = new_unique_name();
++    node->lhs = stmt(rest, tok);
++    node->val = val;
++    node->case_next = current_switch->case_next;
++    current_switch->case_next = node;
++    return node;
++  }
++
++  if (equal(tok, "default")) {
++    if (!current_switch)
++      error_tok(tok, "stray default");
++
++    Node *node = new_node(ND_CASE, tok);
++    tok = skip(tok->next, ":");
++    node->label = new_unique_name();
++    node->lhs = stmt(rest, tok);
++    current_switch->default_case = node;
++    return node;
++  }
++
+   if (equal(tok, "for")) {
+     Node *node = new_node(ND_FOR, tok);
+     tok = skip(tok->next, "(");
+diff --git a/test/control.c b/test/control.c
+index a38734c..93d06cf 100644
+--- a/test/control.c
++++ b/test/control.c
+@@ -54,6 +54,17 @@ int main() {
+   ASSERT(5, ({ int i=0; int j=0; while (i++<10) { if (i>5) continue; j++; } j; }));
+   ASSERT(11, ({ int i=0; int j=0; while(!i) { while (j++!=10) continue; break; } j; }));
+ 
++  ASSERT(5, ({ int i=0; switch(0) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }));
++  ASSERT(6, ({ int i=0; switch(1) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }));
++  ASSERT(7, ({ int i=0; switch(2) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }));
++  ASSERT(0, ({ int i=0; switch(3) { case 0:i=5;break; case 1:i=6;break; case 2:i=7;break; } i; }));
++  ASSERT(5, ({ int i=0; switch(0) { case 0:i=5;break; default:i=7; } i; }));
++  ASSERT(7, ({ int i=0; switch(1) { case 0:i=5;break; default:i=7; } i; }));
++  ASSERT(2, ({ int i=0; switch(1) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; }));
++  ASSERT(0, ({ int i=0; switch(3) { case 0: 0; case 1: 0; case 2: 0; i=2; } i; }));
++
++  ASSERT(3, ({ int i=0; switch(-1) { case 0xffffffff: i=3; break; } i; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 48a804c..98360c6 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -131,7 +131,8 @@ static bool is_keyword(Token *tok) {
+   static char *kw[] = {
+     "return", "if", "else", "for", "while", "int", "sizeof", "char",
+     "struct", "union", "short", "long", "void", "typedef", "_Bool",
+-    "enum", "static", "goto", "break", "continue",
++    "enum", "static", "goto", "break", "continue", "switch", "case",
++    "default",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

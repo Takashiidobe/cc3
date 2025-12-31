@@ -1,0 +1,191 @@
+subject: Add type cast
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index fc81518..ac145ce 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -112,6 +112,7 @@ typedef enum {
+   ND_STMT_EXPR, // Statement expression
+   ND_VAR,       // Variable
+   ND_NUM,       // Integer
++  ND_CAST,      // Type cast
+ } NodeKind;
+ 
+ // AST node type
+diff --git a/codegen.c b/codegen.c
+index 5db73ab..31f4002 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -113,6 +113,42 @@ static void store(Type *ty) {
+     println("  mov %%rax, (%%rdi)");
+ }
+ 
++enum { I8, I16, I32, I64 };
++
++static int getTypeId(Type *ty) {
++  switch (ty->kind) {
++  case TY_CHAR:
++    return I8;
++  case TY_SHORT:
++    return I16;
++  case TY_INT:
++    return I32;
++  }
++  return I64;
++}
++
++// The table for type casts
++static char i32i8[] = "movsbl %al, %eax";
++static char i32i16[] = "movswl %ax, %eax";
++static char i32i64[] = "movsxd %eax, %rax";
++
++static char *cast_table[][10] = {
++  {NULL,  NULL,   NULL, i32i64}, // i8
++  {i32i8, NULL,   NULL, i32i64}, // i16
++  {i32i8, i32i16, NULL, i32i64}, // i32
++  {i32i8, i32i16, NULL, NULL},   // i64
++};
++
++static void cast(Type *from, Type *to) {
++  if (to->kind == TY_VOID)
++    return;
++
++  int t1 = getTypeId(from);
++  int t2 = getTypeId(to);
++  if (cast_table[t1][t2])
++    println("  %s", cast_table[t1][t2]);
++}
++
+ // Generate code for a given node.
+ static void gen_expr(Node *node) {
+   println("  .loc 1 %d", node->tok->line_no);
+@@ -151,6 +187,10 @@ static void gen_expr(Node *node) {
+     gen_expr(node->lhs);
+     gen_expr(node->rhs);
+     return;
++  case ND_CAST:
++    gen_expr(node->lhs);
++    cast(node->lhs->ty, node->ty);
++    return;
+   case ND_FUNCALL: {
+     int nargs = 0;
+     for (Node *arg = node->args; arg; arg = arg->next) {
+diff --git a/parse.c b/parse.c
+index 7d0e66f..a36c4f6 100644
+--- a/parse.c
++++ b/parse.c
+@@ -73,6 +73,7 @@ static Node *equality(Token **rest, Token *tok);
+ static Node *relational(Token **rest, Token *tok);
+ static Node *add(Token **rest, Token *tok);
+ static Node *mul(Token **rest, Token *tok);
++static Node *cast(Token **rest, Token *tok);
+ static Type *struct_decl(Token **rest, Token *tok);
+ static Type *union_decl(Token **rest, Token *tok);
+ static Node *postfix(Token **rest, Token *tok);
+@@ -139,6 +140,17 @@ static Node *new_var_node(Obj *var, Token *tok) {
+   return node;
+ }
+ 
++static Node *new_cast(Node *expr, Type *ty) {
++  add_type(expr);
++
++  Node *node = calloc(1, sizeof(Node));
++  node->kind = ND_CAST;
++  node->tok = expr->tok;
++  node->lhs = expr;
++  node->ty = copy_type(ty);
++  return node;
++}
++
+ static VarScope *push_scope(char *name) {
+   VarScope *sc = calloc(1, sizeof(VarScope));
+   sc->name = name;
+@@ -706,20 +718,20 @@ static Node *add(Token **rest, Token *tok) {
+   }
+ }
+ 
+-// mul = unary ("*" unary | "/" unary)*
++// mul = cast ("*" cast | "/" cast)*
+ static Node *mul(Token **rest, Token *tok) {
+-  Node *node = unary(&tok, tok);
++  Node *node = cast(&tok, tok);
+ 
+   for (;;) {
+     Token *start = tok;
+ 
+     if (equal(tok, "*")) {
+-      node = new_binary(ND_MUL, node, unary(&tok, tok->next), start);
++      node = new_binary(ND_MUL, node, cast(&tok, tok->next), start);
+       continue;
+     }
+ 
+     if (equal(tok, "/")) {
+-      node = new_binary(ND_DIV, node, unary(&tok, tok->next), start);
++      node = new_binary(ND_DIV, node, cast(&tok, tok->next), start);
+       continue;
+     }
+ 
+@@ -728,20 +740,34 @@ static Node *mul(Token **rest, Token *tok) {
+   }
+ }
+ 
+-// unary = ("+" | "-" | "*" | "&") unary
++// cast = "(" type-name ")" cast | unary
++static Node *cast(Token **rest, Token *tok) {
++  if (equal(tok, "(") && is_typename(tok->next)) {
++    Token *start = tok;
++    Type *ty = typename(&tok, tok->next);
++    tok = skip(tok, ")");
++    Node *node = new_cast(cast(rest, tok), ty);
++    node->tok = start;
++    return node;
++  }
++
++  return unary(rest, tok);
++}
++
++// unary = ("+" | "-" | "*" | "&") cast
+ //       | postfix
+ static Node *unary(Token **rest, Token *tok) {
+   if (equal(tok, "+"))
+-    return unary(rest, tok->next);
++    return cast(rest, tok->next);
+ 
+   if (equal(tok, "-"))
+-    return new_unary(ND_NEG, unary(rest, tok->next), tok);
++    return new_unary(ND_NEG, cast(rest, tok->next), tok);
+ 
+   if (equal(tok, "&"))
+-    return new_unary(ND_ADDR, unary(rest, tok->next), tok);
++    return new_unary(ND_ADDR, cast(rest, tok->next), tok);
+ 
+   if (equal(tok, "*"))
+-    return new_unary(ND_DEREF, unary(rest, tok->next), tok);
++    return new_unary(ND_DEREF, cast(rest, tok->next), tok);
+ 
+   return postfix(rest, tok);
+ }
+diff --git a/test/cast.c b/test/cast.c
+new file mode 100644
+index 0000000..36b63d8
+--- /dev/null
++++ b/test/cast.c
+@@ -0,0 +1,16 @@
++#include "test.h"
++
++int main() {
++  ASSERT(131585, (int)8590066177);
++  ASSERT(513, (short)8590066177);
++  ASSERT(1, (char)8590066177);
++  ASSERT(1, (long)1);
++  ASSERT(0, (long)&*(int *)0);
++  ASSERT(513, ({ int x=512; *(char *)&x=1; x; }));
++  ASSERT(5, ({ int x=5; long y=(long)&x; *(int*)y; }));
++
++  (void)1;
++
++  printf("OK\n");
++  return 0;
++}

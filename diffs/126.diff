@@ -1,0 +1,127 @@
+subject: Allow to call a variadic function
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 22bcae1..0addaaa 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -250,6 +250,7 @@ struct Type {
+   // Function type
+   Type *return_ty;
+   Type *params;
++  bool is_variadic;
+   Type *next;
+ };
+ 
+diff --git a/parse.c b/parse.c
+index 0074f4f..510cf5a 100644
+--- a/parse.c
++++ b/parse.c
+@@ -479,7 +479,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+   return ty;
+ }
+ 
+-// func-params = ("void" | param ("," param)*?)? ")"
++// func-params = ("void" | param ("," param)* ("," "...")?)? ")"
+ // param       = declspec declarator
+ static Type *func_params(Token **rest, Token *tok, Type *ty) {
+   if (equal(tok, "void") && equal(tok->next, ")")) {
+@@ -489,11 +489,19 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
+ 
+   Type head = {};
+   Type *cur = &head;
++  bool is_variadic = false;
+ 
+   while (!equal(tok, ")")) {
+     if (cur != &head)
+       tok = skip(tok, ",");
+ 
++    if (equal(tok, "...")) {
++      is_variadic = true;
++      tok = tok->next;
++      skip(tok, ")");
++      break;
++    }
++
+     Type *ty2 = declspec(&tok, tok, NULL);
+     ty2 = declarator(&tok, tok, ty2);
+ 
+@@ -510,6 +518,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
+ 
+   ty = func_type(ty);
+   ty->params = head.next;
++  ty->is_variadic = is_variadic;
+   *rest = tok->next;
+   return ty;
+ }
+diff --git a/test/common b/test/common
+index 92ebd40..095ef18 100644
+--- a/test/common
++++ b/test/common
+@@ -22,3 +22,13 @@ int false_fn() { return 512; }
+ int true_fn() { return 513; }
+ int char_fn() { return (2<<8)+3; }
+ int short_fn() { return (2<<16)+5; }
++
++int add_all(int n, ...) {
++  va_list ap;
++  va_start(ap, n);
++
++  int sum = 0;
++  for (int i = 0; i < n; i++)
++    sum += va_arg(ap, int);
++  return sum;
++}
+diff --git a/test/function.c b/test/function.c
+index df09ddd..0c0d36d 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -70,6 +70,8 @@ _Bool false_fn();
+ char char_fn();
+ short short_fn();
+ 
++int add_all(int n, ...);
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -116,6 +118,11 @@ int main() {
+   ASSERT(3, char_fn());
+   ASSERT(5, short_fn());
+ 
++  ASSERT(6, add_all(3,1,2,3));
++  ASSERT(5, add_all(4,1,2,3,-1));
++
++  ASSERT(0, ({ char buf[100]; sprintf(buf, "%d %d %s", 1, 2, "foo"); strcmp("1 2 foo", buf); }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/test.h b/test/test.h
+index cada980..6f84030 100644
+--- a/test/test.h
++++ b/test/test.h
+@@ -1,7 +1,7 @@
+ #define ASSERT(x, y) assert(x, y, #y)
+ 
+ void assert(int expected, int actual, char *code);
+-int printf();
+-int sprintf();
++int printf(char *fmt, ...);
++int sprintf(char *buf, char *fmt, ...);
+ int strcmp(char *p, char *q);
+ int memcmp(char *p, char *q, long n);
+diff --git a/tokenize.c b/tokenize.c
+index 8292893..5435c07 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -116,7 +116,7 @@ static int from_hex(char c) {
+ // Read a punctuator token from p and returns its length.
+ static int read_punct(char *p) {
+   static char *kw[] = {
+-    "<<=", ">>=", "==", "!=", "<=", ">=", "->", "+=",
++    "<<=", ">>=", "...", "==", "!=", "<=", ">=", "->", "+=",
+     "-=", "*=", "/=", "++", "--", "%=", "&=", "|=", "^=", "&&",
+     "||", "<<", ">>",
+   };

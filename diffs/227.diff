@@ -1,0 +1,57 @@
+subject: Add UTF-8 string literal
+
+
+
+diff --git a/test/unicode.c b/test/unicode.c
+index c57c2a6..688a0a4 100644
+--- a/test/unicode.c
++++ b/test/unicode.c
+@@ -34,6 +34,11 @@ int main() {
+ 
+   ASSERT(0, strcmp(STR(U'a'), "U'a'"));
+ 
++  ASSERT(4, sizeof(u8"abc"));
++  ASSERT(0, strcmp(u8"abc", "abc"));
++
++  ASSERT(0, strcmp(STR(u8"a"), "u8\"a\""));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 933ee72..925621f 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -228,12 +228,12 @@ static char *string_literal_end(char *p) {
+   return p;
+ }
+ 
+-static Token *read_string_literal(char *start) {
+-  char *end = string_literal_end(start + 1);
+-  char *buf = calloc(1, end - start);
++static Token *read_string_literal(char *start, char *quote) {
++  char *end = string_literal_end(quote + 1);
++  char *buf = calloc(1, end - quote);
+   int len = 0;
+ 
+-  for (char *p = start + 1; p < end;) {
++  for (char *p = quote + 1; p < end;) {
+     if (*p == '\\')
+       buf[len++] = read_escaped_char(&p, p + 1);
+     else
+@@ -467,7 +467,14 @@ Token *tokenize(File *file) {
+ 
+     // String literal
+     if (*p == '"') {
+-      cur = cur->next = read_string_literal(p);
++      cur = cur->next = read_string_literal(p, p);
++      p += cur->len;
++      continue;
++    }
++
++    // UTF-8 string literal
++    if (startswith(p, "u8\"")) {
++      cur = cur->next = read_string_literal(p, p + 2);
+       p += cur->len;
+       continue;
+     }

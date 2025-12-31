@@ -1,0 +1,159 @@
+subject: Add string literal
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 7448754..9ccc49f 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -19,6 +19,7 @@ typedef enum {
+   TK_IDENT,   // Identifiers
+   TK_PUNCT,   // Punctuators
+   TK_KEYWORD, // Keywords
++  TK_STR,     // String literals
+   TK_NUM,     // Numeric literals
+   TK_EOF,     // End-of-file markers
+ } TokenKind;
+@@ -31,6 +32,8 @@ struct Token {
+   int val;        // If kind is TK_NUM, its value
+   char *loc;      // Token location
+   int len;        // Token length
++  Type *ty;       // Used if TK_STR
++  char *str;      // String literal contents including terminating '\0'
+ };
+ 
+ void error(char *fmt, ...);
+@@ -59,6 +62,9 @@ struct Obj {
+   // Global variable or function
+   bool is_function;
+ 
++  // Global variable
++  char *init_data;
++
+   // Function
+   Obj *params;
+   Node *body;
+diff --git a/codegen.c b/codegen.c
+index b6eab83..7450d53 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -233,7 +233,13 @@ static void emit_data(Obj *prog) {
+     printf("  .data\n");
+     printf("  .globl %s\n", var->name);
+     printf("%s:\n", var->name);
+-    printf("  .zero %d\n", var->ty->size);
++
++    if (var->init_data) {
++      for (int i = 0; i < var->ty->size; i++)
++        printf("  .byte %d\n", var->init_data[i]);
++    } else {
++      printf("  .zero %d\n", var->ty->size);
++    }
+   }
+ }
+ 
+diff --git a/parse.c b/parse.c
+index 33eeab6..c6c1f37 100644
+--- a/parse.c
++++ b/parse.c
+@@ -106,6 +106,23 @@ static Obj *new_gvar(char *name, Type *ty) {
+   return var;
+ }
+ 
++static char *new_unique_name(void) {
++  static int id = 0;
++  char *buf = calloc(1, 20);
++  sprintf(buf, ".L..%d", id++);
++  return buf;
++}
++
++static Obj *new_anon_gvar(Type *ty) {
++  return new_gvar(new_unique_name(), ty);
++}
++
++static Obj *new_string_literal(char *p, Type *ty) {
++  Obj *var = new_anon_gvar(ty);
++  var->init_data = p;
++  return var;
++}
++
+ static char *get_ident(Token *tok) {
+   if (tok->kind != TK_IDENT)
+     error_tok(tok, "expected an identifier");
+@@ -530,7 +547,7 @@ static Node *funcall(Token **rest, Token *tok) {
+   return node;
+ }
+ 
+-// primary = "(" expr ")" | "sizeof" unary | ident func-args? | num
++// primary = "(" expr ")" | "sizeof" unary | ident func-args? | str | num
+ static Node *primary(Token **rest, Token *tok) {
+   if (equal(tok, "(")) {
+     Node *node = expr(&tok, tok->next);
+@@ -557,6 +574,12 @@ static Node *primary(Token **rest, Token *tok) {
+     return new_var_node(var, tok);
+   }
+ 
++  if (tok->kind == TK_STR) {
++    Obj *var = new_string_literal(tok->str, tok->ty);
++    *rest = tok->next;
++    return new_var_node(var, tok);
++  }
++
+   if (tok->kind == TK_NUM) {
+     Node *node = new_num(tok->val, tok);
+     *rest = tok->next;
+diff --git a/test.sh b/test.sh
+index 51d235d..fd75c46 100755
+--- a/test.sh
++++ b/test.sh
+@@ -171,4 +171,13 @@ assert 1 'int main() { char x; return sizeof(x); }'
+ assert 10 'int main() { char x[10]; return sizeof(x); }'
+ assert 1 'int main() { return sub_char(7, 3, 3); } int sub_char(char a, char b, char c) { return a-b-c; }'
+ 
++assert 0 'int main() { return ""[0]; }'
++assert 1 'int main() { return sizeof(""); }'
++
++assert 97 'int main() { return "abc"[0]; }'
++assert 98 'int main() { return "abc"[1]; }'
++assert 99 'int main() { return "abc"[2]; }'
++assert 0 'int main() { return "abc"[3]; }'
++assert 4 'int main() { return sizeof("abc"); }'
++
+ echo OK
+diff --git a/tokenize.c b/tokenize.c
+index 7aa19ba..89a362f 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -99,6 +99,18 @@ static bool is_keyword(Token *tok) {
+   return false;
+ }
+ 
++static Token *read_string_literal(char *start) {
++  char *p = start + 1;
++  for (; *p != '"'; p++)
++    if (*p == '\n' || *p == '\0')
++      error_at(start, "unclosed string literal");
++
++  Token *tok = new_token(TK_STR, start, p + 1);
++  tok->ty = array_of(ty_char, p - start);
++  tok->str = strndup(start + 1, p - start - 1);
++  return tok;
++}
++
+ static void convert_keywords(Token *tok) {
+   for (Token *t = tok; t->kind != TK_EOF; t = t->next)
+     if (is_keyword(t))
+@@ -127,6 +139,13 @@ Token *tokenize(char *p) {
+       continue;
+     }
+ 
++    // String literal
++    if (*p == '"') {
++      cur = cur->next = read_string_literal(p);
++      p += cur->len;
++      continue;
++    }
++
+     // Identifier or keyword
+     if (is_ident1(*p)) {
+       char *start = p;

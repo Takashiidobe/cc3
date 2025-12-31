@@ -1,0 +1,107 @@
+subject: Add union designated initializer
+
+
+
+diff --git a/parse.c b/parse.c
+index 3bebce4..7f85b9b 100644
+--- a/parse.c
++++ b/parse.c
+@@ -74,6 +74,10 @@ struct Initializer {
+   // If it's an initializer for an aggregate type (e.g. array or struct),
+   // `children` has initializers for its children.
+   Initializer **children;
++
++  // Only one member can be initialized for a union.
++  // `mem` is used to clarify which member is initialized.
++  Member *mem;
+ };
+ 
+ // For local variable initializer.
+@@ -917,6 +921,13 @@ static void designation(Token **rest, Token *tok, Initializer *init) {
+     return;
+   }
+ 
++  if (equal(tok, ".") && init->ty->kind == TY_UNION) {
++    Member *mem = struct_designator(&tok, tok, init->ty);
++    init->mem = mem;
++    designation(rest, tok, init->children[mem->idx]);
++    return;
++  }
++
+   if (equal(tok, "."))
+     error_tok(tok, "field name not in struct or union initializer");
+ 
+@@ -1062,7 +1073,18 @@ static void struct_initializer2(Token **rest, Token *tok, Initializer *init, Mem
+ 
+ static void union_initializer(Token **rest, Token *tok, Initializer *init) {
+   // Unlike structs, union initializers take only one initializer,
+-  // and that initializes the first union member.
++  // and that initializes the first union member by default.
++  // You can initialize other member using a designated initializer.
++  if (equal(tok, "{") && equal(tok->next, ".")) {
++    Member *mem = struct_designator(&tok, tok->next, init->ty);
++    init->mem = mem;
++    designation(&tok, tok, init->children[mem->idx]);
++    *rest = skip(tok, "}");
++    return;
++  }
++
++  init->mem = init->ty->members;
++
+   if (equal(tok, "{")) {
+     initializer2(&tok, tok->next, init->children[0]);
+     consume(&tok, tok, ",");
+@@ -1199,8 +1221,9 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
+   }
+ 
+   if (ty->kind == TY_UNION) {
+-    InitDesg desg2 = {desg, 0, ty->members};
+-    return create_lvar_init(init->children[0], ty->members->ty, &desg2, tok);
++    Member *mem = init->mem ? init->mem : ty->members;
++    InitDesg desg2 = {desg, 0, mem};
++    return create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
+   }
+ 
+   if (!init->expr)
+@@ -1290,8 +1313,12 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
+     return cur;
+   }
+ 
+-  if (ty->kind == TY_UNION)
+-    return write_gvar_data(cur, init->children[0], ty->members->ty, buf, offset);
++  if (ty->kind == TY_UNION) {
++    if (!init->mem)
++      return cur;
++    return write_gvar_data(cur, init->children[init->mem->idx],
++                           init->mem->ty, buf, offset);
++  }
+ 
+   if (!init->expr)
+     return cur;
+diff --git a/test/initializer.c b/test/initializer.c
+index d652966..e952ab6 100644
+--- a/test/initializer.c
++++ b/test/initializer.c
+@@ -27,6 +27,8 @@ struct {int a[2];} g40[2] = {{1, 2}, 3, 4};
+ struct {int a[2];} g41[2] = {1, 2, 3, 4};
+ char g43[][4] = {'f', 'o', 'o', 0, 'b', 'a', 'r', 0};
+ char *g44 = {"foo"};
++union { int a; char b[4]; } g50 = {.b[2]=0x12};
++union { int a; } g51[2] = {};
+ 
+ typedef char T60[];
+ T60 g60 = {1, 2, 3};
+@@ -246,6 +248,13 @@ int main() {
+   ASSERT(5, ((struct { int a,b,c; }){ .c=5 }).c);
+   ASSERT(0, ((struct { int a,b,c; }){ .c=5 }).a);
+ 
++  ASSERT(0x00ff, ({ union { unsigned short a; char b[2]; } x={.b[0]=0xff}; x.a; }));
++  ASSERT(0xff00, ({ union { unsigned short a; char b[2]; } x={.b[1]=0xff}; x.a; }));
++
++  ASSERT(0x00120000, g50.a);
++  ASSERT(0, g51[0].a);
++  ASSERT(0, g51[1].a);
++
+   printf("OK\n");
+   return 0;
+ }

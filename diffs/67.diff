@@ -1,0 +1,220 @@
+subject: Implement usual arithmetic conversion
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index ac145ce..7123dbd 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -146,6 +146,7 @@ struct Node {
+   int64_t val;   // Used if kind == ND_NUM
+ };
+ 
++Node *new_cast(Node *expr, Type *ty);
+ Obj *parse(Token *tok);
+ 
+ //
+diff --git a/codegen.c b/codegen.c
+index 31f4002..2fb7e83 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -81,10 +81,15 @@ static void load(Type *ty) {
+     return;
+   }
+ 
++  // When we load a char or a short value to a register, we always
++  // extend them to the size of int, so we can assume the lower half of
++  // a register always contains a valid value. The upper half of a
++  // register for char, short and int may contain garbage. When we load
++  // a long value to a register, it simply occupies the entire register.
+   if (ty->size == 1)
+-    println("  movsbq (%%rax), %%rax");
++    println("  movsbl (%%rax), %%eax");
+   else if (ty->size == 2)
+-    println("  movswq (%%rax), %%rax");
++    println("  movswl (%%rax), %%eax");
+   else if (ty->size == 4)
+     println("  movsxd (%%rax), %%rax");
+   else
+diff --git a/parse.c b/parse.c
+index a36c4f6..ba29f00 100644
+--- a/parse.c
++++ b/parse.c
+@@ -134,13 +134,20 @@ static Node *new_num(int64_t val, Token *tok) {
+   return node;
+ }
+ 
++static Node *new_long(int64_t val, Token *tok) {
++  Node *node = new_node(ND_NUM, tok);
++  node->val = val;
++  node->ty = ty_long;
++  return node;
++}
++
+ static Node *new_var_node(Obj *var, Token *tok) {
+   Node *node = new_node(ND_VAR, tok);
+   node->var = var;
+   return node;
+ }
+ 
+-static Node *new_cast(Node *expr, Type *ty) {
++Node *new_cast(Node *expr, Type *ty) {
+   add_type(expr);
+ 
+   Node *node = calloc(1, sizeof(Node));
+@@ -664,7 +671,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
+   }
+ 
+   // ptr + num
+-  rhs = new_binary(ND_MUL, rhs, new_num(lhs->ty->base->size, tok), tok);
++  rhs = new_binary(ND_MUL, rhs, new_long(lhs->ty->base->size, tok), tok);
+   return new_binary(ND_ADD, lhs, rhs, tok);
+ }
+ 
+@@ -679,7 +686,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
+ 
+   // ptr - num
+   if (lhs->ty->base && is_integer(rhs->ty)) {
+-    rhs = new_binary(ND_MUL, rhs, new_num(lhs->ty->base->size, tok), tok);
++    rhs = new_binary(ND_MUL, rhs, new_long(lhs->ty->base->size, tok), tok);
+     add_type(rhs);
+     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
+     node->ty = lhs->ty;
+diff --git a/test/arith.c b/test/arith.c
+index 44b699c..d116a20 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -31,6 +31,8 @@ int main() {
+   ASSERT(1, 1>=1);
+   ASSERT(0, 1>=2);
+ 
++  ASSERT(0, 1073741824 * 100 / 100);
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/sizeof.c b/test/sizeof.c
+index e63bd6d..da43d89 100644
+--- a/test/sizeof.c
++++ b/test/sizeof.c
+@@ -19,6 +19,15 @@ int main() {
+   ASSERT(48, sizeof(int[3][4]));
+   ASSERT(8, sizeof(struct {int a; int b;}));
+ 
++  ASSERT(8, sizeof(-10 + (long)5));
++  ASSERT(8, sizeof(-10 - (long)5));
++  ASSERT(8, sizeof(-10 * (long)5));
++  ASSERT(8, sizeof(-10 / (long)5));
++  ASSERT(8, sizeof((long)-10 + 5));
++  ASSERT(8, sizeof((long)-10 - 5));
++  ASSERT(8, sizeof((long)-10 * 5));
++  ASSERT(8, sizeof((long)-10 / 5));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/usualconv.c b/test/usualconv.c
+new file mode 100644
+index 0000000..b1f951a
+--- /dev/null
++++ b/test/usualconv.c
+@@ -0,0 +1,28 @@
++#include "test.h"
++
++int main() {
++  ASSERT((long)-5, -10 + (long)5);
++  ASSERT((long)-15, -10 - (long)5);
++  ASSERT((long)-50, -10 * (long)5);
++  ASSERT((long)-2, -10 / (long)5);
++
++  ASSERT(1, -2 < (long)-1);
++  ASSERT(1, -2 <= (long)-1);
++  ASSERT(0, -2 > (long)-1);
++  ASSERT(0, -2 >= (long)-1);
++
++  ASSERT(1, (long)-2 < -1);
++  ASSERT(1, (long)-2 <= -1);
++  ASSERT(0, (long)-2 > -1);
++  ASSERT(0, (long)-2 >= -1);
++
++  ASSERT(0, 2147483647 + 2147483647 + 2);
++  ASSERT((long)-1, ({ long x; x=-1; x; }));
++
++  ASSERT(1, ({ char x[3]; x[0]=0; x[1]=1; x[2]=2; char *y=x+1; y[0]; }));
++  ASSERT(0, ({ char x[3]; x[0]=0; x[1]=1; x[2]=2; char *y=x+1; y[-1]; }));
++  ASSERT(5, ({ struct t {char a;} x, y; x.a=5; y=x; y.a; }));
++
++  printf("OK\n");
++  return 0;
++}
+diff --git a/type.c b/type.c
+index 78f09d9..dbdb705 100644
+--- a/type.c
++++ b/type.c
+@@ -47,6 +47,27 @@ Type *array_of(Type *base, int len) {
+   return ty;
+ }
+ 
++static Type *get_common_type(Type *ty1, Type *ty2) {
++  if (ty1->base)
++    return pointer_to(ty1->base);
++  if (ty1->size == 8 || ty2->size == 8)
++    return ty_long;
++  return ty_int;
++}
++
++// For many binary operators, we implicitly promote operands so that
++// both operands have the same type. Any integral type smaller than
++// int is always promoted to int. If the type of one operand is larger
++// than the other's (e.g. "long" vs. "int"), the smaller operand will
++// be promoted to match with the other.
++//
++// This operation is called the "usual arithmetic conversion".
++static void usual_arith_conv(Node **lhs, Node **rhs) {
++  Type *ty = get_common_type((*lhs)->ty, (*rhs)->ty);
++  *lhs = new_cast(*lhs, ty);
++  *rhs = new_cast(*rhs, ty);
++}
++
+ void add_type(Node *node) {
+   if (!node || node->ty)
+     return;
+@@ -65,23 +86,36 @@ void add_type(Node *node) {
+     add_type(n);
+ 
+   switch (node->kind) {
++  case ND_NUM:
++    node->ty = (node->val == (int)node->val) ? ty_int : ty_long;
++    return;
+   case ND_ADD:
+   case ND_SUB:
+   case ND_MUL:
+   case ND_DIV:
+-  case ND_NEG:
++    usual_arith_conv(&node->lhs, &node->rhs);
+     node->ty = node->lhs->ty;
+     return;
++  case ND_NEG: {
++    Type *ty = get_common_type(ty_int, node->lhs->ty);
++    node->lhs = new_cast(node->lhs, ty);
++    node->ty = ty;
++    return;
++  }
+   case ND_ASSIGN:
+     if (node->lhs->ty->kind == TY_ARRAY)
+       error_tok(node->lhs->tok, "not an lvalue");
++    if (node->lhs->ty->kind != TY_STRUCT)
++      node->rhs = new_cast(node->rhs, node->lhs->ty);
+     node->ty = node->lhs->ty;
+     return;
+   case ND_EQ:
+   case ND_NE:
+   case ND_LT:
+   case ND_LE:
+-  case ND_NUM:
++    usual_arith_conv(&node->lhs, &node->rhs);
++    node->ty = ty_int;
++    return;
+   case ND_FUNCALL:
+     node->ty = ty_long;
+     return;

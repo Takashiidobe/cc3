@@ -1,0 +1,109 @@
+subject: Use long or ulong instead of int for some expressions
+
+
+
+diff --git a/parse.c b/parse.c
+index 37b2f64..88945b6 100644
+--- a/parse.c
++++ b/parse.c
+@@ -213,6 +213,13 @@ static Node *new_long(int64_t val, Token *tok) {
+   return node;
+ }
+ 
++static Node *new_ulong(long val, Token *tok) {
++  Node *node = new_node(ND_NUM, tok);
++  node->val = val;
++  node->ty = ty_ulong;
++  return node;
++}
++
+ static Node *new_var_node(Obj *var, Token *tok) {
+   Node *node = new_node(ND_VAR, tok);
+   node->var = var;
+@@ -1738,7 +1745,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
+   // ptr - ptr, which returns how many elements are between the two.
+   if (lhs->ty->base && rhs->ty->base) {
+     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
+-    node->ty = ty_int;
++    node->ty = ty_long;
+     return new_binary(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
+   }
+ 
+@@ -2140,25 +2147,25 @@ static Node *primary(Token **rest, Token *tok) {
+   if (equal(tok, "sizeof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
+     Type *ty = typename(&tok, tok->next->next);
+     *rest = skip(tok, ")");
+-    return new_num(ty->size, start);
++    return new_ulong(ty->size, start);
+   }
+ 
+   if (equal(tok, "sizeof")) {
+     Node *node = unary(rest, tok->next);
+     add_type(node);
+-    return new_num(node->ty->size, tok);
++    return new_ulong(node->ty->size, tok);
+   }
+ 
+   if (equal(tok, "_Alignof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
+     Type *ty = typename(&tok, tok->next->next);
+     *rest = skip(tok, ")");
+-    return new_num(ty->align, tok);
++    return new_ulong(ty->align, tok);
+   }
+ 
+   if (equal(tok, "_Alignof")) {
+     Node *node = unary(rest, tok->next);
+     add_type(node);
+-    return new_num(node->ty->align, tok);
++    return new_ulong(node->ty->align, tok);
+   }
+ 
+   if (tok->kind == TK_IDENT) {
+diff --git a/test/alignof.c b/test/alignof.c
+index 952ab8d..d71abde 100644
+--- a/test/alignof.c
++++ b/test/alignof.c
+@@ -35,6 +35,10 @@ int main() {
+   ASSERT(1, ({ char x; _Alignof x; }));
+   ASSERT(4, ({ int x; _Alignof x; }));
+ 
++  ASSERT(1, _Alignof(char) << 31 >> 31);
++  ASSERT(1, _Alignof(char) << 63 >> 63);
++  ASSERT(1, ({ char x; _Alignof(x) << 63 >> 63; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/arith.c b/test/arith.c
+index 671c3c7..83ef9b8 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -121,6 +121,14 @@ int main() {
+ 
+   1 ? -2 : (void)-1;
+ 
++  ASSERT(20, ({ int x; int *p=&x; p+20-p; }));
++  ASSERT(1, ({ int x; int *p=&x; p+20-p>0; }));
++  ASSERT(-20, ({ int x; int *p=&x; p-20-p; }));
++  ASSERT(1, ({ int x; int *p=&x; p-20-p<0; }));
++
++  ASSERT(15, (char *)0xffffffffffffffff - (char *)0xfffffffffffffff0);
++  ASSERT(-15, (char *)0xfffffffffffffff0 - (char *)0xffffffffffffffff);
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/sizeof.c b/test/sizeof.c
+index 0c501d7..8a6bf1a 100644
+--- a/test/sizeof.c
++++ b/test/sizeof.c
+@@ -81,6 +81,9 @@ int main() {
+   ASSERT(4, sizeof(1?(short)2:(char)3));
+   ASSERT(8, sizeof(1?(long)2:(char)3));
+ 
++  ASSERT(1, sizeof(char) << 31 >> 31);
++  ASSERT(1, sizeof(char) << 63 >> 63);
++
+   printf("OK\n");
+   return 0;
+ }

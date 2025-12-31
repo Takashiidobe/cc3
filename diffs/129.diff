@@ -1,0 +1,132 @@
+subject: Add `signed` keyword
+
+
+
+diff --git a/parse.c b/parse.c
+index 6f689fd..ca325db 100644
+--- a/parse.c
++++ b/parse.c
+@@ -344,6 +344,7 @@ static void push_tag_scope(Token *tok, Type *ty) {
+ 
+ // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
+ //             | "typedef" | "static" | "extern"
++//             | "signed"
+ //             | struct-decl | union-decl | typedef-name
+ //             | enum-specifier)+
+ //
+@@ -364,13 +365,14 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+   // keyword "void" so far. With this, we can use a switch statement
+   // as you can see below.
+   enum {
+-    VOID  = 1 << 0,
+-    BOOL  = 1 << 2,
+-    CHAR  = 1 << 4,
+-    SHORT = 1 << 6,
+-    INT   = 1 << 8,
+-    LONG  = 1 << 10,
+-    OTHER = 1 << 12,
++    VOID   = 1 << 0,
++    BOOL   = 1 << 2,
++    CHAR   = 1 << 4,
++    SHORT  = 1 << 6,
++    INT    = 1 << 8,
++    LONG   = 1 << 10,
++    OTHER  = 1 << 12,
++    SIGNED = 1 << 13,
+   };
+ 
+   Type *ty = ty_int;
+@@ -442,6 +444,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+       counter += INT;
+     else if (equal(tok, "long"))
+       counter += LONG;
++    else if (equal(tok, "signed"))
++      counter |= SIGNED;
+     else
+       unreachable();
+ 
+@@ -453,19 +457,28 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+       ty = ty_bool;
+       break;
+     case CHAR:
++    case SIGNED + CHAR:
+       ty = ty_char;
+       break;
+     case SHORT:
+     case SHORT + INT:
++    case SIGNED + SHORT:
++    case SIGNED + SHORT + INT:
+       ty = ty_short;
+       break;
+     case INT:
++    case SIGNED:
++    case SIGNED + INT:
+       ty = ty_int;
+       break;
+     case LONG:
+     case LONG + INT:
+     case LONG + LONG:
+     case LONG + LONG + INT:
++    case SIGNED + LONG:
++    case SIGNED + LONG + INT:
++    case SIGNED + LONG + LONG:
++    case SIGNED + LONG + LONG + INT:
+       ty = ty_long;
+       break;
+     default:
+@@ -1054,7 +1067,7 @@ static void gvar_initializer(Token **rest, Token *tok, Obj *var) {
+ static bool is_typename(Token *tok) {
+   static char *kw[] = {
+     "void", "_Bool", "char", "short", "int", "long", "struct", "union",
+-    "typedef", "enum", "static", "extern", "_Alignas",
++    "typedef", "enum", "static", "extern", "_Alignas", "signed",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+diff --git a/test/sizeof.c b/test/sizeof.c
+index 554b3b9..f12bc05 100644
+--- a/test/sizeof.c
++++ b/test/sizeof.c
+@@ -36,6 +36,29 @@ int main() {
+ 
+   ASSERT(4, sizeof(struct { int x, y[]; }));
+ 
++  ASSERT(1, sizeof(char));
++  ASSERT(1, sizeof(signed char));
++  ASSERT(1, sizeof(signed char signed));
++
++  ASSERT(2, sizeof(short));
++  ASSERT(2, sizeof(int short));
++  ASSERT(2, sizeof(short int));
++  ASSERT(2, sizeof(signed short));
++  ASSERT(2, sizeof(int short signed));
++
++  ASSERT(4, sizeof(int));
++  ASSERT(4, sizeof(signed int));
++  ASSERT(4, sizeof(signed));
++  ASSERT(4, sizeof(signed signed));
++
++  ASSERT(8, sizeof(long));
++  ASSERT(8, sizeof(signed long));
++  ASSERT(8, sizeof(signed long int));
++
++  ASSERT(8, sizeof(long long));
++  ASSERT(8, sizeof(signed long long));
++  ASSERT(8, sizeof(signed long long int));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 5435c07..33b91a7 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -133,7 +133,7 @@ static bool is_keyword(Token *tok) {
+     "return", "if", "else", "for", "while", "int", "sizeof", "char",
+     "struct", "union", "short", "long", "void", "typedef", "_Bool",
+     "enum", "static", "goto", "break", "continue", "switch", "case",
+-    "default", "extern", "_Alignof", "_Alignas", "do",
++    "default", "extern", "_Alignof", "_Alignas", "do", "signed",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

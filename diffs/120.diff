@@ -1,0 +1,89 @@
+subject: Add compound literals
+
+
+
+diff --git a/parse.c b/parse.c
+index f7ad8f9..0271de0 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1729,6 +1729,12 @@ static Node *cast(Token **rest, Token *tok) {
+     Token *start = tok;
+     Type *ty = typename(&tok, tok->next);
+     tok = skip(tok, ")");
++
++    // compound literal
++    if (equal(tok, "{"))
++      return unary(rest, start);
++
++    // type cast
+     Node *node = new_cast(cast(rest, tok), ty);
+     node->tok = start;
+     return node;
+@@ -1920,8 +1926,27 @@ static Node *new_inc_dec(Node *node, Token *tok, int addend) {
+                   node->ty);
+ }
+ 
+-// postfix = primary ("[" expr "]" | "." ident | "->" ident | "++" | "--")*
++// postfix = "(" type-name ")" "{" initializer-list "}"
++//         | primary ("[" expr "]" | "." ident | "->" ident | "++" | "--")*
+ static Node *postfix(Token **rest, Token *tok) {
++  if (equal(tok, "(") && is_typename(tok->next)) {
++    // Compound literal
++    Token *start = tok;
++    Type *ty = typename(&tok, tok->next);
++    tok = skip(tok, ")");
++
++    if (scope->next == NULL) {
++      Obj *var = new_anon_gvar(ty);
++      gvar_initializer(rest, tok, var);
++      return new_var_node(var, start);
++    }
++
++    Obj *var = new_lvar("", ty);
++    Node *lhs = lvar_initializer(rest, tok, var);
++    Node *rhs = new_var_node(var, tok);
++    return new_binary(ND_COMMA, lhs, rhs, start);
++  }
++
+   Node *node = primary(&tok, tok);
+ 
+   for (;;) {
+diff --git a/test/complit.c b/test/complit.c
+new file mode 100644
+index 0000000..6277f50
+--- /dev/null
++++ b/test/complit.c
+@@ -0,0 +1,33 @@
++#include "test.h"
++
++typedef struct Tree {
++  int val;
++  struct Tree *lhs;
++  struct Tree *rhs;
++} Tree;
++
++Tree *tree = &(Tree){
++  1,
++  &(Tree){
++    2,
++    &(Tree){ 3, 0, 0 },
++    &(Tree){ 4, 0, 0 }
++  },
++  0
++};
++
++int main() {
++  ASSERT(1, (int){1});
++  ASSERT(2, ((int[]){0,1,2})[2]);
++  ASSERT('a', ((struct {char a; int b;}){'a', 3}).a);
++  ASSERT(3, ({ int x=3; (int){x}; }));
++  (int){3} = 5;
++
++  ASSERT(1, tree->val);
++  ASSERT(2, tree->lhs->val);
++  ASSERT(3, tree->lhs->lhs->val);
++  ASSERT(4, tree->lhs->rhs->val);
++
++  printf("OK\n");
++  return 0;
++}

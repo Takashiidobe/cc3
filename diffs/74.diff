@@ -1,0 +1,154 @@
+subject: Support file-scope functions
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 45b5f2d..8638ac2 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -76,6 +76,7 @@ struct Obj {
+   // Global variable or function
+   bool is_function;
+   bool is_definition;
++  bool is_static;
+ 
+   // Global variable
+   char *init_data;
+diff --git a/codegen.c b/codegen.c
+index 4ab87f8..8536a1e 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -388,7 +388,11 @@ static void emit_text(Obj *prog) {
+     if (!fn->is_function || !fn->is_definition)
+       continue;
+ 
+-    println("  .globl %s", fn->name);
++    if (fn->is_static)
++      println("  .local %s", fn->name);
++    else
++      println("  .globl %s", fn->name);
++
+     println("  .text");
+     println("%s:", fn->name);
+     current_fn = fn;
+diff --git a/parse.c b/parse.c
+index d819d5f..83eacea 100644
+--- a/parse.c
++++ b/parse.c
+@@ -52,6 +52,7 @@ struct Scope {
+ // Variable attributes such as typedef or extern.
+ typedef struct {
+   bool is_typedef;
++  bool is_static;
+ } VarAttr;
+ 
+ // All local variable instances created during parsing are
+@@ -241,7 +242,7 @@ static void push_tag_scope(Token *tok, Type *ty) {
+ }
+ 
+ // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
+-//             | "typedef"
++//             | "typedef" | "static"
+ //             | struct-decl | union-decl | typedef-name
+ //             | enum-specifier)+
+ //
+@@ -275,11 +276,18 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+   int counter = 0;
+ 
+   while (is_typename(tok)) {
+-    // Handle "typedef" keyword
+-    if (equal(tok, "typedef")) {
++    // Handle storage class specifiers.
++    if (equal(tok, "typedef") || equal(tok, "static")) {
+       if (!attr)
+         error_tok(tok, "storage class specifier is not allowed in this context");
+-      attr->is_typedef = true;
++
++      if (equal(tok, "typedef"))
++        attr->is_typedef = true;
++      else
++        attr->is_static = true;
++
++      if (attr->is_typedef + attr->is_static > 1)
++        error_tok(tok, "typedef and static may not be used together");
+       tok = tok->next;
+       continue;
+     }
+@@ -527,7 +535,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety) {
+ static bool is_typename(Token *tok) {
+   static char *kw[] = {
+     "void", "_Bool", "char", "short", "int", "long", "struct", "union",
+-    "typedef", "enum",
++    "typedef", "enum", "static",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+@@ -1128,12 +1136,13 @@ static void create_param_lvars(Type *param) {
+   }
+ }
+ 
+-static Token *function(Token *tok, Type *basety) {
++static Token *function(Token *tok, Type *basety, VarAttr *attr) {
+   Type *ty = declarator(&tok, tok, basety);
+ 
+   Obj *fn = new_gvar(get_ident(ty->name), ty);
+   fn->is_function = true;
+   fn->is_definition = !consume(&tok, tok, ";");
++  fn->is_static = attr->is_static;
+ 
+   if (!fn->is_definition)
+     return tok;
+@@ -1192,7 +1201,7 @@ Obj *parse(Token *tok) {
+ 
+     // Function
+     if (is_function(tok)) {
+-      tok = function(tok, basety);
++      tok = function(tok, basety, &attr);
+       continue;
+     }
+ 
+diff --git a/test/common b/test/common
+index 9d16496..8b33488 100644
+--- a/test/common
++++ b/test/common
+@@ -9,3 +9,5 @@ void assert(int expected, int actual, char *code) {
+     exit(1);
+   }
+ }
++
++static int static_fn() { return 5; }
+diff --git a/test/function.c b/test/function.c
+index 1e990de..6798865 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -51,6 +51,8 @@ int div_long(long a, long b) {
+ _Bool bool_fn_add(_Bool x) { return x + 1; }
+ _Bool bool_fn_sub(_Bool x) { return x - 1; }
+ 
++static int static_fn() { return 3; }
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -82,6 +84,8 @@ int main() {
+   ASSERT(1, bool_fn_add(0));
+   ASSERT(1, bool_fn_sub(0));
+ 
++  ASSERT(3, static_fn());
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 2c736f0..6ec5925 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -128,7 +128,7 @@ static bool is_keyword(Token *tok) {
+   static char *kw[] = {
+     "return", "if", "else", "for", "while", "int", "sizeof", "char",
+     "struct", "union", "short", "long", "void", "typedef", "_Bool",
+-    "enum",
++    "enum", "static",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

@@ -1,0 +1,76 @@
+subject: Handle union initializers for local variables
+
+
+
+diff --git a/parse.c b/parse.c
+index 26868e0..9226be3 100644
+--- a/parse.c
++++ b/parse.c
+@@ -244,7 +244,7 @@ static Initializer *new_initializer(Type *ty, bool is_flexible) {
+     return init;
+   }
+ 
+-  if (ty->kind == TY_STRUCT) {
++  if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+     // Count the number of struct members.
+     int len = 0;
+     for (Member *mem = ty->members; mem; mem = mem->next)
+@@ -701,8 +701,17 @@ static void struct_initializer(Token **rest, Token *tok, Initializer *init) {
+   }
+ }
+ 
++static void union_initializer(Token **rest, Token *tok, Initializer *init) {
++  // Unlike structs, union initializers take only one initializer,
++  // and that initializes the first union member.
++  tok = skip(tok, "{");
++  initializer2(&tok, tok, init->children[0]);
++  *rest = skip(tok, "}");
++}
++
+ // initializer = string-initializer | array-initializer
+-//             | struct-initializer | assign
++//             | struct-initializer | union-initializer
++//             | assign
+ static void initializer2(Token **rest, Token *tok, Initializer *init) {
+   if (init->ty->kind == TY_ARRAY && tok->kind == TK_STR) {
+     string_initializer(rest, tok, init);
+@@ -731,6 +740,11 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
+     return;
+   }
+ 
++  if (init->ty->kind == TY_UNION) {
++    union_initializer(rest, tok, init);
++    return;
++  }
++
+   init->expr = assign(rest, tok);
+ }
+ 
+@@ -778,6 +792,11 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
+     return node;
+   }
+ 
++  if (ty->kind == TY_UNION) {
++    InitDesg desg2 = {desg, 0, ty->members};
++    return create_lvar_init(init->children[0], ty->members->ty, &desg2, tok);
++  }
++
+   if (!init->expr)
+     return new_node(ND_NULL_EXPR, tok);
+ 
+diff --git a/test/initializer.c b/test/initializer.c
+index 8dd74ff..10e9cd1 100644
+--- a/test/initializer.c
++++ b/test/initializer.c
+@@ -57,6 +57,11 @@ int main() {
+ 
+   ASSERT(1, ({ typedef struct {int a,b;} T; T x={1,2}; T y=x; y.a; }));
+ 
++  ASSERT(4, ({ union { int a; char b[4]; } x={0x01020304}; x.b[0]; }));
++  ASSERT(3, ({ union { int a; char b[4]; } x={0x01020304}; x.b[1]; }));
++
++  ASSERT(0x01020304, ({ union { struct { char a,b,c,d; } e; int f; } x={{4,3,2,1}}; x.f; }));
++
+   printf("OK\n");
+   return 0;
+ }

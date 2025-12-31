@@ -1,0 +1,52 @@
+subject: Add static local variables
+
+
+
+diff --git a/parse.c b/parse.c
+index 4b50efc..f7ad8f9 100644
+--- a/parse.c
++++ b/parse.c
+@@ -667,6 +667,15 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr)
+     if (ty->kind == TY_VOID)
+       error_tok(tok, "variable declared void");
+ 
++    if (attr && attr->is_static) {
++      // static local variable
++      Obj *var = new_anon_gvar(ty);
++      push_scope(get_ident(ty->name))->var = var;
++      if (equal(tok, "="))
++        gvar_initializer(&tok, tok->next, var);
++      continue;
++    }
++
+     Obj *var = new_lvar(get_ident(ty->name), ty);
+     if (attr && attr->align)
+       var->align = attr->align;
+diff --git a/test/function.c b/test/function.c
+index 72a3715..0d8fd88 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -55,6 +55,12 @@ static int static_fn(void) { return 3; }
+ 
+ int param_decay(int x[]) { return x[0]; }
+ 
++int counter() {
++  static int i;
++  static int j = 1+1;
++  return i++ + j++;
++}
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -90,6 +96,10 @@ int main() {
+ 
+   ASSERT(3, ({ int x[2]; x[0]=3; param_decay(x); }));
+ 
++  ASSERT(2, counter());
++  ASSERT(4, counter());
++  ASSERT(6, counter());
++
+   printf("OK\n");
+   return 0;
+ }

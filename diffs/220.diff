@@ -1,0 +1,77 @@
+subject: Add __DATE__ and __TIME__ macros
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index ac2348c..23f122e 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -15,6 +15,7 @@
+ #include <sys/stat.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
++#include <time.h>
+ #include <unistd.h>
+ 
+ #define MAX(x, y) ((x) < (y) ? (y) : (x))
+diff --git a/preprocess.c b/preprocess.c
+index ac2b264..9b77b05 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -856,6 +856,21 @@ static Token *line_macro(Token *tmpl) {
+   return new_num_token(tmpl->line_no, tmpl);
+ }
+ 
++// __DATE__ is expanded to the current date, e.g. "May 17 2020".
++static char *format_date(struct tm *tm) {
++  static char mon[][4] = {
++    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
++    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
++  };
++
++  return format("\"%s %2d %d\"", mon[tm->tm_mon], tm->tm_mday, tm->tm_year + 1900);
++}
++
++// __TIME__ is expanded to the current time, e.g. "13:34:03".
++static char *format_time(struct tm *tm) {
++  return format("\"%02d:%02d:%02d\"", tm->tm_hour, tm->tm_min, tm->tm_sec);
++}
++
+ void init_macros(void) {
+   // Define predefined macros
+   define_macro("_LP64", "1");
+@@ -902,6 +917,11 @@ void init_macros(void) {
+ 
+   add_builtin("__FILE__", file_macro);
+   add_builtin("__LINE__", line_macro);
++
++  time_t now = time(NULL);
++  struct tm *tm = localtime(&now);
++  define_macro("__DATE__", format_date(tm));
++  define_macro("__TIME__", format_time(tm));
+ }
+ 
+ // Concatenate adjacent string literals into a single string literal
+diff --git a/test/macro.c b/test/macro.c
+index 9bb20d2..261d1d7 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -366,6 +366,9 @@ int main() {
+   ASSERT(5, ({ int f0zz=5; CONCAT(f,0zz); }));
+   ASSERT(5, ({ CONCAT(4,.57) + 0.5; }));
+ 
++  ASSERT(11, strlen(__DATE__));
++  ASSERT(8, strlen(__TIME__));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/test.h b/test/test.h
+index af27f72..f6fa2db 100644
+--- a/test/test.h
++++ b/test/test.h
+@@ -9,3 +9,4 @@ int strncmp(char *p, char *q, long n);
+ int memcmp(char *p, char *q, long n);
+ void exit(int n);
+ int vsprintf();
++long strlen(char *s);

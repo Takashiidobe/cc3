@@ -1,0 +1,80 @@
+subject: Add UTF-16 character literal
+
+
+
+diff --git a/test/unicode.c b/test/unicode.c
+index 748dd7b..93635c8 100644
+--- a/test/unicode.c
++++ b/test/unicode.c
+@@ -1,5 +1,7 @@
+ #include "test.h"
+ 
++#define STR(x) #x
++
+ int main() {
+   ASSERT(4, sizeof(L'\0'));
+   ASSERT(97, L'a');
+@@ -14,6 +16,15 @@ int main() {
+   ASSERT(12354, L'あ');
+   ASSERT(127843, L'🍣');
+ 
++  ASSERT(2, sizeof(u'\0'));
++  ASSERT(1, u'\xffff'>>15);
++  ASSERT(97, u'a');
++  ASSERT(946, u'β');
++  ASSERT(12354, u'あ');
++  ASSERT(62307, u'🍣');
++
++  ASSERT(0, strcmp(STR(u'a'), "u'a'"));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 83f5ef0..ca577fd 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -246,7 +246,7 @@ static Token *read_string_literal(char *start) {
+   return tok;
+ }
+ 
+-static Token *read_char_literal(char *start, char *quote) {
++static Token *read_char_literal(char *start, char *quote, Type *ty) {
+   char *p = quote + 1;
+   if (*p == '\0')
+     error_at(start, "unclosed char literal");
+@@ -263,7 +263,7 @@ static Token *read_char_literal(char *start, char *quote) {
+ 
+   Token *tok = new_token(TK_NUM, start, end + 1);
+   tok->val = c;
+-  tok->ty = ty_int;
++  tok->ty = ty;
+   return tok;
+ }
+ 
+@@ -474,15 +474,23 @@ Token *tokenize(File *file) {
+ 
+     // Character literal
+     if (*p == '\'') {
+-      cur = cur->next = read_char_literal(p, p);
++      cur = cur->next = read_char_literal(p, p, ty_int);
+       cur->val = (char)cur->val;
+       p += cur->len;
+       continue;
+     }
+ 
++    // UTF-16 character literal
++    if (startswith(p, "u'")) {
++      cur = cur->next = read_char_literal(p, p + 1, ty_ushort);
++      cur->val &= 0xffff;
++      p += cur->len;
++      continue;
++    }
++
+     // Wide character literal
+     if (startswith(p, "L'")) {
+-      cur = cur->next = read_char_literal(p, p + 1);
++      cur = cur->next = read_char_literal(p, p + 1, ty_int);
+       p = cur->loc + cur->len;
+       continue;
+     }

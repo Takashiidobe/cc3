@@ -1,0 +1,41 @@
+subject: Add usual arithmetic conversion for function pointer
+
+
+
+diff --git a/test/usualconv.c b/test/usualconv.c
+index b1f951a..b173fe1 100644
+--- a/test/usualconv.c
++++ b/test/usualconv.c
+@@ -1,5 +1,7 @@
+ #include "test.h"
+ 
++static int ret10(void) { return 10; }
++
+ int main() {
+   ASSERT((long)-5, -10 + (long)5);
+   ASSERT((long)-15, -10 - (long)5);
+@@ -23,6 +25,8 @@ int main() {
+   ASSERT(0, ({ char x[3]; x[0]=0; x[1]=1; x[2]=2; char *y=x+1; y[-1]; }));
+   ASSERT(5, ({ struct t {char a;} x, y; x.a=5; y=x; y.a; }));
+ 
++  ASSERT(10, (1 ? ret10 : (void *)0)());
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/type.c b/type.c
+index 299307f..b50c3c3 100644
+--- a/type.c
++++ b/type.c
+@@ -77,6 +77,11 @@ static Type *get_common_type(Type *ty1, Type *ty2) {
+   if (ty1->base)
+     return pointer_to(ty1->base);
+ 
++  if (ty1->kind == TY_FUNC)
++    return pointer_to(ty1);
++  if (ty2->kind == TY_FUNC)
++    return pointer_to(ty2);
++
+   if (ty1->kind == TY_DOUBLE || ty2->kind == TY_DOUBLE)
+     return ty_double;
+   if (ty1->kind == TY_FLOAT || ty2->kind == TY_FLOAT)

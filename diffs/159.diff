@@ -1,0 +1,360 @@
+subject: Add #include "..."
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index fc3ea89..0ac1a00 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -51,6 +51,12 @@ typedef enum {
+   TK_EOF,     // End-of-file markers
+ } TokenKind;
+ 
++typedef struct {
++  char *name;
++  int file_no;
++  char *contents;
++} File;
++
+ // Token type
+ typedef struct Token Token;
+ struct Token {
+@@ -63,6 +69,7 @@ struct Token {
+   Type *ty;       // Used if TK_NUM or TK_STR
+   char *str;      // String literal contents including terminating '\0'
+ 
++  File *file;     // Source location
+   int line_no;    // Line number
+   bool at_bol;    // True if this token is at beginning of line
+ };
+@@ -74,6 +81,7 @@ bool equal(Token *tok, char *op);
+ Token *skip(Token *tok, char *op);
+ bool consume(Token **rest, Token *tok, char *str);
+ void convert_keywords(Token *tok);
++File **get_input_files(void);
+ Token *tokenize_file(char *filename);
+ 
+ #define unreachable() \
+@@ -326,3 +334,9 @@ void add_type(Node *node);
+ 
+ void codegen(Obj *prog, FILE *out);
+ int align_to(int n, int align);
++
++//
++// main.c
++//
++
++extern char *base_file;
+diff --git a/codegen.c b/codegen.c
+index 61de84f..ad23ff5 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -310,7 +310,7 @@ static void push_args(Node *args) {
+ 
+ // Generate code for a given node.
+ static void gen_expr(Node *node) {
+-  println("  .loc 1 %d", node->tok->line_no);
++  println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
+ 
+   switch (node->kind) {
+   case ND_NULL_EXPR:
+@@ -629,7 +629,7 @@ static void gen_expr(Node *node) {
+ }
+ 
+ static void gen_stmt(Node *node) {
+-  println("  .loc 1 %d", node->tok->line_no);
++  println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
+ 
+   switch (node->kind) {
+   case ND_IF: {
+@@ -878,6 +878,10 @@ static void emit_text(Obj *prog) {
+ void codegen(Obj *prog, FILE *out) {
+   output_file = out;
+ 
++  File **files = get_input_files();
++  for (int i = 0; files[i]; i++)
++    println("  .file %d \"%s\"", files[i]->file_no, files[i]->name);
++
+   assign_lvar_offsets(prog);
+   emit_data(prog);
+   emit_text(prog);
+diff --git a/main.c b/main.c
+index e3cc90e..ae2de82 100644
+--- a/main.c
++++ b/main.c
+@@ -6,7 +6,7 @@ static bool opt_cc1;
+ static bool opt_hash_hash_hash;
+ static char *opt_o;
+ 
+-static char *base_file;
++char *base_file;
+ static char *output_file;
+ 
+ static StringArray input_paths;
+@@ -168,12 +168,14 @@ static void run_cc1(int argc, char **argv, char *input, char *output) {
+ static void cc1(void) {
+   // Tokenize and parse.
+   Token *tok = tokenize_file(base_file);
++  if (!tok)
++    error("%s: %s", base_file, strerror(errno));
++
+   tok = preprocess(tok);
+   Obj *prog = parse(tok);
+ 
+   // Traverse the AST to emit assembly.
+   FILE *out = open_file(output_file);
+-  fprintf(out, ".file 1 \"%s\"\n", base_file);
+   codegen(prog, out);
+ }
+ 
+diff --git a/preprocess.c b/preprocess.c
+index e90e43a..ce94b1a 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -4,6 +4,27 @@ static bool is_hash(Token *tok) {
+   return tok->at_bol && equal(tok, "#");
+ }
+ 
++static Token *copy_token(Token *tok) {
++  Token *t = calloc(1, sizeof(Token));
++  *t = *tok;
++  t->next = NULL;
++  return t;
++}
++
++// Append tok2 to the end of tok1.
++static Token *append(Token *tok1, Token *tok2) {
++  if (!tok1 || tok1->kind == TK_EOF)
++    return tok2;
++
++  Token head = {};
++  Token *cur = &head;
++
++  for (; tok1 && tok1->kind != TK_EOF; tok1 = tok1->next)
++    cur = cur->next = copy_token(tok1);
++  cur->next = tok2;
++  return head.next;
++}
++
+ // Visit all tokens in `tok` while evaluating preprocessing
+ // macros and directives.
+ static Token *preprocess2(Token *tok) {
+@@ -20,6 +41,20 @@ static Token *preprocess2(Token *tok) {
+ 
+     tok = tok->next;
+ 
++    if (equal(tok, "include")) {
++      tok = tok->next;
++
++      if (tok->kind != TK_STR)
++        error_tok(tok, "expected a filename");
++
++      char *path = format("%s/%s", dirname(strdup(tok->file->name)), tok->str);
++      Token *tok2 = tokenize_file(path);
++      if (!tok2)
++        error_tok(tok, "%s", strerror(errno));
++      tok = append(tok2, tok->next);
++      continue;
++    }
++
+     // `#`-only line is legal. It's called a null directive.
+     if (tok->at_bol)
+       continue;
+diff --git a/self.py b/self.py
+index 8039213..d53c5ab 100755
+--- a/self.py
++++ b/self.py
+@@ -14,6 +14,8 @@ typedef unsigned short uint16_t;
+ typedef unsigned int uint32_t;
+ typedef unsigned long uint64_t;
+ 
++typedef unsigned long size_t;
++
+ typedef struct FILE FILE;
+ extern FILE *stdin;
+ extern FILE *stdout;
+@@ -89,6 +91,8 @@ int execvp(char *file, char **argv);
+ void _exit(int code);
+ int wait(int *wstatus);
+ int atexit(void (*)(void));
++FILE *open_memstream(char **ptr, size_t *sizeloc);
++char *dirname(char *path);
+ """)
+ 
+ for path in sys.argv[1:]:
+diff --git a/test/include1.h b/test/include1.h
+new file mode 100644
+index 0000000..885be36
+--- /dev/null
++++ b/test/include1.h
+@@ -0,0 +1,3 @@
++#include "include2.h"
++
++int include1 = 5;
+diff --git a/test/include2.h b/test/include2.h
+new file mode 100644
+index 0000000..1a5ee9d
+--- /dev/null
++++ b/test/include2.h
+@@ -0,0 +1 @@
++int include2 = 7;
+diff --git a/test/macro.c b/test/macro.c
+index 730c558..3777adc 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -4,11 +4,16 @@ int sprintf(char *buf, char *fmt, ...);
+ int strcmp(char *p, char *q);
+ int memcmp(char *p, char *q, long n);
+ 
++#include "include1.h"
++
+ #
+ 
+ /* */ #
+ 
+ int main() {
++  assert(5, include1, "include1");
++  assert(7, include2, "include2");
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 4bc705b..9777813 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -1,10 +1,10 @@
+ #include "chibicc.h"
+ 
+-// Input filename
+-static char *current_filename;
++// Input file
++static File *current_file;
+ 
+-// Input string
+-static char *current_input;
++// A list of all input files.
++static File **input_files;
+ 
+ // True if the current position is at the beginning of a line
+ static bool at_bol;
+@@ -22,10 +22,11 @@ void error(char *fmt, ...) {
+ //
+ // foo.c:10: x = y + 1;
+ //               ^ <error message here>
+-static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
++static void verror_at(char *filename, char *input, int line_no,
++                      char *loc, char *fmt, va_list ap) {
+   // Find a line containing `loc`.
+   char *line = loc;
+-  while (current_input < line && line[-1] != '\n')
++  while (input < line && line[-1] != '\n')
+     line--;
+ 
+   char *end = loc;
+@@ -33,7 +34,7 @@ static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
+     end++;
+ 
+   // Print out the line.
+-  int indent = fprintf(stderr, "%s:%d: ", current_filename, line_no);
++  int indent = fprintf(stderr, "%s:%d: ", filename, line_no);
+   fprintf(stderr, "%.*s\n", (int)(end - line), line);
+ 
+   // Show the error message.
+@@ -47,20 +48,20 @@ static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
+ 
+ void error_at(char *loc, char *fmt, ...) {
+   int line_no = 1;
+-  for (char *p = current_input; p < loc; p++)
++  for (char *p = current_file->contents; p < loc; p++)
+     if (*p == '\n')
+       line_no++;
+ 
+   va_list ap;
+   va_start(ap, fmt);
+-  verror_at(line_no, loc, fmt, ap);
++  verror_at(current_file->name, current_file->contents, line_no, loc, fmt, ap);
+   exit(1);
+ }
+ 
+ void error_tok(Token *tok, char *fmt, ...) {
+   va_list ap;
+   va_start(ap, fmt);
+-  verror_at(tok->line_no, tok->loc, fmt, ap);
++  verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc, fmt, ap);
+   exit(1);
+ }
+ 
+@@ -91,6 +92,7 @@ static Token *new_token(TokenKind kind, char *start, char *end) {
+   tok->kind = kind;
+   tok->loc = start;
+   tok->len = end - start;
++  tok->file = current_file;
+   tok->at_bol = at_bol;
+   at_bol = false;
+   return tok;
+@@ -363,7 +365,7 @@ void convert_keywords(Token *tok) {
+ 
+ // Initialize line info for all tokens.
+ static void add_line_numbers(Token *tok) {
+-  char *p = current_input;
++  char *p = current_file->contents;
+   int n = 1;
+ 
+   do {
+@@ -377,9 +379,10 @@ static void add_line_numbers(Token *tok) {
+ }
+ 
+ // Tokenize a given string and returns new tokens.
+-static Token *tokenize(char *filename, char *p) {
+-  current_filename = filename;
+-  current_input = p;
++static Token *tokenize(File *file) {
++  current_file = file;
++
++  char *p = file->contents;
+   Token head = {};
+   Token *cur = &head;
+ 
+@@ -473,7 +476,7 @@ static char *read_file(char *path) {
+   } else {
+     fp = fopen(path, "r");
+     if (!fp)
+-      error("cannot open %s: %s", path, strerror(errno));
++      return NULL;
+   }
+ 
+   char *buf;
+@@ -501,6 +504,31 @@ static char *read_file(char *path) {
+   return buf;
+ }
+ 
++File **get_input_files(void) {
++  return input_files;
++}
++
++static File *new_file(char *name, int file_no, char *contents) {
++  File *file = calloc(1, sizeof(File));
++  file->name = name;
++  file->file_no = file_no;
++  file->contents = contents;
++  return file;
++}
++
+ Token *tokenize_file(char *path) {
+-  return tokenize(path, read_file(path));
++  char *p = read_file(path);
++  if (!p)
++    return NULL;
++
++  static int file_no;
++  File *file = new_file(path, file_no + 1, p);
++
++  // Save the filename for assembler .file directive.
++  input_files = realloc(input_files, sizeof(char *) * (file_no + 2));
++  input_files[file_no] = file;
++  input_files[file_no + 1] = NULL;
++  file_no++;
++
++  return tokenize(file);
+ }

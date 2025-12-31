@@ -1,0 +1,148 @@
+subject: Support function definition up to 6 parameters
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 9e92f55..a7f016b 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -59,6 +59,8 @@ typedef struct Function Function;
+ struct Function {
+   Function *next;
+   char *name;
++  Obj *params;
++
+   Node *body;
+   Obj *locals;
+   int stack_size;
+@@ -139,11 +141,14 @@ struct Type {
+ 
+   // Function type
+   Type *return_ty;
++  Type *params;
++  Type *next;
+ };
+ 
+ extern Type *ty_int;
+ 
+ bool is_integer(Type *ty);
++Type *copy_type(Type *ty);
+ Type *pointer_to(Type *base);
+ Type *func_type(Type *return_ty);
+ void add_type(Node *node);
+diff --git a/codegen.c b/codegen.c
+index c97e99d..5d6641a 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -201,6 +201,11 @@ void codegen(Function *prog) {
+     printf("  mov %%rsp, %%rbp\n");
+     printf("  sub $%d, %%rsp\n", fn->stack_size);
+ 
++    // Save passed-by-register arguments to the stack
++    int i = 0;
++    for (Obj *var = fn->params; var; var = var->next)
++      printf("  mov %s, %d(%%rbp)\n", argreg[i++], var->offset);
++
+     // Emit code
+     gen_stmt(fn->body);
+     assert(depth == 0);
+diff --git a/parse.c b/parse.c
+index 4e58e8b..1661846 100644
+--- a/parse.c
++++ b/parse.c
+@@ -98,12 +98,30 @@ static Type *declspec(Token **rest, Token *tok) {
+   return ty_int;
+ }
+ 
+-// type-suffix = ("(" func-params)?
++// type-suffix = ("(" func-params? ")")?
++// func-params = param ("," param)*
++// param       = declspec declarator
+ static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
+   if (equal(tok, "(")) {
+-    *rest = skip(tok->next, ")");
+-    return func_type(ty);
++    tok = tok->next;
++
++    Type head = {};
++    Type *cur = &head;
++
++    while (!equal(tok, ")")) {
++      if (cur != &head)
++        tok = skip(tok, ",");
++      Type *basety = declspec(&tok, tok);
++      Type *ty = declarator(&tok, tok, basety);
++      cur = cur->next = copy_type(ty);
++    }
++
++    ty = func_type(ty);
++    ty->params = head.next;
++    *rest = tok->next;
++    return ty;
+   }
++
+   *rest = tok;
+   return ty;
+ }
+@@ -481,6 +499,13 @@ static Node *primary(Token **rest, Token *tok) {
+   error_tok(tok, "expected an expression");
+ }
+ 
++static void create_param_lvars(Type *param) {
++  if (param) {
++    create_param_lvars(param->next);
++    new_lvar(get_ident(param->name), param);
++  }
++}
++
+ static Function *function(Token **rest, Token *tok) {
+   Type *ty = declspec(&tok, tok);
+   ty = declarator(&tok, tok, ty);
+@@ -489,6 +514,8 @@ static Function *function(Token **rest, Token *tok) {
+ 
+   Function *fn = calloc(1, sizeof(Function));
+   fn->name = get_ident(ty->name);
++  create_param_lvars(ty->params);
++  fn->params = locals;
+ 
+   tok = skip(tok, "{");
+   fn->body = compound_stmt(rest, tok);
+diff --git a/test.sh b/test.sh
+index 95e1f0f..27dc787 100755
+--- a/test.sh
++++ b/test.sh
+@@ -108,5 +108,8 @@ assert 66 'int main() { return add6(1,2,add6(3,4,5,6,7,8),9,10,11); }'
+ assert 136 'int main() { return add6(1,2,add6(3,add6(4,5,6,7,8,9),10,11,12,13),14,15,16); }'
+ 
+ assert 32 'int main() { return ret32(); } int ret32() { return 32; }'
++assert 7 'int main() { return add2(3,4); } int add2(int x, int y) { return x+y; }'
++assert 1 'int main() { return sub2(4,3); } int sub2(int x, int y) { return x-y; }'
++assert 55 'int main() { return fib(9); } int fib(int x) { if (x<=1) return 1; return fib(x-1) + fib(x-2); }'
+ 
+ echo OK
+diff --git a/type.c b/type.c
+index e713465..c838db2 100644
+--- a/type.c
++++ b/type.c
+@@ -6,6 +6,12 @@ bool is_integer(Type *ty) {
+   return ty->kind == TY_INT;
+ }
+ 
++Type *copy_type(Type *ty) {
++  Type *ret = calloc(1, sizeof(Type));
++  *ret = *ty;
++  return ret;
++}
++
+ Type *pointer_to(Type *base) {
+   Type *ty = calloc(1, sizeof(Type));
+   ty->kind = TY_PTR;
+@@ -34,6 +40,8 @@ void add_type(Node *node) {
+ 
+   for (Node *n = node->body; n; n = n->next)
+     add_type(n);
++  for (Node *n = node->args; n; n = n->next)
++    add_type(n);
+ 
+   switch (node->kind) {
+   case ND_ADD:

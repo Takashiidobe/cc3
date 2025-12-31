@@ -1,0 +1,161 @@
+subject: Add goto and labeled statement
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 86490fa..6873625 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -117,6 +117,8 @@ typedef enum {
+   ND_IF,        // "if"
+   ND_FOR,       // "for" or "while"
+   ND_BLOCK,     // { ... }
++  ND_GOTO,      // "goto"
++  ND_LABEL,     // Labeled statement
+   ND_FUNCALL,   // Function call
+   ND_EXPR_STMT, // Expression statement
+   ND_STMT_EXPR, // Statement expression
+@@ -153,6 +155,11 @@ struct Node {
+   Type *func_ty;
+   Node *args;
+ 
++  // Goto or labeled statement
++  char *label;
++  char *unique_label;
++  Node *goto_next;
++
+   Obj *var;      // Used if kind == ND_VAR
+   int64_t val;   // Used if kind == ND_NUM
+ };
+diff --git a/codegen.c b/codegen.c
+index 57dfbaf..fbeaff0 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -372,6 +372,13 @@ static void gen_stmt(Node *node) {
+     for (Node *n = node->body; n; n = n->next)
+       gen_stmt(n);
+     return;
++  case ND_GOTO:
++    println("  jmp %s", node->unique_label);
++    return;
++  case ND_LABEL:
++    println("%s:", node->unique_label);
++    gen_stmt(node->lhs);
++    return;
+   case ND_RETURN:
+     gen_expr(node->lhs);
+     println("  jmp .L.return.%s", current_fn->name);
+diff --git a/parse.c b/parse.c
+index 99cdcab..a6661ca 100644
+--- a/parse.c
++++ b/parse.c
+@@ -67,6 +67,10 @@ static Scope *scope = &(Scope){};
+ // Points to the function object the parser is currently parsing.
+ static Obj *current_fn;
+ 
++// Lists of all goto statements and labels in the curent function.
++static Node *gotos;
++static Node *labels;
++
+ static bool is_typename(Token *tok);
+ static Type *declspec(Token **rest, Token *tok, VarAttr *attr);
+ static Type *enum_specifier(Token **rest, Token *tok);
+@@ -577,6 +581,8 @@ static bool is_typename(Token *tok) {
+ //      | "if" "(" expr ")" stmt ("else" stmt)?
+ //      | "for" "(" expr-stmt expr? ";" expr? ")" stmt
+ //      | "while" "(" expr ")" stmt
++//      | "goto" ident ";"
++//      | ident ":" stmt
+ //      | "{" compound-stmt
+ //      | expr-stmt
+ static Node *stmt(Token **rest, Token *tok) {
+@@ -637,6 +643,25 @@ static Node *stmt(Token **rest, Token *tok) {
+     return node;
+   }
+ 
++  if (equal(tok, "goto")) {
++    Node *node = new_node(ND_GOTO, tok);
++    node->label = get_ident(tok->next);
++    node->goto_next = gotos;
++    gotos = node;
++    *rest = skip(tok->next->next, ";");
++    return node;
++  }
++
++  if (tok->kind == TK_IDENT && equal(tok->next, ":")) {
++    Node *node = new_node(ND_LABEL, tok);
++    node->label = strndup(tok->loc, tok->len);
++    node->unique_label = new_unique_name();
++    node->lhs = stmt(rest, tok->next->next);
++    node->goto_next = labels;
++    labels = node;
++    return node;
++  }
++
+   if (equal(tok, "{"))
+     return compound_stmt(rest, tok->next);
+ 
+@@ -1338,6 +1363,27 @@ static void create_param_lvars(Type *param) {
+   }
+ }
+ 
++// This function matches gotos with labels.
++//
++// We cannot resolve gotos as we parse a function because gotos
++// can refer a label that appears later in the function.
++// So, we need to do this after we parse the entire function.
++static void resolve_goto_labels(void) {
++  for (Node *x = gotos; x; x = x->goto_next) {
++    for (Node *y = labels; y; y = y->goto_next) {
++      if (!strcmp(x->label, y->label)) {
++        x->unique_label = y->unique_label;
++        break;
++      }
++    }
++
++    if (x->unique_label == NULL)
++      error_tok(x->tok->next, "use of undeclared label");
++  }
++
++  gotos = labels = NULL;
++}
++
+ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
+   Type *ty = declarator(&tok, tok, basety);
+ 
+@@ -1359,6 +1405,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
+   fn->body = compound_stmt(&tok, tok);
+   fn->locals = locals;
+   leave_scope();
++  resolve_goto_labels();
+   return tok;
+ }
+ 
+diff --git a/test/control.c b/test/control.c
+index ae6b2e7..e79280a 100644
+--- a/test/control.c
++++ b/test/control.c
+@@ -36,6 +36,10 @@ int main() {
+   ASSERT(0, (2-2)&&5);
+   ASSERT(1, 1&&5);
+ 
++  ASSERT(3, ({ int i=0; goto a; a: i++; b: i++; c: i++; i; }));
++  ASSERT(2, ({ int i=0; goto e; d: i++; e: i++; f: i++; i; }));
++  ASSERT(1, ({ int i=0; goto i; g: i++; h: i++; i: i++; i; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 265cf90..cac1ef6 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -131,7 +131,7 @@ static bool is_keyword(Token *tok) {
+   static char *kw[] = {
+     "return", "if", "else", "for", "while", "int", "sizeof", "char",
+     "struct", "union", "short", "long", "void", "typedef", "_Bool",
+-    "enum", "static",
++    "enum", "static", "goto",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

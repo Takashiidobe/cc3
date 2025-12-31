@@ -1,0 +1,124 @@
+subject: Add unary & and *
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index a504fc9..bc3781a 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -71,6 +71,8 @@ typedef enum {
+   ND_LT,        // <
+   ND_LE,        // <=
+   ND_ASSIGN,    // =
++  ND_ADDR,      // unary &
++  ND_DEREF,     // unary *
+   ND_RETURN,    // "return"
+   ND_IF,        // "if"
+   ND_FOR,       // "for" or "while"
+diff --git a/codegen.c b/codegen.c
+index 477bd55..2c4834e 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -2,6 +2,8 @@
+ 
+ static int depth;
+ 
++static void gen_expr(Node *node);
++
+ static int count(void) {
+   static int i = 1;
+   return i++;
+@@ -26,9 +28,13 @@ static int align_to(int n, int align) {
+ // Compute the absolute address of a given node.
+ // It's an error if a given node does not reside in memory.
+ static void gen_addr(Node *node) {
+-  if (node->kind == ND_VAR) {
++  switch (node->kind) {
++  case ND_VAR:
+     printf("  lea %d(%%rbp), %%rax\n", node->var->offset);
+     return;
++  case ND_DEREF:
++    gen_expr(node->lhs);
++    return;
+   }
+ 
+   error_tok(node->tok, "not an lvalue");
+@@ -48,6 +54,13 @@ static void gen_expr(Node *node) {
+     gen_addr(node);
+     printf("  mov (%%rax), %%rax\n");
+     return;
++  case ND_DEREF:
++    gen_expr(node->lhs);
++    printf("  mov (%%rax), %%rax\n");
++    return;
++  case ND_ADDR:
++    gen_addr(node->lhs);
++    return;
+   case ND_ASSIGN:
+     gen_addr(node->lhs);
+     push();
+diff --git a/parse.c b/parse.c
+index e3e3e92..898858a 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1,3 +1,21 @@
++// This file contains a recursive descent parser for C.
++//
++// Most functions in this file are named after the symbols they are
++// supposed to read from an input token list. For example, stmt() is
++// responsible for reading a statement from a token list. The function
++// then construct an AST node representing a statement.
++//
++// Each function conceptually returns two values, an AST node and
++// remaining part of the input tokens. Since C doesn't support
++// multiple return values, the remaining tokens are returned to the
++// caller via a pointer argument.
++//
++// Input tokens are represented by a linked list. Unlike many recursive
++// descent parsers, we don't have the notion of the "input token stream".
++// Most parsing functions don't change the global state of the parser.
++// So it is very easy to lookahead arbitrary number of tokens in this
++// parser.
++
+ #include "chibicc.h"
+ 
+ // All local variable instances created during parsing are
+@@ -263,7 +281,7 @@ static Node *mul(Token **rest, Token *tok) {
+   }
+ }
+ 
+-// unary = ("+" | "-") unary
++// unary = ("+" | "-" | "*" | "&") unary
+ //       | primary
+ static Node *unary(Token **rest, Token *tok) {
+   if (equal(tok, "+"))
+@@ -272,6 +290,12 @@ static Node *unary(Token **rest, Token *tok) {
+   if (equal(tok, "-"))
+     return new_unary(ND_NEG, unary(rest, tok->next), tok);
+ 
++  if (equal(tok, "&"))
++    return new_unary(ND_ADDR, unary(rest, tok->next), tok);
++
++  if (equal(tok, "*"))
++    return new_unary(ND_DEREF, unary(rest, tok->next), tok);
++
+   return primary(rest, tok);
+ }
+ 
+diff --git a/test.sh b/test.sh
+index f2d5d01..ef5a398 100755
+--- a/test.sh
++++ b/test.sh
+@@ -74,4 +74,12 @@ assert 3 '{ for (;;) {return 3;} return 5; }'
+ 
+ assert 10 '{ i=0; while(i<10) { i=i+1; } return i; }'
+ 
++assert 3 '{ x=3; return *&x; }'
++assert 3 '{ x=3; y=&x; z=&y; return **z; }'
++assert 5 '{ x=3; y=5; return *(&x+8); }'
++assert 3 '{ x=3; y=5; return *(&y-8); }'
++assert 5 '{ x=3; y=&x; *y=5; return x; }'
++assert 7 '{ x=3; y=5; *(&x+8)=7; return y; }'
++assert 7 '{ x=3; y=5; *(&y-8)=7; return x; }'
++
+ echo OK

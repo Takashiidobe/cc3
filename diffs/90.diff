@@ -1,0 +1,137 @@
+subject: Add break statement
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 6873625..05663e5 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -144,6 +144,9 @@ struct Node {
+   Node *init;
+   Node *inc;
+ 
++  // "break" label
++  char *brk_label;
++
+   // Block or statement expression
+   Node *body;
+ 
+diff --git a/codegen.c b/codegen.c
+index fbeaff0..2932dbb 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -359,13 +359,13 @@ static void gen_stmt(Node *node) {
+     if (node->cond) {
+       gen_expr(node->cond);
+       println("  cmp $0, %%rax");
+-      println("  je  .L.end.%d", c);
++      println("  je %s", node->brk_label);
+     }
+     gen_stmt(node->then);
+     if (node->inc)
+       gen_expr(node->inc);
+     println("  jmp .L.begin.%d", c);
+-    println(".L.end.%d:", c);
++    println("%s:", node->brk_label);
+     return;
+   }
+   case ND_BLOCK:
+diff --git a/parse.c b/parse.c
+index f5f4a0f..1abb211 100644
+--- a/parse.c
++++ b/parse.c
+@@ -71,6 +71,9 @@ static Obj *current_fn;
+ static Node *gotos;
+ static Node *labels;
+ 
++// Current "goto" jump target.
++static char *brk_label;
++
+ static bool is_typename(Token *tok);
+ static Type *declspec(Token **rest, Token *tok, VarAttr *attr);
+ static Type *enum_specifier(Token **rest, Token *tok);
+@@ -582,6 +585,7 @@ static bool is_typename(Token *tok) {
+ //      | "for" "(" expr-stmt expr? ";" expr? ")" stmt
+ //      | "while" "(" expr ")" stmt
+ //      | "goto" ident ";"
++//      | "break" ";"
+ //      | ident ":" stmt
+ //      | "{" compound-stmt
+ //      | expr-stmt
+@@ -614,6 +618,9 @@ static Node *stmt(Token **rest, Token *tok) {
+ 
+     enter_scope();
+ 
++    char *brk = brk_label;
++    brk_label = node->brk_label = new_unique_name();
++
+     if (is_typename(tok)) {
+       Type *basety = declspec(&tok, tok, NULL);
+       node->init = declaration(&tok, tok, basety);
+@@ -630,7 +637,9 @@ static Node *stmt(Token **rest, Token *tok) {
+     tok = skip(tok, ")");
+ 
+     node->then = stmt(rest, tok);
++
+     leave_scope();
++    brk_label = brk;
+     return node;
+   }
+ 
+@@ -639,7 +648,11 @@ static Node *stmt(Token **rest, Token *tok) {
+     tok = skip(tok->next, "(");
+     node->cond = expr(&tok, tok);
+     tok = skip(tok, ")");
++
++    char *brk = brk_label;
++    brk_label = node->brk_label = new_unique_name();
+     node->then = stmt(rest, tok);
++    brk_label = brk;
+     return node;
+   }
+ 
+@@ -652,6 +665,15 @@ static Node *stmt(Token **rest, Token *tok) {
+     return node;
+   }
+ 
++  if (equal(tok, "break")) {
++    if (!brk_label)
++      error_tok(tok, "stray break");
++    Node *node = new_node(ND_GOTO, tok);
++    node->unique_label = brk_label;
++    *rest = skip(tok->next, ";");
++    return node;
++  }
++
+   if (tok->kind == TK_IDENT && equal(tok->next, ":")) {
+     Node *node = new_node(ND_LABEL, tok);
+     node->label = strndup(tok->loc, tok->len);
+diff --git a/test/control.c b/test/control.c
+index 9baa2e2..24a8eff 100644
+--- a/test/control.c
++++ b/test/control.c
+@@ -42,6 +42,11 @@ int main() {
+ 
+   ASSERT(1, ({ typedef int foo; goto foo; foo:; 1; }));
+ 
++  ASSERT(3, ({ int i=0; for(;i<10;i++) { if (i == 3) break; } i; }));
++  ASSERT(4, ({ int i=0; while (1) { if (i++ == 3) break; } i; }));
++  ASSERT(3, ({ int i=0; for(;i<10;i++) { for (;;) break; if (i == 3) break; } i; }));
++  ASSERT(4, ({ int i=0; while (1) { while(1) break; if (i++ == 3) break; } i; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index cac1ef6..cc55ddc 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -131,7 +131,7 @@ static bool is_keyword(Token *tok) {
+   static char *kw[] = {
+     "return", "if", "else", "for", "while", "int", "sizeof", "char",
+     "struct", "union", "short", "long", "void", "typedef", "_Bool",
+-    "enum", "static", "goto",
++    "enum", "static", "goto", "break",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

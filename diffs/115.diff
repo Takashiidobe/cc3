@@ -1,0 +1,148 @@
+subject: Add extern
+
+
+
+diff --git a/codegen.c b/codegen.c
+index 11b50e6..c68684e 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -462,7 +462,7 @@ static void assign_lvar_offsets(Obj *prog) {
+ 
+ static void emit_data(Obj *prog) {
+   for (Obj *var = prog; var; var = var->next) {
+-    if (var->is_function)
++    if (var->is_function || !var->is_definition)
+       continue;
+ 
+     println("  .globl %s", var->name);
+diff --git a/parse.c b/parse.c
+index 521013c..ae75005 100644
+--- a/parse.c
++++ b/parse.c
+@@ -53,6 +53,7 @@ struct Scope {
+ typedef struct {
+   bool is_typedef;
+   bool is_static;
++  bool is_extern;
+ } VarAttr;
+ 
+ // This struct represents a variable initializer. Since initializers
+@@ -291,6 +292,7 @@ static Obj *new_lvar(char *name, Type *ty) {
+ static Obj *new_gvar(char *name, Type *ty) {
+   Obj *var = new_var(name, ty);
+   var->next = globals;
++  var->is_definition = true;
+   globals = var;
+   return var;
+ }
+@@ -334,7 +336,7 @@ static void push_tag_scope(Token *tok, Type *ty) {
+ }
+ 
+ // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
+-//             | "typedef" | "static"
++//             | "typedef" | "static" | "extern"
+ //             | struct-decl | union-decl | typedef-name
+ //             | enum-specifier)+
+ //
+@@ -369,17 +371,19 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+ 
+   while (is_typename(tok)) {
+     // Handle storage class specifiers.
+-    if (equal(tok, "typedef") || equal(tok, "static")) {
++    if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern")) {
+       if (!attr)
+         error_tok(tok, "storage class specifier is not allowed in this context");
+ 
+       if (equal(tok, "typedef"))
+         attr->is_typedef = true;
+-      else
++      else if (equal(tok, "static"))
+         attr->is_static = true;
++      else
++        attr->is_extern = true;
+ 
+-      if (attr->is_typedef + attr->is_static > 1)
+-        error_tok(tok, "typedef and static may not be used together");
++      if (attr->is_typedef && attr->is_static + attr->is_extern > 1)
++        error_tok(tok, "typedef may not be used together with static or extern");
+       tok = tok->next;
+       continue;
+     }
+@@ -1006,7 +1010,7 @@ static void gvar_initializer(Token **rest, Token *tok, Obj *var) {
+ static bool is_typename(Token *tok) {
+   static char *kw[] = {
+     "void", "_Bool", "char", "short", "int", "long", "struct", "union",
+-    "typedef", "enum", "static",
++    "typedef", "enum", "static", "extern",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+@@ -2100,7 +2104,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
+   return tok;
+ }
+ 
+-static Token *global_variable(Token *tok, Type *basety) {
++static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
+   bool first = true;
+ 
+   while (!consume(&tok, tok, ";")) {
+@@ -2110,6 +2114,8 @@ static Token *global_variable(Token *tok, Type *basety) {
+ 
+     Type *ty = declarator(&tok, tok, basety);
+     Obj *var = new_gvar(get_ident(ty->name), ty);
++    var->is_definition = !attr->is_extern;
++
+     if (equal(tok, "="))
+       gvar_initializer(&tok, tok->next, var);
+   }
+@@ -2148,8 +2154,7 @@ Obj *parse(Token *tok) {
+     }
+ 
+     // Global variable
+-    tok = global_variable(tok, basety);
+-
++    tok = global_variable(tok, basety, &attr);
+   }
+   return globals;
+ }
+diff --git a/test/common b/test/common
+index 8b33488..ebc9d99 100644
+--- a/test/common
++++ b/test/common
+@@ -11,3 +11,5 @@ void assert(int expected, int actual, char *code) {
+ }
+ 
+ static int static_fn() { return 5; }
++int ext1 = 5;
++int *ext2 = &ext1;
+diff --git a/test/extern.c b/test/extern.c
+new file mode 100644
+index 0000000..3fc1f6a
+--- /dev/null
++++ b/test/extern.c
+@@ -0,0 +1,12 @@
++#include "test.h"
++
++extern int ext1;
++extern int *ext2;
++
++int main() {
++  ASSERT(5, ext1);
++  ASSERT(5, *ext2);
++
++  printf("OK\n");
++  return 0;
++}
+diff --git a/tokenize.c b/tokenize.c
+index 64debc4..6a3ea80 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -133,7 +133,7 @@ static bool is_keyword(Token *tok) {
+     "return", "if", "else", "for", "while", "int", "sizeof", "char",
+     "struct", "union", "short", "long", "void", "typedef", "_Bool",
+     "enum", "static", "goto", "break", "continue", "switch", "case",
+-    "default",
++    "default", "extern",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

@@ -1,0 +1,66 @@
+subject: Add -idirafter option
+
+
+
+diff --git a/main.c b/main.c
+index c56c144..afaf338 100644
+--- a/main.c
++++ b/main.c
+@@ -21,7 +21,7 @@ static void usage(int status) {
+ }
+ 
+ static bool take_arg(char *arg) {
+-  char *x[] = {"-o", "-I"};
++  char *x[] = {"-o", "-I", "-idirafter"};
+ 
+   for (int i = 0; i < sizeof(x) / sizeof(*x); i++)
+     if (!strcmp(arg, x[i]))
+@@ -56,6 +56,8 @@ static void parse_args(int argc, char **argv) {
+       if (!argv[++i])
+         usage(1);
+ 
++  StringArray idirafter = {};
++
+   for (int i = 1; i < argc; i++) {
+     if (!strcmp(argv[i], "-###")) {
+       opt_hash_hash_hash = true;
+@@ -130,6 +132,11 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-idirafter")) {
++      strarray_push(&idirafter, argv[i++]);
++      continue;
++    }
++
+     // These options are ignored for now.
+     if (!strncmp(argv[i], "-O", 2) ||
+         !strncmp(argv[i], "-W", 2) ||
+@@ -151,6 +158,9 @@ static void parse_args(int argc, char **argv) {
+     strarray_push(&input_paths, argv[i]);
+   }
+ 
++  for (int i = 0; i < idirafter.len; i++)
++    strarray_push(&include_paths, idirafter.data[i]);
++
+   if (input_paths.len == 0)
+     error("no input files");
+ }
+diff --git a/test/driver.sh b/test/driver.sh
+index c58b657..dd11c7f 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -161,4 +161,13 @@ check inline
+ echo 'static inline void f2(); static inline void f1() { f2(); } static inline void f2() { f1(); } void foo() { f2(); }' | $chibicc -o- -S - | grep -q f2:
+ check inline
+ 
++# -idirafter
++mkdir -p $tmp/dir1 $tmp/dir2
++echo foo > $tmp/dir1/idirafter
++echo bar > $tmp/dir2/idirafter
++echo "#include \"idirafter\"" | $chibicc -I$tmp/dir1 -I$tmp/dir2 -E - | grep -q foo
++check -idirafter
++echo "#include \"idirafter\"" | $chibicc -idirafter $tmp/dir1 -I$tmp/dir2 -E - | grep -q bar
++check -idirafter
++
+ echo OK

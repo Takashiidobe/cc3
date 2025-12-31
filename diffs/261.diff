@@ -1,0 +1,55 @@
+subject: Use __attribute__((format(print, ...))) to find programming errors
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index bcc7b92..c01e339 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -21,6 +21,10 @@
+ #define MAX(x, y) ((x) < (y) ? (y) : (x))
+ #define MIN(x, y) ((x) < (y) ? (x) : (y))
+ 
++#ifndef __GNUC__
++# define __attribute__(x)
++#endif
++
+ typedef struct Type Type;
+ typedef struct Node Node;
+ typedef struct Member Member;
+@@ -38,7 +42,7 @@ typedef struct {
+ } StringArray;
+ 
+ void strarray_push(StringArray *arr, char *s);
+-char *format(char *fmt, ...);
++char *format(char *fmt, ...) __attribute__((format(printf, 1, 2)));
+ 
+ //
+ // tokenize.c
+@@ -87,10 +91,10 @@ struct Token {
+   Token *origin;    // If this is expanded from a macro, the original token
+ };
+ 
+-noreturn void error(char *fmt, ...);
+-noreturn void error_at(char *loc, char *fmt, ...);
+-noreturn void error_tok(Token *tok, char *fmt, ...);
+-void warn_tok(Token *tok, char *fmt, ...);
++noreturn void error(char *fmt, ...) __attribute__((format(printf, 1, 2)));
++noreturn void error_at(char *loc, char *fmt, ...) __attribute__((format(printf, 2, 3)));
++noreturn void error_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
++void warn_tok(Token *tok, char *fmt, ...) __attribute__((format(printf, 2, 3)));
+ bool equal(Token *tok, char *op);
+ Token *skip(Token *tok, char *op);
+ bool consume(Token **rest, Token *tok, char *str);
+diff --git a/codegen.c b/codegen.c
+index eb84582..0612118 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -14,6 +14,7 @@ static Obj *current_fn;
+ static void gen_expr(Node *node);
+ static void gen_stmt(Node *node);
+ 
++__attribute__((format(printf, 1, 2)))
+ static void println(char *fmt, ...) {
+   va_list ap;
+   va_start(ap, fmt);

@@ -1,0 +1,73 @@
+subject: Allow to define a function that takes/returns flonums
+
+
+
+diff --git a/codegen.c b/codegen.c
+index 9fc9bd9..889ca9e 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -735,6 +735,18 @@ static void emit_data(Obj *prog) {
+   }
+ }
+ 
++static void store_fp(int r, int offset, int sz) {
++  switch (sz) {
++  case 4:
++    println("  movss %%xmm%d, %d(%%rbp)", r, offset);
++    return;
++  case 8:
++    println("  movsd %%xmm%d, %d(%%rbp)", r, offset);
++    return;
++  }
++  unreachable();
++}
++
+ static void store_gp(int r, int offset, int sz) {
+   switch (sz) {
+   case 1:
+@@ -803,9 +815,13 @@ static void emit_text(Obj *prog) {
+     }
+ 
+     // Save passed-by-register arguments to the stack
+-    int i = 0;
+-    for (Obj *var = fn->params; var; var = var->next)
+-      store_gp(i++, var->offset, var->ty->size);
++    int gp = 0, fp = 0;
++    for (Obj *var = fn->params; var; var = var->next) {
++      if (is_flonum(var->ty))
++        store_fp(fp++, var->offset, var->ty->size);
++      else
++        store_gp(gp++, var->offset, var->ty->size);
++    }
+ 
+     // Emit code
+     gen_stmt(fn->body);
+diff --git a/test/function.c b/test/function.c
+index 450531b..df271a2 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -100,6 +100,14 @@ char *fmt(char *buf, char *fmt, ...) {
+ double add_double(double x, double y);
+ float add_float(float x, float y);
+ 
++float add_float3(float x, float y, float z) {
++  return x + y + z;
++}
++
++double add_double3(double x, double y, double z) {
++  return x + y + z;
++}
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -163,6 +171,9 @@ int main() {
+   ASSERT(6, add_float(2.3, 3.8));
+   ASSERT(6, add_double(2.3, 3.8));
+ 
++  ASSERT(7, add_float3(2.5, 2.5, 2.5));
++  ASSERT(7, add_double3(2.5, 2.5, 2.5));
++
+   printf("OK\n");
+   return 0;
+ }

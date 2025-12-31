@@ -1,0 +1,496 @@
+subject: Add unsigned integral types
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 39055cc..4227eec 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -227,6 +227,7 @@ struct Type {
+   TypeKind kind;
+   int size;           // sizeof() value
+   int align;          // alignment
++  bool is_unsigned;   // unsigned or signed
+ 
+   // Pointer-to or array-of type. We intentionally use the same member
+   // to represent pointer/array duality in C.
+@@ -274,6 +275,11 @@ extern Type *ty_short;
+ extern Type *ty_int;
+ extern Type *ty_long;
+ 
++extern Type *ty_uchar;
++extern Type *ty_ushort;
++extern Type *ty_uint;
++extern Type *ty_ulong;
++
+ bool is_integer(Type *ty);
+ Type *copy_type(Type *ty);
+ Type *pointer_to(Type *base);
+diff --git a/codegen.c b/codegen.c
+index f6860f5..bff6b5a 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -81,15 +81,17 @@ static void load(Type *ty) {
+     return;
+   }
+ 
++  char *insn = ty->is_unsigned ? "movz" : "movs";
++
+   // When we load a char or a short value to a register, we always
+   // extend them to the size of int, so we can assume the lower half of
+   // a register always contains a valid value. The upper half of a
+   // register for char, short and int may contain garbage. When we load
+   // a long value to a register, it simply occupies the entire register.
+   if (ty->size == 1)
+-    println("  movsbl (%%rax), %%eax");
++    println("  %sbl (%%rax), %%eax", insn);
+   else if (ty->size == 2)
+-    println("  movswl (%%rax), %%eax");
++    println("  %swl (%%rax), %%eax", insn);
+   else if (ty->size == 4)
+     println("  movsxd (%%rax), %%rax");
+   else
+@@ -125,30 +127,40 @@ static void cmp_zero(Type *ty) {
+     println("  cmp $0, %%rax");
+ }
+ 
+-enum { I8, I16, I32, I64 };
++enum { I8, I16, I32, I64, U8, U16, U32, U64 };
+ 
+ static int getTypeId(Type *ty) {
+   switch (ty->kind) {
+   case TY_CHAR:
+-    return I8;
++    return ty->is_unsigned ? U8 : I8;
+   case TY_SHORT:
+-    return I16;
++    return ty->is_unsigned ? U16 : I16;
+   case TY_INT:
+-    return I32;
++    return ty->is_unsigned ? U32 : I32;
++  case TY_LONG:
++    return ty->is_unsigned ? U64 : I64;
+   }
+-  return I64;
++  return U64;
+ }
+ 
+ // The table for type casts
+ static char i32i8[] = "movsbl %al, %eax";
++static char i32u8[] = "movzbl %al, %eax";
+ static char i32i16[] = "movswl %ax, %eax";
++static char i32u16[] = "movzwl %ax, %eax";
+ static char i32i64[] = "movsxd %eax, %rax";
++static char u32i64[] = "mov %eax, %eax";
+ 
+ static char *cast_table[][10] = {
+-  {NULL,  NULL,   NULL, i32i64}, // i8
+-  {i32i8, NULL,   NULL, i32i64}, // i16
+-  {i32i8, i32i16, NULL, i32i64}, // i32
+-  {i32i8, i32i16, NULL, NULL},   // i64
++  // i8   i16     i32   i64     u8     u16     u32   u64
++  {NULL,  NULL,   NULL, i32i64, i32u8, i32u16, NULL, i32i64}, // i8
++  {i32i8, NULL,   NULL, i32i64, i32u8, i32u16, NULL, i32i64}, // i16
++  {i32i8, i32i16, NULL, i32i64, i32u8, i32u16, NULL, i32i64}, // i32
++  {i32i8, i32i16, NULL, NULL,   i32u8, i32u16, NULL, NULL},   // i64
++  {i32i8, NULL,   NULL, i32i64, NULL,  NULL,   NULL, i32i64}, // u8
++  {i32i8, i32i16, NULL, i32i64, i32u8, NULL,   NULL, i32i64}, // u16
++  {i32i8, i32i16, NULL, u32i64, i32u8, i32u16, NULL, u32i64}, // u32
++  {i32i8, i32i16, NULL, NULL,   i32u8, i32u16, NULL, NULL},   // u64
+ };
+ 
+ static void cast(Type *from, Type *to) {
+@@ -300,10 +312,16 @@ static void gen_expr(Node *node) {
+       println("  movzx %%al, %%eax");
+       return;
+     case TY_CHAR:
+-      println("  movsbl %%al, %%eax");
++      if (node->ty->is_unsigned)
++        println("  movzbl %%al, %%eax");
++      else
++        println("  movsbl %%al, %%eax");
+       return;
+     case TY_SHORT:
+-      println("  movswl %%ax, %%eax");
++      if (node->ty->is_unsigned)
++        println("  movzwl %%ax, %%eax");
++      else
++        println("  movswl %%ax, %%eax");
+       return;
+     }
+     return;
+@@ -315,14 +333,16 @@ static void gen_expr(Node *node) {
+   gen_expr(node->lhs);
+   pop("%rdi");
+ 
+-  char *ax, *di;
++  char *ax, *di, *dx;
+ 
+   if (node->lhs->ty->kind == TY_LONG || node->lhs->ty->base) {
+     ax = "%rax";
+     di = "%rdi";
++    dx = "%rdx";
+   } else {
+     ax = "%eax";
+     di = "%edi";
++    dx = "%edx";
+   }
+ 
+   switch (node->kind) {
+@@ -337,11 +357,16 @@ static void gen_expr(Node *node) {
+     return;
+   case ND_DIV:
+   case ND_MOD:
+-    if (node->lhs->ty->size == 8)
+-      println("  cqo");
+-    else
+-      println("  cdq");
+-    println("  idiv %s", di);
++    if (node->ty->is_unsigned) {
++      println("  mov $0, %s", dx);
++      println("  div %s", di);
++    } else {
++      if (node->lhs->ty->size == 8)
++        println("  cqo");
++      else
++        println("  cdq");
++      println("  idiv %s", di);
++    }
+ 
+     if (node->kind == ND_MOD)
+       println("  mov %%rdx, %%rax");
+@@ -361,14 +386,21 @@ static void gen_expr(Node *node) {
+   case ND_LE:
+     println("  cmp %s, %s", di, ax);
+ 
+-    if (node->kind == ND_EQ)
++    if (node->kind == ND_EQ) {
+       println("  sete %%al");
+-    else if (node->kind == ND_NE)
++    } else if (node->kind == ND_NE) {
+       println("  setne %%al");
+-    else if (node->kind == ND_LT)
+-      println("  setl %%al");
+-    else if (node->kind == ND_LE)
+-      println("  setle %%al");
++    } else if (node->kind == ND_LT) {
++      if (node->lhs->ty->is_unsigned)
++        println("  setb %%al");
++      else
++        println("  setl %%al");
++    } else if (node->kind == ND_LE) {
++      if (node->lhs->ty->is_unsigned)
++        println("  setbe %%al");
++      else
++        println("  setle %%al");
++    }
+ 
+     println("  movzb %%al, %%rax");
+     return;
+@@ -378,8 +410,8 @@ static void gen_expr(Node *node) {
+     return;
+   case ND_SHR:
+     println("  mov %%rdi, %%rcx");
+-    if (node->ty->size == 8)
+-      println("  sar %%cl, %s", ax);
++    if (node->lhs->ty->is_unsigned)
++      println("  shr %%cl, %s", ax);
+     else
+       println("  sar %%cl, %s", ax);
+     return;
+diff --git a/parse.c b/parse.c
+index ca325db..35727df 100644
+--- a/parse.c
++++ b/parse.c
+@@ -344,7 +344,7 @@ static void push_tag_scope(Token *tok, Type *ty) {
+ 
+ // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
+ //             | "typedef" | "static" | "extern"
+-//             | "signed"
++//             | "signed" | "unsigned"
+ //             | struct-decl | union-decl | typedef-name
+ //             | enum-specifier)+
+ //
+@@ -365,14 +365,15 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+   // keyword "void" so far. With this, we can use a switch statement
+   // as you can see below.
+   enum {
+-    VOID   = 1 << 0,
+-    BOOL   = 1 << 2,
+-    CHAR   = 1 << 4,
+-    SHORT  = 1 << 6,
+-    INT    = 1 << 8,
+-    LONG   = 1 << 10,
+-    OTHER  = 1 << 12,
+-    SIGNED = 1 << 13,
++    VOID     = 1 << 0,
++    BOOL     = 1 << 2,
++    CHAR     = 1 << 4,
++    SHORT    = 1 << 6,
++    INT      = 1 << 8,
++    LONG     = 1 << 10,
++    OTHER    = 1 << 12,
++    SIGNED   = 1 << 13,
++    UNSIGNED = 1 << 14,
+   };
+ 
+   Type *ty = ty_int;
+@@ -446,6 +447,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+       counter += LONG;
+     else if (equal(tok, "signed"))
+       counter |= SIGNED;
++    else if (equal(tok, "unsigned"))
++      counter |= UNSIGNED;
+     else
+       unreachable();
+ 
+@@ -460,17 +463,28 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+     case SIGNED + CHAR:
+       ty = ty_char;
+       break;
++    case UNSIGNED + CHAR:
++      ty = ty_uchar;
++      break;
+     case SHORT:
+     case SHORT + INT:
+     case SIGNED + SHORT:
+     case SIGNED + SHORT + INT:
+       ty = ty_short;
+       break;
++    case UNSIGNED + SHORT:
++    case UNSIGNED + SHORT + INT:
++      ty = ty_ushort;
++      break;
+     case INT:
+     case SIGNED:
+     case SIGNED + INT:
+       ty = ty_int;
+       break;
++    case UNSIGNED:
++    case UNSIGNED + INT:
++      ty = ty_uint;
++      break;
+     case LONG:
+     case LONG + INT:
+     case LONG + LONG:
+@@ -481,6 +495,12 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+     case SIGNED + LONG + LONG + INT:
+       ty = ty_long;
+       break;
++    case UNSIGNED + LONG:
++    case UNSIGNED + LONG + INT:
++    case UNSIGNED + LONG + LONG:
++    case UNSIGNED + LONG + LONG + INT:
++      ty = ty_ulong;
++      break;
+     default:
+       error_tok(tok, "invalid type");
+     }
+@@ -1067,7 +1087,7 @@ static void gvar_initializer(Token **rest, Token *tok, Obj *var) {
+ static bool is_typename(Token *tok) {
+   static char *kw[] = {
+     "void", "_Bool", "char", "short", "int", "long", "struct", "union",
+-    "typedef", "enum", "static", "extern", "_Alignas", "signed",
++    "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+diff --git a/test/cast.c b/test/cast.c
+index 36b63d8..b8fdea1 100644
+--- a/test/cast.c
++++ b/test/cast.c
+@@ -11,6 +11,36 @@ int main() {
+ 
+   (void)1;
+ 
++  ASSERT(-1, (char)255);
++  ASSERT(-1, (signed char)255);
++  ASSERT(255, (unsigned char)255);
++  ASSERT(-1, (short)65535);
++  ASSERT(65535, (unsigned short)65535);
++  ASSERT(-1, (int)0xffffffff);
++  ASSERT(0xffffffff, (unsigned)0xffffffff);
++
++  ASSERT(1, -1<1);
++  ASSERT(0, -1<(unsigned)1);
++  ASSERT(254, (char)127+(char)127);
++  ASSERT(65534, (short)32767+(short)32767);
++  ASSERT(-1, -1>>1);
++  ASSERT(-1, (unsigned long)-1);
++  ASSERT(2147483647, ((unsigned)-1)>>1);
++  ASSERT(-50, (-100)/2);
++  ASSERT(2147483598, ((unsigned)-100)/2);
++  ASSERT(9223372036854775758, ((unsigned long)-100)/2);
++  ASSERT(0, ((long)-1)/(unsigned)100);
++  ASSERT(-2, (-100)%7);
++  ASSERT(2, ((unsigned)-100)%7);
++  ASSERT(6, ((unsigned long)-100)%9);
++
++  ASSERT(65535, (int)(unsigned short)65535);
++  ASSERT(65535, ({ unsigned short x = 65535; x; }));
++  ASSERT(65535, ({ unsigned short x = 65535; (int)x; }));
++
++  ASSERT(-1, ({ typedef short T; T x = 65535; (int)x; }));
++  ASSERT(65535, ({ typedef unsigned short T; T x = 65535; (int)x; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/common b/test/common
+index 095ef18..b33b9dd 100644
+--- a/test/common
++++ b/test/common
+@@ -23,6 +23,12 @@ int true_fn() { return 513; }
+ int char_fn() { return (2<<8)+3; }
+ int short_fn() { return (2<<16)+5; }
+ 
++int uchar_fn() { return (2<<10)-1-4; }
++int ushort_fn() { return (2<<20)-1-7; }
++
++int schar_fn() { return (2<<10)-1-4; }
++int sshort_fn() { return (2<<20)-1-7; }
++
+ int add_all(int n, ...) {
+   va_list ap;
+   va_start(ap, n);
+diff --git a/test/function.c b/test/function.c
+index 12cb8fb..4e0e159 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -70,6 +70,12 @@ _Bool false_fn();
+ char char_fn();
+ short short_fn();
+ 
++unsigned char uchar_fn();
++unsigned short ushort_fn();
++
++char schar_fn();
++short sshort_fn();
++
+ int add_all(int n, ...);
+ 
+ typedef struct {
+@@ -146,6 +152,12 @@ int main() {
+ 
+   ASSERT(0, ({ char buf[100]; fmt(buf, "%d %d %s", 1, 2, "foo"); strcmp("1 2 foo", buf); }));
+ 
++  ASSERT(251, uchar_fn());
++  ASSERT(65528, ushort_fn());
++  ASSERT(-5, schar_fn());
++  ASSERT(-8, sshort_fn());
++
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/sizeof.c b/test/sizeof.c
+index f12bc05..0c501d7 100644
+--- a/test/sizeof.c
++++ b/test/sizeof.c
+@@ -39,25 +39,47 @@ int main() {
+   ASSERT(1, sizeof(char));
+   ASSERT(1, sizeof(signed char));
+   ASSERT(1, sizeof(signed char signed));
++  ASSERT(1, sizeof(unsigned char));
++  ASSERT(1, sizeof(unsigned char unsigned));
+ 
+   ASSERT(2, sizeof(short));
+   ASSERT(2, sizeof(int short));
+   ASSERT(2, sizeof(short int));
+   ASSERT(2, sizeof(signed short));
+   ASSERT(2, sizeof(int short signed));
++  ASSERT(2, sizeof(unsigned short));
++  ASSERT(2, sizeof(int short unsigned));
+ 
+   ASSERT(4, sizeof(int));
+   ASSERT(4, sizeof(signed int));
+   ASSERT(4, sizeof(signed));
+   ASSERT(4, sizeof(signed signed));
++  ASSERT(4, sizeof(unsigned int));
++  ASSERT(4, sizeof(unsigned));
++  ASSERT(4, sizeof(unsigned unsigned));
+ 
+   ASSERT(8, sizeof(long));
+   ASSERT(8, sizeof(signed long));
+   ASSERT(8, sizeof(signed long int));
++  ASSERT(8, sizeof(unsigned long));
++  ASSERT(8, sizeof(unsigned long int));
+ 
+   ASSERT(8, sizeof(long long));
+   ASSERT(8, sizeof(signed long long));
+   ASSERT(8, sizeof(signed long long int));
++  ASSERT(8, sizeof(unsigned long long));
++  ASSERT(8, sizeof(unsigned long long int));
++
++  ASSERT(1, sizeof((char)1));
++  ASSERT(2, sizeof((short)1));
++  ASSERT(4, sizeof((int)1));
++  ASSERT(8, sizeof((long)1));
++
++  ASSERT(4, sizeof((char)1 + (char)1));
++  ASSERT(4, sizeof((short)1 + (short)1));
++  ASSERT(4, sizeof(1?2:3));
++  ASSERT(4, sizeof(1?(short)2:(char)3));
++  ASSERT(8, sizeof(1?(long)2:(char)3));
+ 
+   printf("OK\n");
+   return 0;
+diff --git a/tokenize.c b/tokenize.c
+index 33b91a7..9ac7508 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -134,6 +134,7 @@ static bool is_keyword(Token *tok) {
+     "struct", "union", "short", "long", "void", "typedef", "_Bool",
+     "enum", "static", "goto", "break", "continue", "switch", "case",
+     "default", "extern", "_Alignof", "_Alignas", "do", "signed",
++    "unsigned",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+@@ -259,7 +260,7 @@ static Token *read_int_literal(char *start) {
+     base = 8;
+   }
+ 
+-  long val = strtoul(p, &p, base);
++  int64_t val = strtoul(p, &p, base);
+   if (isalnum(*p))
+     error_at(p, "invalid digit");
+ 
+diff --git a/type.c b/type.c
+index 161c961..866cce7 100644
+--- a/type.c
++++ b/type.c
+@@ -8,6 +8,11 @@ Type *ty_short = &(Type){TY_SHORT, 2, 2};
+ Type *ty_int = &(Type){TY_INT, 4, 4};
+ Type *ty_long = &(Type){TY_LONG, 8, 8};
+ 
++Type *ty_uchar = &(Type){TY_CHAR, 1, 1, true};
++Type *ty_ushort = &(Type){TY_SHORT, 2, 2, true};
++Type *ty_uint = &(Type){TY_INT, 4, 4, true};
++Type *ty_ulong = &(Type){TY_LONG, 8, 8, true};
++
+ static Type *new_type(TypeKind kind, int size, int align) {
+   Type *ty = calloc(1, sizeof(Type));
+   ty->kind = kind;
+@@ -59,9 +64,18 @@ Type *struct_type(void) {
+ static Type *get_common_type(Type *ty1, Type *ty2) {
+   if (ty1->base)
+     return pointer_to(ty1->base);
+-  if (ty1->size == 8 || ty2->size == 8)
+-    return ty_long;
+-  return ty_int;
++
++  if (ty1->size < 4)
++    ty1 = ty_int;
++  if (ty2->size < 4)
++    ty2 = ty_int;
++
++  if (ty1->size != ty2->size)
++    return (ty1->size < ty2->size) ? ty2 : ty1;
++
++  if (ty2->is_unsigned)
++    return ty2;
++  return ty1;
+ }
+ 
+ // For many binary operators, we implicitly promote operands so that

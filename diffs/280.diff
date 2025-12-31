@@ -1,0 +1,106 @@
+subject: [GNU] Support case ranges
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index c580b6d..4e59139 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -259,10 +259,14 @@ struct Node {
+   char *unique_label;
+   Node *goto_next;
+ 
+-  // Switch-cases
++  // Switch
+   Node *case_next;
+   Node *default_case;
+ 
++  // Case
++  long begin;
++  long end;
++
+   // "asm" string literal
+   char *asm_str;
+ 
+diff --git a/codegen.c b/codegen.c
+index ce38b04..161866f 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -1160,9 +1160,20 @@ static void gen_stmt(Node *node) {
+     gen_expr(node->cond);
+ 
+     for (Node *n = node->case_next; n; n = n->case_next) {
+-      char *reg = (node->cond->ty->size == 8) ? "%rax" : "%eax";
+-      println("  cmp $%ld, %s", n->val, reg);
+-      println("  je %s", n->label);
++      char *ax = (node->cond->ty->size == 8) ? "%rax" : "%eax";
++      char *di = (node->cond->ty->size == 8) ? "%rdi" : "%edi";
++
++      if (n->begin == n->end) {
++        println("  cmp $%ld, %s", n->begin, ax);
++        println("  je %s", n->label);
++        continue;
++      }
++
++      // [GNU] Case ranges
++      println("  mov %s, %s", ax, di);
++      println("  sub $%ld, %s", n->begin, di);
++      println("  cmp $%ld, %s", n->end - n->begin, di);
++      println("  jbe %s", n->label);
+     }
+ 
+     if (node->default_case)
+diff --git a/parse.c b/parse.c
+index 792072c..77ea6bd 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1507,7 +1507,7 @@ static Node *asm_stmt(Token **rest, Token *tok) {
+ // stmt = "return" expr? ";"
+ //      | "if" "(" expr ")" stmt ("else" stmt)?
+ //      | "switch" "(" expr ")" stmt
+-//      | "case" const-expr ":" stmt
++//      | "case" const-expr ("..." const-expr)? ":" stmt
+ //      | "default" ":" stmt
+ //      | "for" "(" expr-stmt expr? ";" expr? ")" stmt
+ //      | "while" "(" expr ")" stmt
+@@ -1573,11 +1573,23 @@ static Node *stmt(Token **rest, Token *tok) {
+       error_tok(tok, "stray case");
+ 
+     Node *node = new_node(ND_CASE, tok);
+-    int val = const_expr(&tok, tok->next);
++    int begin = const_expr(&tok, tok->next);
++    int end;
++
++    if (equal(tok, "...")) {
++      // [GNU] Case ranges, e.g. "case 1 ... 5:"
++      end = const_expr(&tok, tok->next);
++      if (end < begin)
++        error_tok(tok, "empty case range specified");
++    } else {
++      end = begin;
++    }
++
+     tok = skip(tok, ":");
+     node->label = new_unique_name();
+     node->lhs = stmt(rest, tok);
+-    node->val = val;
++    node->begin = begin;
++    node->end = end;
+     node->case_next = current_switch->case_next;
+     current_switch->case_next = node;
+     return node;
+diff --git a/test/control.c b/test/control.c
+index 2e77884..3cc4346 100644
+--- a/test/control.c
++++ b/test/control.c
+@@ -83,6 +83,10 @@ int main() {
+   ASSERT(10, ({ double i=10.0; int j=0; for (; i; i--, j++); j; }));
+   ASSERT(10, ({ double i=10.0; int j=0; do j++; while(--i); j; }));
+ 
++  ASSERT(2, ({ int i=0; switch(7) { case 0 ... 5: i=1; break; case 6 ... 20: i=2; break; } i; }));
++  ASSERT(1, ({ int i=0; switch(7) { case 0 ... 7: i=1; break; case 8 ... 10: i=2; break; } i; }));
++  ASSERT(1, ({ int i=0; switch(7) { case 0: i=1; break; case 7 ... 7: i=1; break; } i; }));
++
+   printf("OK\n");
+   return 0;
+ }

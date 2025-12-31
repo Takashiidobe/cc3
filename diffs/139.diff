@@ -1,0 +1,295 @@
+subject: Add "float" and "double" local variables and casts
+
+
+
+diff --git a/codegen.c b/codegen.c
+index fb27fb5..fb3f806 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -71,7 +71,10 @@ static void gen_addr(Node *node) {
+ 
+ // Load a value from where %rax is pointing to.
+ static void load(Type *ty) {
+-  if (ty->kind == TY_ARRAY || ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
++  switch (ty->kind) {
++  case TY_ARRAY:
++  case TY_STRUCT:
++  case TY_UNION:
+     // If it is an array, do not attempt to load a value to the
+     // register because in general we can't load an entire array to a
+     // register. As a result, the result of an evaluation of an array
+@@ -79,6 +82,12 @@ static void load(Type *ty) {
+     // This is where "array is automatically converted to a pointer to
+     // the first element of the array in C" occurs.
+     return;
++  case TY_FLOAT:
++    println("  movss (%%rax), %%xmm0");
++    return;
++  case TY_DOUBLE:
++    println("  movsd (%%rax), %%xmm0");
++    return;
+   }
+ 
+   char *insn = ty->is_unsigned ? "movz" : "movs";
+@@ -102,12 +111,20 @@ static void load(Type *ty) {
+ static void store(Type *ty) {
+   pop("%rdi");
+ 
+-  if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
++  switch (ty->kind) {
++  case TY_STRUCT:
++  case TY_UNION:
+     for (int i = 0; i < ty->size; i++) {
+       println("  mov %d(%%rax), %%r8b", i);
+       println("  mov %%r8b, %d(%%rdi)", i);
+     }
+     return;
++  case TY_FLOAT:
++    println("  movss %%xmm0, (%%rdi)");
++    return;
++  case TY_DOUBLE:
++    println("  movsd %%xmm0, (%%rdi)");
++    return;
+   }
+ 
+   if (ty->size == 1)
+@@ -127,7 +144,7 @@ static void cmp_zero(Type *ty) {
+     println("  cmp $0, %%rax");
+ }
+ 
+-enum { I8, I16, I32, I64, U8, U16, U32, U64 };
++enum { I8, I16, I32, I64, U8, U16, U32, U64, F32, F64 };
+ 
+ static int getTypeId(Type *ty) {
+   switch (ty->kind) {
+@@ -139,6 +156,10 @@ static int getTypeId(Type *ty) {
+     return ty->is_unsigned ? U32 : I32;
+   case TY_LONG:
+     return ty->is_unsigned ? U64 : I64;
++  case TY_FLOAT:
++    return F32;
++  case TY_DOUBLE:
++    return F64;
+   }
+   return U64;
+ }
+@@ -148,19 +169,57 @@ static char i32i8[] = "movsbl %al, %eax";
+ static char i32u8[] = "movzbl %al, %eax";
+ static char i32i16[] = "movswl %ax, %eax";
+ static char i32u16[] = "movzwl %ax, %eax";
++static char i32f32[] = "cvtsi2ssl %eax, %xmm0";
+ static char i32i64[] = "movsxd %eax, %rax";
++static char i32f64[] = "cvtsi2sdl %eax, %xmm0";
++
++static char u32f32[] = "mov %eax, %eax; cvtsi2ssq %rax, %xmm0";
+ static char u32i64[] = "mov %eax, %eax";
++static char u32f64[] = "mov %eax, %eax; cvtsi2sdq %rax, %xmm0";
++
++static char i64f32[] = "cvtsi2ssq %rax, %xmm0";
++static char i64f64[] = "cvtsi2sdq %rax, %xmm0";
++
++static char u64f32[] = "cvtsi2ssq %rax, %xmm0";
++static char u64f64[] =
++  "test %rax,%rax; js 1f; pxor %xmm0,%xmm0; cvtsi2sd %rax,%xmm0; jmp 2f; "
++  "1: mov %rax,%rdi; and $1,%eax; pxor %xmm0,%xmm0; shr %rdi; "
++  "or %rax,%rdi; cvtsi2sd %rdi,%xmm0; addsd %xmm0,%xmm0; 2:";
++
++static char f32i8[] = "cvttss2sil %xmm0, %eax; movsbl %al, %eax";
++static char f32u8[] = "cvttss2sil %xmm0, %eax; movzbl %al, %eax";
++static char f32i16[] = "cvttss2sil %xmm0, %eax; movswl %ax, %eax";
++static char f32u16[] = "cvttss2sil %xmm0, %eax; movzwl %ax, %eax";
++static char f32i32[] = "cvttss2sil %xmm0, %eax";
++static char f32u32[] = "cvttss2siq %xmm0, %rax";
++static char f32i64[] = "cvttss2siq %xmm0, %rax";
++static char f32u64[] = "cvttss2siq %xmm0, %rax";
++static char f32f64[] = "cvtss2sd %xmm0, %xmm0";
++
++static char f64i8[] = "cvttsd2sil %xmm0, %eax; movsbl %al, %eax";
++static char f64u8[] = "cvttsd2sil %xmm0, %eax; movzbl %al, %eax";
++static char f64i16[] = "cvttsd2sil %xmm0, %eax; movswl %ax, %eax";
++static char f64u16[] = "cvttsd2sil %xmm0, %eax; movzwl %ax, %eax";
++static char f64i32[] = "cvttsd2sil %xmm0, %eax";
++static char f64u32[] = "cvttsd2siq %xmm0, %rax";
++static char f64f32[] = "cvtsd2ss %xmm0, %xmm0";
++static char f64i64[] = "cvttsd2siq %xmm0, %rax";
++static char f64u64[] = "cvttsd2siq %xmm0, %rax";
+ 
+ static char *cast_table[][10] = {
+-  // i8   i16     i32   i64     u8     u16     u32   u64
+-  {NULL,  NULL,   NULL, i32i64, i32u8, i32u16, NULL, i32i64}, // i8
+-  {i32i8, NULL,   NULL, i32i64, i32u8, i32u16, NULL, i32i64}, // i16
+-  {i32i8, i32i16, NULL, i32i64, i32u8, i32u16, NULL, i32i64}, // i32
+-  {i32i8, i32i16, NULL, NULL,   i32u8, i32u16, NULL, NULL},   // i64
+-  {i32i8, NULL,   NULL, i32i64, NULL,  NULL,   NULL, i32i64}, // u8
+-  {i32i8, i32i16, NULL, i32i64, i32u8, NULL,   NULL, i32i64}, // u16
+-  {i32i8, i32i16, NULL, u32i64, i32u8, i32u16, NULL, u32i64}, // u32
+-  {i32i8, i32i16, NULL, NULL,   i32u8, i32u16, NULL, NULL},   // u64
++  // i8   i16     i32     i64     u8     u16     u32     u64     f32     f64
++  {NULL,  NULL,   NULL,   i32i64, i32u8, i32u16, NULL,   i32i64, i32f32, i32f64}, // i8
++  {i32i8, NULL,   NULL,   i32i64, i32u8, i32u16, NULL,   i32i64, i32f32, i32f64}, // i16
++  {i32i8, i32i16, NULL,   i32i64, i32u8, i32u16, NULL,   i32i64, i32f32, i32f64}, // i32
++  {i32i8, i32i16, NULL,   NULL,   i32u8, i32u16, NULL,   NULL,   i64f32, i64f64}, // i64
++
++  {i32i8, NULL,   NULL,   i32i64, NULL,  NULL,   NULL,   i32i64, i32f32, i32f64}, // u8
++  {i32i8, i32i16, NULL,   i32i64, i32u8, NULL,   NULL,   i32i64, i32f32, i32f64}, // u16
++  {i32i8, i32i16, NULL,   u32i64, i32u8, i32u16, NULL,   u32i64, u32f32, u32f64}, // u32
++  {i32i8, i32i16, NULL,   NULL,   i32u8, i32u16, NULL,   NULL,   u64f32, u64f64}, // u64
++
++  {f32i8, f32i16, f32i32, f32i64, f32u8, f32u16, f32u32, f32u64, NULL,   f32f64}, // f32
++  {f64i8, f64i16, f64i32, f64i64, f64u8, f64u16, f64u32, f64u64, f64f32, NULL},   // f64
+ };
+ 
+ static void cast(Type *from, Type *to) {
+diff --git a/parse.c b/parse.c
+index c39865c..ac1a792 100644
+--- a/parse.c
++++ b/parse.c
+@@ -380,9 +380,11 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+     SHORT    = 1 << 6,
+     INT      = 1 << 8,
+     LONG     = 1 << 10,
+-    OTHER    = 1 << 12,
+-    SIGNED   = 1 << 13,
+-    UNSIGNED = 1 << 14,
++    FLOAT    = 1 << 12,
++    DOUBLE   = 1 << 14,
++    OTHER    = 1 << 16,
++    SIGNED   = 1 << 17,
++    UNSIGNED = 1 << 18,
+   };
+ 
+   Type *ty = ty_int;
+@@ -461,6 +463,10 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+       counter += INT;
+     else if (equal(tok, "long"))
+       counter += LONG;
++    else if (equal(tok, "float"))
++      counter += FLOAT;
++    else if (equal(tok, "double"))
++      counter += DOUBLE;
+     else if (equal(tok, "signed"))
+       counter |= SIGNED;
+     else if (equal(tok, "unsigned"))
+@@ -517,6 +523,12 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+     case UNSIGNED + LONG + LONG + INT:
+       ty = ty_ulong;
+       break;
++    case FLOAT:
++      ty = ty_float;
++      break;
++    case DOUBLE:
++      ty = ty_double;
++      break;
+     default:
+       error_tok(tok, "invalid type");
+     }
+@@ -1125,7 +1137,7 @@ static bool is_typename(Token *tok) {
+     "void", "_Bool", "char", "short", "int", "long", "struct", "union",
+     "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
+     "const", "volatile", "auto", "register", "restrict", "__restrict",
+-    "__restrict__", "_Noreturn",
++    "__restrict__", "_Noreturn", "float", "double",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+diff --git a/test/cast.c b/test/cast.c
+index b8fdea1..2ce8d3e 100644
+--- a/test/cast.c
++++ b/test/cast.c
+@@ -41,6 +41,19 @@ int main() {
+   ASSERT(-1, ({ typedef short T; T x = 65535; (int)x; }));
+   ASSERT(65535, ({ typedef unsigned short T; T x = 65535; (int)x; }));
+ 
++  ASSERT(0, (_Bool)0.0);
++  ASSERT(1, (_Bool)0.1);
++  ASSERT(3, (char)3.0);
++  ASSERT(1000, (short)1000.3);
++  ASSERT(3, (int)3.99);
++  ASSERT(2000000000000000, (long)2e15);
++  ASSERT(3, (float)3.5);
++  ASSERT(5, (double)(float)5.5);
++  ASSERT(3, (float)3);
++  ASSERT(3, (double)3);
++  ASSERT(3, (float)3L);
++  ASSERT(3, (double)3L);
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/float.c b/test/float.c
+new file mode 100644
+index 0000000..c41e4ae
+--- /dev/null
++++ b/test/float.c
+@@ -0,0 +1,44 @@
++#include "test.h"
++
++int main() {
++  ASSERT(35, (float)(char)35);
++  ASSERT(35, (float)(short)35);
++  ASSERT(35, (float)(int)35);
++  ASSERT(35, (float)(long)35);
++  ASSERT(35, (float)(unsigned char)35);
++  ASSERT(35, (float)(unsigned short)35);
++  ASSERT(35, (float)(unsigned int)35);
++  ASSERT(35, (float)(unsigned long)35);
++
++  ASSERT(35, (double)(char)35);
++  ASSERT(35, (double)(short)35);
++  ASSERT(35, (double)(int)35);
++  ASSERT(35, (double)(long)35);
++  ASSERT(35, (double)(unsigned char)35);
++  ASSERT(35, (double)(unsigned short)35);
++  ASSERT(35, (double)(unsigned int)35);
++  ASSERT(35, (double)(unsigned long)35);
++
++  ASSERT(35, (char)(float)35);
++  ASSERT(35, (short)(float)35);
++  ASSERT(35, (int)(float)35);
++  ASSERT(35, (long)(float)35);
++  ASSERT(35, (unsigned char)(float)35);
++  ASSERT(35, (unsigned short)(float)35);
++  ASSERT(35, (unsigned int)(float)35);
++  ASSERT(35, (unsigned long)(float)35);
++
++  ASSERT(35, (char)(double)35);
++  ASSERT(35, (short)(double)35);
++  ASSERT(35, (int)(double)35);
++  ASSERT(35, (long)(double)35);
++  ASSERT(35, (unsigned char)(double)35);
++  ASSERT(35, (unsigned short)(double)35);
++  ASSERT(35, (unsigned int)(double)35);
++  ASSERT(35, (unsigned long)(double)35);
++
++  ASSERT(-2147483648, (double)(unsigned long)(long)-1);
++
++  printf("OK\n");
++  return 0;
++}
+diff --git a/test/sizeof.c b/test/sizeof.c
+index 8a6bf1a..c550c8c 100644
+--- a/test/sizeof.c
++++ b/test/sizeof.c
+@@ -84,6 +84,9 @@ int main() {
+   ASSERT(1, sizeof(char) << 31 >> 31);
+   ASSERT(1, sizeof(char) << 63 >> 63);
+ 
++  ASSERT(4, sizeof(float));
++  ASSERT(8, sizeof(double));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index ce16a84..76a5c27 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -135,7 +135,7 @@ static bool is_keyword(Token *tok) {
+     "enum", "static", "goto", "break", "continue", "switch", "case",
+     "default", "extern", "_Alignof", "_Alignas", "do", "signed",
+     "unsigned", "const", "volatile", "auto", "register", "restrict",
+-    "__restrict", "__restrict__", "_Noreturn",
++    "__restrict", "__restrict__", "_Noreturn", "float", "double",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

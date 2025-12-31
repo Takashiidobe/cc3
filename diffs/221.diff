@@ -1,0 +1,44 @@
+subject: [GNU] Add __COUNTER__ macro
+
+
+
+diff --git a/preprocess.c b/preprocess.c
+index 9b77b05..2adb951 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -856,6 +856,12 @@ static Token *line_macro(Token *tmpl) {
+   return new_num_token(tmpl->line_no, tmpl);
+ }
+ 
++// __COUNTER__ is expanded to serial values starting from 0.
++static Token *counter_macro(Token *tmpl) {
++  static int i = 0;
++  return new_num_token(i++, tmpl);
++}
++
+ // __DATE__ is expanded to the current date, e.g. "May 17 2020".
+ static char *format_date(struct tm *tm) {
+   static char mon[][4] = {
+@@ -917,6 +923,7 @@ void init_macros(void) {
+ 
+   add_builtin("__FILE__", file_macro);
+   add_builtin("__LINE__", line_macro);
++  add_builtin("__COUNTER__", counter_macro);
+ 
+   time_t now = time(NULL);
+   struct tm *tm = localtime(&now);
+diff --git a/test/macro.c b/test/macro.c
+index 261d1d7..700865d 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -369,6 +369,10 @@ int main() {
+   ASSERT(11, strlen(__DATE__));
+   ASSERT(8, strlen(__TIME__));
+ 
++  ASSERT(0, __COUNTER__);
++  ASSERT(1, __COUNTER__);
++  ASSERT(2, __COUNTER__);
++
+   printf("OK\n");
+   return 0;
+ }

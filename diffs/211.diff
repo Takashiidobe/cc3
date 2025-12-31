@@ -1,0 +1,101 @@
+subject: Handle op=-style assignments to bitfields
+
+
+
+diff --git a/codegen.c b/codegen.c
+index 8abd23c..311ce68 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -629,6 +629,8 @@ static void gen_expr(Node *node) {
+     gen_expr(node->rhs);
+ 
+     if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
++      println("  mov %%rax, %%r8");
++
+       // If the lhs is a bitfield, we need to read the current value
+       // from memory and merge it with a new value.
+       Member *mem = node->lhs->member;
+@@ -643,6 +645,9 @@ static void gen_expr(Node *node) {
+       println("  mov $%ld, %%r9", ~mask);
+       println("  and %%r9, %%rax");
+       println("  or %%rdi, %%rax");
++      store(node->ty);
++      println("  mov %%r8, %%rax");
++      return;
+     }
+ 
+     store(node->ty);
+diff --git a/parse.c b/parse.c
+index 9b26c16..1d6c94b 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1624,13 +1624,42 @@ static double eval_double(Node *node) {
+   error_tok(node->tok, "not a compile-time constant");
+ }
+ 
+-// Convert `A op= B` to `tmp = &A, *tmp = *tmp op B`
+-// where tmp is a fresh pointer variable.
++// Convert op= operators to expressions containing an assignment.
++//
++// In general, `A op= C` is converted to ``tmp = &A, *tmp = *tmp op B`.
++// However, if a given expression is of form `A.x op= C`, the input is
++// converted to `tmp = &A, (*tmp).x = (*tmp).x op C` to handle assignments
++// to bitfields.
+ static Node *to_assign(Node *binary) {
+   add_type(binary->lhs);
+   add_type(binary->rhs);
+   Token *tok = binary->tok;
+ 
++  // Convert `A.x op= C` to `tmp = &A, (*tmp).x = (*tmp).x op C`.
++  if (binary->lhs->kind == ND_MEMBER) {
++    Obj *var = new_lvar("", pointer_to(binary->lhs->lhs->ty));
++
++    Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
++                             new_unary(ND_ADDR, binary->lhs->lhs, tok), tok);
++
++    Node *expr2 = new_unary(ND_MEMBER,
++                            new_unary(ND_DEREF, new_var_node(var, tok), tok),
++                            tok);
++    expr2->member = binary->lhs->member;
++
++    Node *expr3 = new_unary(ND_MEMBER,
++                            new_unary(ND_DEREF, new_var_node(var, tok), tok),
++                            tok);
++    expr3->member = binary->lhs->member;
++
++    Node *expr4 = new_binary(ND_ASSIGN, expr2,
++                             new_binary(binary->kind, expr3, binary->rhs, tok),
++                             tok);
++
++    return new_binary(ND_COMMA, expr1, expr4, tok);
++  }
++
++  // Convert `A op= C` to ``tmp = &A, *tmp = *tmp op B`.
+   Obj *var = new_lvar("", pointer_to(binary->lhs->ty));
+ 
+   Node *expr1 = new_binary(ND_ASSIGN, new_var_node(var, tok),
+diff --git a/test/bitfield.c b/test/bitfield.c
+index 501a03f..08f64ff 100644
+--- a/test/bitfield.c
++++ b/test/bitfield.c
+@@ -34,6 +34,20 @@ int main() {
+   ASSERT(0, g46.b);
+   ASSERT(0, g46.c);
+ 
++  typedef struct {
++    int a : 10;
++    int b : 10;
++    int c : 10;
++  } T3;
++
++  ASSERT(1, ({ T3 x={1,2,3}; x.a++; }));
++  ASSERT(2, ({ T3 x={1,2,3}; x.b++; }));
++  ASSERT(3, ({ T3 x={1,2,3}; x.c++; }));
++
++  ASSERT(2, ({ T3 x={1,2,3}; ++x.a; }));
++  ASSERT(3, ({ T3 x={1,2,3}; ++x.b; }));
++  ASSERT(4, ({ T3 x={1,2,3}; ++x.c; }));
++
+   printf("OK\n");
+   return 0;
+ }

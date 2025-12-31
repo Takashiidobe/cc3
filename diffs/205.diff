@@ -1,0 +1,44 @@
+subject: Dereferencing a function shouldn't do anything
+
+This is an oddity in the C spec, but you can apply the unary `*`
+operator to a function as many times as you want. `*x` and `x`
+means exactly the same, given that `x` is a function.
+
+
+diff --git a/parse.c b/parse.c
+index 4cda47d..44f4b92 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1947,8 +1947,17 @@ static Node *unary(Token **rest, Token *tok) {
+   if (equal(tok, "&"))
+     return new_unary(ND_ADDR, cast(rest, tok->next), tok);
+ 
+-  if (equal(tok, "*"))
+-    return new_unary(ND_DEREF, cast(rest, tok->next), tok);
++  if (equal(tok, "*")) {
++    // [https://www.sigbus.info/n1570#6.5.3.2p4] This is an oddity
++    // in the C spec, but dereferencing a function shouldn't do
++    // anything. If foo is a function, `*foo`, `**foo` or `*****foo`
++    // are all equivalent to just `foo`.
++    Node *node = cast(rest, tok->next);
++    add_type(node);
++    if (node->ty->kind == TY_FUNC)
++      return node;
++    return new_unary(ND_DEREF, node, tok);
++  }
+ 
+   if (equal(tok, "!"))
+     return new_unary(ND_NOT, cast(rest, tok->next), tok);
+diff --git a/test/function.c b/test/function.c
+index 6160c36..d401952 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -363,6 +363,8 @@ int main() {
+   ASSERT(15, struct_test38().a[14]);
+   ASSERT(20, struct_test38().a[19]);
+ 
++  ASSERT(5, (***add2)(2,3));
++
+   printf("OK\n");
+   return 0;
+ }

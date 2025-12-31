@@ -1,0 +1,234 @@
+subject: Add thread-local variable
+
+
+
+diff --git a/Makefile b/Makefile
+index d8d062d..c22748c 100644
+--- a/Makefile
++++ b/Makefile
+@@ -15,7 +15,7 @@ $(OBJS): chibicc.h
+ 
+ test/%.exe: chibicc test/%.c
+ 	./chibicc -Iinclude -Itest -c -o test/$*.o test/$*.c
+-	$(CC) -o $@ test/$*.o -xc test/common
++	$(CC) -pthread -o $@ test/$*.o -xc test/common
+ 
+ test: $(TESTS)
+ 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
+@@ -35,7 +35,7 @@ stage2/%.o: chibicc %.c
+ stage2/test/%.exe: stage2/chibicc test/%.c
+ 	mkdir -p stage2/test
+ 	./stage2/chibicc -Iinclude -Itest -c -o stage2/test/$*.o test/$*.c
+-	$(CC) -o $@ stage2/test/$*.o -xc test/common
++	$(CC) -pthread -o $@ stage2/test/$*.o -xc test/common
+ 
+ test-stage2: $(TESTS:test/%=stage2/test/%)
+ 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
+diff --git a/chibicc.h b/chibicc.h
+index cb85f36..e757162 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -141,6 +141,7 @@ struct Obj {
+ 
+   // Global variable
+   bool is_tentative;
++  bool is_tls;
+   char *init_data;
+   Relocation *rel;
+ 
+diff --git a/codegen.c b/codegen.c
+index f488d8d..69cc423 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -67,6 +67,13 @@ static void gen_addr(Node *node) {
+       return;
+     }
+ 
++    // Thread-local variable
++    if (node->var->is_tls) {
++      println("  mov %%fs:0, %%rax");
++      println("  add $%s@tpoff, %%rax", node->var->name);
++      return;
++    }
++
+     // Here, we generate an absolute address of a function or a global
+     // variable. Even though they exist at a certain address at runtime,
+     // their addresses are not known at link-time for the following
+@@ -1136,13 +1143,19 @@ static void emit_data(Obj *prog) {
+       ? MAX(16, var->align) : var->align;
+     println("  .align %d", align);
+ 
++    // Common symbol
+     if (opt_fcommon && var->is_tentative) {
+       println("  .comm %s, %d, %d", var->name, var->ty->size, align);
+       continue;
+     }
+ 
++    // .data or .tdata
+     if (var->init_data) {
+-      println("  .data");
++      if (var->is_tls)
++        println("  .section .tdata,\"awT\",@progbits");
++      else
++        println("  .data");
++
+       println("%s:", var->name);
+ 
+       Relocation *rel = var->rel;
+@@ -1159,7 +1172,12 @@ static void emit_data(Obj *prog) {
+       continue;
+     }
+ 
+-    println("  .bss");
++    // .bss or .tbss
++    if (var->is_tls)
++      println("  .section .tbss,\"awT\",@nobits");
++    else
++      println("  .bss");
++
+     println("%s:", var->name);
+     println("  .zero %d", var->ty->size);
+   }
+diff --git a/parse.c b/parse.c
+index 96286e1..b3c57f8 100644
+--- a/parse.c
++++ b/parse.c
+@@ -55,6 +55,7 @@ typedef struct {
+   bool is_static;
+   bool is_extern;
+   bool is_inline;
++  bool is_tls;
+   int align;
+ } VarAttr;
+ 
+@@ -365,6 +366,7 @@ static void push_tag_scope(Token *tok, Type *ty) {
+ 
+ // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
+ //             | "typedef" | "static" | "extern" | "inline"
++//             | "_Thread_local" | "__thread"
+ //             | "signed" | "unsigned"
+ //             | struct-decl | union-decl | typedef-name
+ //             | enum-specifier | typeof-specifier
+@@ -407,7 +409,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+   while (is_typename(tok)) {
+     // Handle storage class specifiers.
+     if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern") ||
+-        equal(tok, "inline")) {
++        equal(tok, "inline") || equal(tok, "_Thread_local") || equal(tok, "__thread")) {
+       if (!attr)
+         error_tok(tok, "storage class specifier is not allowed in this context");
+ 
+@@ -417,11 +419,15 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+         attr->is_static = true;
+       else if (equal(tok, "extern"))
+         attr->is_extern = true;
+-      else
++      else if (equal(tok, "inline"))
+         attr->is_inline = true;
++      else
++        attr->is_tls = true;
+ 
+-      if (attr->is_typedef && attr->is_static + attr->is_extern + attr->is_inline > 1)
+-        error_tok(tok, "typedef may not be used together with static, extern or inline");
++      if (attr->is_typedef &&
++          attr->is_static + attr->is_extern + attr->is_inline + attr->is_tls > 1)
++        error_tok(tok, "typedef may not be used together with static,"
++                  " extern, inline, __thread or _Thread_local");
+       tok = tok->next;
+       continue;
+     }
+@@ -1406,6 +1412,7 @@ static bool is_typename(Token *tok) {
+     "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
+     "const", "volatile", "auto", "register", "restrict", "__restrict",
+     "__restrict__", "_Noreturn", "float", "double", "typeof", "inline",
++    "_Thread_local", "__thread",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+@@ -2942,12 +2949,13 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
+     Obj *var = new_gvar(get_ident(ty->name), ty);
+     var->is_definition = !attr->is_extern;
+     var->is_static = attr->is_static;
++    var->is_tls = attr->is_tls;
+     if (attr->align)
+       var->align = attr->align;
+ 
+     if (equal(tok, "="))
+       gvar_initializer(&tok, tok->next, var);
+-    else if (!attr->is_extern)
++    else if (!attr->is_extern && !attr->is_tls)
+       var->is_tentative = true;
+   }
+   return tok;
+diff --git a/preprocess.c b/preprocess.c
+index befbe5c..90c7ac7 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -996,7 +996,6 @@ void init_macros(void) {
+   define_macro("__STDC_HOSTED__", "1");
+   define_macro("__STDC_NO_ATOMICS__", "1");
+   define_macro("__STDC_NO_COMPLEX__", "1");
+-  define_macro("__STDC_NO_THREADS__", "1");
+   define_macro("__STDC_NO_VLA__", "1");
+   define_macro("__STDC_UTF_16__", "1");
+   define_macro("__STDC_UTF_32__", "1");
+diff --git a/test/tls.c b/test/tls.c
+new file mode 100644
+index 0000000..337b366
+--- /dev/null
++++ b/test/tls.c
+@@ -0,0 +1,41 @@
++#include "test.h"
++#include <stdio.h>
++#include <pthread.h>
++
++_Thread_local int v1;
++_Thread_local int v2 = 5;
++int v3 = 7;
++
++int thread_main(void *unused) {
++  ASSERT(0, v1);
++  ASSERT(5, v2);
++  ASSERT(7, v3);
++
++  v1 = 1;
++  v2 = 2;
++  v3 = 3;
++
++  ASSERT(1, v1);
++  ASSERT(2, v2);
++  ASSERT(3, v3);
++
++  return 0;
++}
++
++int main() {
++  pthread_t thr;
++
++  ASSERT(0, v1);
++  ASSERT(5, v2);
++  ASSERT(7, v3);
++
++  ASSERT(0, pthread_create(&thr, NULL, thread_main, NULL));
++  ASSERT(0, pthread_join(thr, NULL));
++
++  ASSERT(0, v1);
++  ASSERT(5, v2);
++  ASSERT(3, v3);
++
++  printf("OK\n");
++  return 0;
++}
+diff --git a/tokenize.c b/tokenize.c
+index 4b5c062..f3671f4 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -163,7 +163,7 @@ static bool is_keyword(Token *tok) {
+     "default", "extern", "_Alignof", "_Alignas", "do", "signed",
+     "unsigned", "const", "volatile", "auto", "register", "restrict",
+     "__restrict", "__restrict__", "_Noreturn", "float", "double",
+-    "typeof", "asm",
++    "typeof", "asm", "_Thread_local", "__thread",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

@@ -1,0 +1,35 @@
+subject: [GNU] Add line marker directive
+
+
+
+diff --git a/preprocess.c b/preprocess.c
+index 0b56922..715830d 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -839,6 +839,11 @@ static Token *preprocess2(Token *tok) {
+       continue;
+     }
+ 
++    if (tok->kind == TK_PP_NUM) {
++      read_line_marker(&tok, tok);
++      continue;
++    }
++
+     if (equal(tok, "error"))
+       error_tok(tok, "error");
+ 
+diff --git a/test/line.c b/test/line.c
+index 92a5527..d480d98 100644
+--- a/test/line.c
++++ b/test/line.c
+@@ -12,6 +12,10 @@ int main() {
+ #line 1
+   ASSERT(2, __LINE__);
+ 
++# 200 "xyz" 2 3
++  ASSERT(201, __LINE__);
++  ASSERT(0, strcmp(__FILE__, "xyz"));
++
+   printf("OK\n");
+   return 0;
+ }

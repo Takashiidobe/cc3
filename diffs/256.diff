@@ -1,0 +1,33 @@
+subject: [GNU] Allow sizeof(<function type>)
+
+
+
+diff --git a/test/sizeof.c b/test/sizeof.c
+index 29ea18d..07b3118 100644
+--- a/test/sizeof.c
++++ b/test/sizeof.c
+@@ -98,6 +98,8 @@ int main() {
+ 
+   ASSERT(8, sizeof(long double));
+ 
++  ASSERT(1, sizeof(main));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/type.c b/type.c
+index a774f09..31351d7 100644
+--- a/type.c
++++ b/type.c
+@@ -99,8 +99,9 @@ Type *pointer_to(Type *base) {
+ }
+ 
+ Type *func_type(Type *return_ty) {
+-  Type *ty = calloc(1, sizeof(Type));
+-  ty->kind = TY_FUNC;
++  // The C spec disallows sizeof(<function type>), but
++  // GCC allows that and the expression is evaluated to 1.
++  Type *ty = new_type(TY_FUNC, 1, 1);
+   ty->return_ty = return_ty;
+   return ty;
+ }

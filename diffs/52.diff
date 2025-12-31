@@ -1,0 +1,65 @@
+subject: Add -> operator
+
+
+
+diff --git a/parse.c b/parse.c
+index e35e616..31319be 100644
+--- a/parse.c
++++ b/parse.c
+@@ -672,7 +672,7 @@ static Node *struct_ref(Node *lhs, Token *tok) {
+   return node;
+ }
+ 
+-// postfix = primary ("[" expr "]" | "." ident)*
++// postfix = primary ("[" expr "]" | "." ident | "->" ident)*
+ static Node *postfix(Token **rest, Token *tok) {
+   Node *node = primary(&tok, tok);
+ 
+@@ -692,6 +692,14 @@ static Node *postfix(Token **rest, Token *tok) {
+       continue;
+     }
+ 
++    if (equal(tok, "->")) {
++      // x->y is short for (*x).y
++      node = new_unary(ND_DEREF, node, tok);
++      node = struct_ref(node, tok->next);
++      tok = tok->next->next;
++      continue;
++    }
++
+     *rest = tok;
+     return node;
+   }
+diff --git a/test/struct.c b/test/struct.c
+index 0719b8b..46d51ec 100644
+--- a/test/struct.c
++++ b/test/struct.c
+@@ -33,6 +33,9 @@ int main() {
+   ASSERT(2, ({ struct t {char a[2];}; { struct t {char a[4];}; } struct t y; sizeof(y); }));
+   ASSERT(3, ({ struct t {int x;}; int t=1; struct t y; y.x=2; t+y.x; }));
+ 
++  ASSERT(3, ({ struct t {char a;} x; struct t *y = &x; x.a=3; y->a; }));
++  ASSERT(3, ({ struct t {char a;} x; struct t *y = &x; y->a=3; x.a; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index aa3beab..cf30b6e 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -114,9 +114,11 @@ static int from_hex(char c) {
+ 
+ // Read a punctuator token from p and returns its length.
+ static int read_punct(char *p) {
+-  if (startswith(p, "==") || startswith(p, "!=") ||
+-      startswith(p, "<=") || startswith(p, ">="))
+-    return 2;
++  static char *kw[] = {"==", "!=", "<=", ">=", "->"};
++
++  for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
++    if (startswith(p, kw[i]))
++      return strlen(kw[i]);
+ 
+   return ispunct(*p) ? 1 : 0;
+ }

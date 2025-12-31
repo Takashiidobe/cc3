@@ -1,0 +1,153 @@
+subject: Add the null directive
+
+
+
+diff --git a/Makefile b/Makefile
+index 6d79141..c388e86 100644
+--- a/Makefile
++++ b/Makefile
+@@ -13,6 +13,10 @@ chibicc: $(OBJS)
+ 
+ $(OBJS): chibicc.h
+ 
++test/macro.exe: chibicc test/macro.c
++	./chibicc -c -o test/macro.o test/macro.c
++	$(CC) -o $@ test/macro.o -xc test/common
++
+ test/%.exe: chibicc test/%.c
+ 	$(CC) -o- -E -P -C test/$*.c | ./chibicc -c -o test/$*.o -
+ 	$(CC) -o $@ test/$*.o -xc test/common
+@@ -33,6 +37,11 @@ stage2/%.o: chibicc self.py %.c
+ 	./self.py chibicc.h $*.c > stage2/$*.c
+ 	./chibicc -c -o stage2/$*.o stage2/$*.c
+ 
++stage2/test/macro.exe: stage2/chibicc test/macro.c
++	mkdir -p stage2/test
++	./stage2/chibicc -c -o stage2/test/macro.o test/macro.c
++	$(CC) -o $@ stage2/test/macro.o -xc test/common
++
+ stage2/test/%.exe: stage2/chibicc test/%.c
+ 	mkdir -p stage2/test
+ 	$(CC) -o- -E -P -C test/$*.c | ./stage2/chibicc -c -o stage2/test/$*.o -
+diff --git a/chibicc.h b/chibicc.h
+index 6f99ac4..fc3ea89 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -64,6 +64,7 @@ struct Token {
+   char *str;      // String literal contents including terminating '\0'
+ 
+   int line_no;    // Line number
++  bool at_bol;    // True if this token is at beginning of line
+ };
+ 
+ void error(char *fmt, ...);
+diff --git a/preprocess.c b/preprocess.c
+index e26e4d9..e90e43a 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -1,7 +1,39 @@
+ #include "chibicc.h"
+ 
++static bool is_hash(Token *tok) {
++  return tok->at_bol && equal(tok, "#");
++}
++
++// Visit all tokens in `tok` while evaluating preprocessing
++// macros and directives.
++static Token *preprocess2(Token *tok) {
++  Token head = {};
++  Token *cur = &head;
++
++  while (tok->kind != TK_EOF) {
++    // Pass through if it is not a "#".
++    if (!is_hash(tok)) {
++      cur = cur->next = tok;
++      tok = tok->next;
++      continue;
++    }
++
++    tok = tok->next;
++
++    // `#`-only line is legal. It's called a null directive.
++    if (tok->at_bol)
++      continue;
++
++    error_tok(tok, "invalid preprocessor directive");
++  }
++
++  cur->next = tok;
++  return head.next;
++}
++
+ // Entry point function of the preprocessor.
+ Token *preprocess(Token *tok) {
++  tok = preprocess2(tok);
+   convert_keywords(tok);
+   return tok;
+ }
+diff --git a/test/macro.c b/test/macro.c
+new file mode 100644
+index 0000000..730c558
+--- /dev/null
++++ b/test/macro.c
+@@ -0,0 +1,14 @@
++int assert(int expected, int actual, char *code);
++int printf(char *fmt, ...);
++int sprintf(char *buf, char *fmt, ...);
++int strcmp(char *p, char *q);
++int memcmp(char *p, char *q, long n);
++
++#
++
++/* */ #
++
++int main() {
++  printf("OK\n");
++  return 0;
++}
+diff --git a/tokenize.c b/tokenize.c
+index 59b7949..4bc705b 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -6,6 +6,9 @@ static char *current_filename;
+ // Input string
+ static char *current_input;
+ 
++// True if the current position is at the beginning of a line
++static bool at_bol;
++
+ // Reports an error and exit.
+ void error(char *fmt, ...) {
+   va_list ap;
+@@ -88,6 +91,8 @@ static Token *new_token(TokenKind kind, char *start, char *end) {
+   tok->kind = kind;
+   tok->loc = start;
+   tok->len = end - start;
++  tok->at_bol = at_bol;
++  at_bol = false;
+   return tok;
+ }
+ 
+@@ -378,6 +383,8 @@ static Token *tokenize(char *filename, char *p) {
+   Token head = {};
+   Token *cur = &head;
+ 
++  at_bol = true;
++
+   while (*p) {
+     // Skip line comments.
+     if (startswith(p, "//")) {
+@@ -396,6 +403,13 @@ static Token *tokenize(char *filename, char *p) {
+       continue;
+     }
+ 
++    // Skip newline.
++    if (*p == '\n') {
++      p++;
++      at_bol = true;
++      continue;
++    }
++
+     // Skip whitespace characters.
+     if (isspace(*p)) {
+       p++;

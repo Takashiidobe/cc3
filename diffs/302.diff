@@ -1,0 +1,43 @@
+subject: Add -L option
+
+
+
+diff --git a/main.c b/main.c
+index 414a08f..f21fa3f 100644
+--- a/main.c
++++ b/main.c
+@@ -291,6 +291,18 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-L")) {
++      strarray_push(&ld_extra_args, "-L");
++      strarray_push(&ld_extra_args, argv[++i]);
++      continue;
++    }
++
++    if (!strncmp(argv[i], "-L", 2)) {
++      strarray_push(&ld_extra_args, "-L");
++      strarray_push(&ld_extra_args, argv[i] + 2);
++      continue;
++    }
++
+     if (!strcmp(argv[i], "-hashmap-test")) {
+       hashmap_test();
+       exit(0);
+diff --git a/test/driver.sh b/test/driver.sh
+index 37c295b..5f9af9b 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -288,4 +288,11 @@ echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/bar.c
+ $chibicc -fPIC -shared -o $tmp/foo.so $tmp/foo.c $tmp/bar.c
+ check -shared
+ 
++# -L
++echo 'extern int bar; int foo() { return bar; }' > $tmp/foo.c
++$chibicc -fPIC -shared -o $tmp/libfoobar.so $tmp/foo.c
++echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/bar.c
++$chibicc -o $tmp/foo $tmp/bar.c -L$tmp -lfoobar
++check -L
++
+ echo OK

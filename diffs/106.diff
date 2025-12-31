@@ -1,0 +1,318 @@
+subject: Handle union initializers for global variable
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index bc782a3..119bc41 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -16,6 +16,7 @@
+ typedef struct Type Type;
+ typedef struct Node Node;
+ typedef struct Member Member;
++typedef struct Relocation Relocation;
+ 
+ //
+ // strings.c
+@@ -84,6 +85,7 @@ struct Obj {
+ 
+   // Global variable
+   char *init_data;
++  Relocation *rel;
+ 
+   // Function
+   Obj *params;
+@@ -92,6 +94,17 @@ struct Obj {
+   int stack_size;
+ };
+ 
++// Global variable can be initialized either by a constant expression
++// or a pointer to another global variable. This struct represents the
++// latter.
++typedef struct Relocation Relocation;
++struct Relocation {
++  Relocation *next;
++  int offset;
++  char *label;
++  long addend;
++};
++
+ // AST node
+ typedef enum {
+   ND_NULL_EXPR, // Do nothing
+diff --git a/codegen.c b/codegen.c
+index a998d39..fd6993b 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -470,8 +470,17 @@ static void emit_data(Obj *prog) {
+     println("%s:", var->name);
+ 
+     if (var->init_data) {
+-      for (int i = 0; i < var->ty->size; i++)
+-        println("  .byte %d", var->init_data[i]);
++      Relocation *rel = var->rel;
++      int pos = 0;
++      while (pos < var->ty->size) {
++        if (rel && rel->offset == pos) {
++          println("  .quad %s%+ld", rel->label, rel->addend);
++          rel = rel->next;
++          pos += 8;
++        } else {
++          println("  .byte %d", var->init_data[pos++]);
++        }
++      }
+     } else {
+       println("  .zero %d", var->ty->size);
+     }
+diff --git a/parse.c b/parse.c
+index 669f208..f9b3068 100644
+--- a/parse.c
++++ b/parse.c
+@@ -122,6 +122,8 @@ static Node *stmt(Token **rest, Token *tok);
+ static Node *expr_stmt(Token **rest, Token *tok);
+ static Node *expr(Token **rest, Token *tok);
+ static int64_t eval(Node *node);
++static int64_t eval2(Node *node, char **label);
++static int64_t eval_rval(Node *node, char **label);
+ static Node *assign(Token **rest, Token *tok);
+ static Node *logor(Token **rest, Token *tok);
+ static int64_t const_expr(Token **rest, Token *tok);
+@@ -844,22 +846,42 @@ static void write_buf(char *buf, uint64_t val, int sz) {
+     unreachable();
+ }
+ 
+-static void write_gvar_data(Initializer *init, Type *ty, char *buf, int offset) {
++static Relocation *
++write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int offset) {
+   if (ty->kind == TY_ARRAY) {
+     int sz = ty->base->size;
+     for (int i = 0; i < ty->array_len; i++)
+-      write_gvar_data(init->children[i], ty->base, buf, offset + sz * i);
+-    return;
++      cur = write_gvar_data(cur, init->children[i], ty->base, buf, offset + sz * i);
++    return cur;
+   }
+ 
+   if (ty->kind == TY_STRUCT) {
+     for (Member *mem = ty->members; mem; mem = mem->next)
+-      write_gvar_data(init->children[mem->idx], mem->ty, buf, offset + mem->offset);
+-    return;
++      cur = write_gvar_data(cur, init->children[mem->idx], mem->ty, buf,
++                            offset + mem->offset);
++    return cur;
++  }
++
++  if (ty->kind == TY_UNION)
++    return write_gvar_data(cur, init->children[0], ty->members->ty, buf, offset);
++
++  if (!init->expr)
++    return cur;
++
++  char *label = NULL;
++  uint64_t val = eval2(init->expr, &label);
++
++  if (!label) {
++    write_buf(buf + offset, val, ty->size);
++    return cur;
+   }
+ 
+-  if (init->expr)
+-    write_buf(buf + offset, eval(init->expr), ty->size);
++  Relocation *rel = calloc(1, sizeof(Relocation));
++  rel->offset = offset;
++  rel->label = label;
++  rel->addend = val;
++  cur->next = rel;
++  return cur->next;
+ }
+ 
+ // Initializers for global variables are evaluated at compile-time and
+@@ -869,9 +891,11 @@ static void write_gvar_data(Initializer *init, Type *ty, char *buf, int offset)
+ static void gvar_initializer(Token **rest, Token *tok, Obj *var) {
+   Initializer *init = initializer(rest, tok, var->ty, &var->ty);
+ 
++  Relocation head = {};
+   char *buf = calloc(1, var->ty->size);
+-  write_gvar_data(init, var->ty, buf, 0);
++  write_gvar_data(&head, init, var->ty, buf, 0);
+   var->init_data = buf;
++  var->rel = head.next;
+ }
+ 
+ // Returns true if a given token represents a type.
+@@ -1120,15 +1144,24 @@ static Node *expr(Token **rest, Token *tok) {
+   return node;
+ }
+ 
+-// Evaluate a given node as a constant expression.
+ static int64_t eval(Node *node) {
++  return eval2(node, NULL);
++}
++
++// Evaluate a given node as a constant expression.
++//
++// A constant expression is either just a number or ptr+n where ptr
++// is a pointer to a global variable and n is a postiive/negative
++// number. The latter form is accepted only as an initialization
++// expression for a global variable.
++static int64_t eval2(Node *node, char **label) {
+   add_type(node);
+ 
+   switch (node->kind) {
+   case ND_ADD:
+-    return eval(node->lhs) + eval(node->rhs);
++    return eval2(node->lhs, label) + eval(node->rhs);
+   case ND_SUB:
+-    return eval(node->lhs) - eval(node->rhs);
++    return eval2(node->lhs, label) - eval(node->rhs);
+   case ND_MUL:
+     return eval(node->lhs) * eval(node->rhs);
+   case ND_DIV:
+@@ -1156,9 +1189,9 @@ static int64_t eval(Node *node) {
+   case ND_LE:
+     return eval(node->lhs) <= eval(node->rhs);
+   case ND_COND:
+-    return eval(node->cond) ? eval(node->then) : eval(node->els);
++    return eval(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
+   case ND_COMMA:
+-    return eval(node->rhs);
++    return eval2(node->rhs, label);
+   case ND_NOT:
+     return !eval(node->lhs);
+   case ND_BITNOT:
+@@ -1167,15 +1200,32 @@ static int64_t eval(Node *node) {
+     return eval(node->lhs) && eval(node->rhs);
+   case ND_LOGOR:
+     return eval(node->lhs) || eval(node->rhs);
+-  case ND_CAST:
++  case ND_CAST: {
++    int64_t val = eval2(node->lhs, label);
+     if (is_integer(node->ty)) {
+       switch (node->ty->size) {
+-      case 1: return (uint8_t)eval(node->lhs);
+-      case 2: return (uint16_t)eval(node->lhs);
+-      case 4: return (uint32_t)eval(node->lhs);
++      case 1: return (uint8_t)val;
++      case 2: return (uint16_t)val;
++      case 4: return (uint32_t)val;
+       }
+     }
+-    return eval(node->lhs);
++    return val;
++  }
++  case ND_ADDR:
++    return eval_rval(node->lhs, label);
++  case ND_MEMBER:
++    if (!label)
++      error_tok(node->tok, "not a compile-time constant");
++    if (node->ty->kind != TY_ARRAY)
++      error_tok(node->tok, "invalid initializer");
++    return eval_rval(node->lhs, label) + node->member->offset;
++  case ND_VAR:
++    if (!label)
++      error_tok(node->tok, "not a compile-time constant");
++    if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
++      error_tok(node->tok, "invalid initializer");
++    *label = node->var->name;
++    return 0;
+   case ND_NUM:
+     return node->val;
+   }
+@@ -1183,6 +1233,22 @@ static int64_t eval(Node *node) {
+   error_tok(node->tok, "not a compile-time constant");
+ }
+ 
++static int64_t eval_rval(Node *node, char **label) {
++  switch (node->kind) {
++  case ND_VAR:
++    if (node->var->is_local)
++      error_tok(node->tok, "not a compile-time constant");
++    *label = node->var->name;
++    return 0;
++  case ND_DEREF:
++    return eval2(node->lhs, label);
++  case ND_MEMBER:
++    return eval_rval(node->lhs, label) + node->member->offset;
++  }
++
++  error_tok(node->tok, "invalid initializer");
++}
++
+ static int64_t const_expr(Token **rest, Token *tok) {
+   Node *node = conditional(rest, tok);
+   return eval(node);
+diff --git a/test/initializer.c b/test/initializer.c
+index 87c6089..56cb3b0 100644
+--- a/test/initializer.c
++++ b/test/initializer.c
+@@ -7,6 +7,22 @@ long g6 = 6;
+ int g9[3] = {0, 1, 2};
+ struct {char a; int b;} g11[2] = {{1, 2}, {3, 4}};
+ struct {int a[2];} g12[2] = {{{1, 2}}};
++union { int a; char b[8]; } g13[2] = {{0x01020304}, {0x05060708}};
++char g17[] = "foobar";
++char g18[10] = "foobar";
++char g19[3] = "foobar";
++char *g20 = g17+0;
++char *g21 = g17+3;
++char *g22 = &g17-3;
++char *g23[] = {g17+0, g17+3, g17-3};
++int g24=3;
++int *g25=&g24;
++int g26[3] = {1, 2, 3};
++int *g27 = g26 + 1;
++int *g28 = &g11[1].a;
++long g29 = (long)(long)g26;
++struct { struct { int a[3]; } a; } g30 = {{{1,2,3}}};
++int *g31=g30.a.a;
+ 
+ int main() {
+   ASSERT(1, ({ int x[3]={1,2,3}; x[0]; }));
+@@ -89,6 +105,37 @@ int main() {
+   ASSERT(0, g12[1].a[0]);
+   ASSERT(0, g12[1].a[1]);
+ 
++  ASSERT(4, g13[0].b[0]);
++  ASSERT(3, g13[0].b[1]);
++  ASSERT(8, g13[1].b[0]);
++  ASSERT(7, g13[1].b[1]);
++
++  ASSERT(7, sizeof(g17));
++  ASSERT(10, sizeof(g18));
++  ASSERT(3, sizeof(g19));
++
++  ASSERT(0, memcmp(g17, "foobar", 7));
++  ASSERT(0, memcmp(g18, "foobar\0\0\0", 10));
++  ASSERT(0, memcmp(g19, "foo", 3));
++
++  ASSERT(0, strcmp(g20, "foobar"));
++  ASSERT(0, strcmp(g21, "bar"));
++  ASSERT(0, strcmp(g22+3, "foobar"));
++
++  ASSERT(0, strcmp(g23[0], "foobar"));
++  ASSERT(0, strcmp(g23[1], "bar"));
++  ASSERT(0, strcmp(g23[2]+3, "foobar"));
++
++  ASSERT(3, g24);
++  ASSERT(3, *g25);
++  ASSERT(2, *g27);
++  ASSERT(3, *g28);
++  ASSERT(1, *(int *)g29);
++
++  ASSERT(1, g31[0]);
++  ASSERT(2, g31[1]);
++  ASSERT(3, g31[2]);
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/test.h b/test/test.h
+index d5fa40d..3587c20 100644
+--- a/test/test.h
++++ b/test/test.h
+@@ -2,3 +2,5 @@
+ 
+ void assert(int expected, int actual, char *code);
+ int printf();
++int strcmp(char *p, char *q);
++int memcmp(char *p, char *q, long n);

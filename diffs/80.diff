@@ -1,0 +1,89 @@
+subject: Add ! operator
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index e225975..10252c3 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -105,6 +105,7 @@ typedef enum {
+   ND_MEMBER,    // . (struct member access)
+   ND_ADDR,      // unary &
+   ND_DEREF,     // unary *
++  ND_NOT,       // !
+   ND_RETURN,    // "return"
+   ND_IF,        // "if"
+   ND_FOR,       // "for" or "while"
+diff --git a/codegen.c b/codegen.c
+index 8536a1e..3664364 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -210,6 +210,12 @@ static void gen_expr(Node *node) {
+     gen_expr(node->lhs);
+     cast(node->lhs->ty, node->ty);
+     return;
++  case ND_NOT:
++    gen_expr(node->lhs);
++    println("  cmp $0, %%rax");
++    println("  sete %%al");
++    println("  movzx %%al, %%rax");
++    return;
+   case ND_FUNCALL: {
+     int nargs = 0;
+     for (Node *arg = node->args; arg; arg = arg->next) {
+diff --git a/parse.c b/parse.c
+index 018609a..98769e1 100644
+--- a/parse.c
++++ b/parse.c
+@@ -888,7 +888,7 @@ static Node *cast(Token **rest, Token *tok) {
+   return unary(rest, tok);
+ }
+ 
+-// unary = ("+" | "-" | "*" | "&") cast
++// unary = ("+" | "-" | "*" | "&" | "!") cast
+ //       | ("++" | "--") unary
+ //       | postfix
+ static Node *unary(Token **rest, Token *tok) {
+@@ -904,6 +904,9 @@ static Node *unary(Token **rest, Token *tok) {
+   if (equal(tok, "*"))
+     return new_unary(ND_DEREF, cast(rest, tok->next), tok);
+ 
++  if (equal(tok, "!"))
++    return new_unary(ND_NOT, cast(rest, tok->next), tok);
++
+   // Read ++i as i+=1
+   if (equal(tok, "++"))
+     return to_assign(new_add(unary(rest, tok->next), new_num(1, tok), tok));
+diff --git a/test/arith.c b/test/arith.c
+index 6725ddf..6de47ba 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -63,6 +63,14 @@ int main() {
+   ASSERT(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; a[2]; }));
+   ASSERT(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; *p; }));
+ 
++  ASSERT(0, !1);
++  ASSERT(0, !2);
++  ASSERT(1, !0);
++  ASSERT(1, !(char)0);
++  ASSERT(0, !(long)3);
++  ASSERT(4, sizeof(!(char)0));
++  ASSERT(4, sizeof(!(long)0));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/type.c b/type.c
+index e5c3f0d..341545d 100644
+--- a/type.c
++++ b/type.c
+@@ -124,6 +124,9 @@ void add_type(Node *node) {
+   case ND_FUNCALL:
+     node->ty = ty_long;
+     return;
++  case ND_NOT:
++    node->ty = ty_int;
++    return;
+   case ND_VAR:
+     node->ty = node->var->ty;
+     return;

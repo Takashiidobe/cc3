@@ -1,0 +1,104 @@
+subject: Add #ifdef and #ifndef
+
+
+
+diff --git a/preprocess.c b/preprocess.c
+index e96d20d..ce4ffb4 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -131,7 +131,9 @@ static Token *append(Token *tok1, Token *tok2) {
+ 
+ static Token *skip_cond_incl2(Token *tok) {
+   while (tok->kind != TK_EOF) {
+-    if (is_hash(tok) && equal(tok->next, "if")) {
++    if (is_hash(tok) &&
++        (equal(tok->next, "if") || equal(tok->next, "ifdef") ||
++         equal(tok->next, "ifndef"))) {
+       tok = skip_cond_incl2(tok->next->next);
+       continue;
+     }
+@@ -146,7 +148,9 @@ static Token *skip_cond_incl2(Token *tok) {
+ // Nested `#if` and `#endif` are skipped.
+ static Token *skip_cond_incl(Token *tok) {
+   while (tok->kind != TK_EOF) {
+-    if (is_hash(tok) && equal(tok->next, "if")) {
++    if (is_hash(tok) &&
++        (equal(tok->next, "if") || equal(tok->next, "ifdef") ||
++         equal(tok->next, "ifndef"))) {
+       tok = skip_cond_incl2(tok->next->next);
+       continue;
+     }
+@@ -306,6 +310,24 @@ static Token *preprocess2(Token *tok) {
+       continue;
+     }
+ 
++    if (equal(tok, "ifdef")) {
++      bool defined = find_macro(tok->next);
++      push_cond_incl(tok, defined);
++      tok = skip_line(tok->next->next);
++      if (!defined)
++        tok = skip_cond_incl(tok);
++      continue;
++    }
++
++    if (equal(tok, "ifndef")) {
++      bool defined = find_macro(tok->next);
++      push_cond_incl(tok, !defined);
++      tok = skip_line(tok->next->next);
++      if (defined)
++        tok = skip_cond_incl(tok);
++      continue;
++    }
++
+     if (equal(tok, "elif")) {
+       if (!cond_incl || cond_incl->ctx == IN_ELSE)
+         error_tok(start, "stray #elif");
+diff --git a/test/macro.c b/test/macro.c
+index 787cbf3..bc19501 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -156,6 +156,44 @@ int main() {
+ #define M5 M4 + 2
+   assert(13, M4, "M4");
+ 
++#ifdef M6
++  m = 5;
++#else
++  m = 3;
++#endif
++  assert(3, m, "m");
++
++#define M6
++#ifdef M6
++  m = 5;
++#else
++  m = 3;
++#endif
++  assert(5, m, "m");
++
++#ifndef M7
++  m = 3;
++#else
++  m = 5;
++#endif
++  assert(3, m, "m");
++
++#define M7
++#ifndef M7
++  m = 3;
++#else
++  m = 5;
++#endif
++  assert(5, m, "m");
++
++#if 0
++#ifdef NO_SUCH_MACRO
++#endif
++#ifndef NO_SUCH_MACRO
++#endif
++#else
++#endif
++
+   printf("OK\n");
+   return 0;
+ }

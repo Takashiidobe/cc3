@@ -1,0 +1,54 @@
+subject: [GNU] Allow a variable as an operand of _Alignof
+
+
+
+diff --git a/parse.c b/parse.c
+index caf4a93..4b50efc 100644
+--- a/parse.c
++++ b/parse.c
+@@ -2005,6 +2005,7 @@ static Node *funcall(Token **rest, Token *tok) {
+ //         | "sizeof" "(" type-name ")"
+ //         | "sizeof" unary
+ //         | "_Alignof" "(" type-name ")"
++//         | "_Alignof" unary
+ //         | ident func-args?
+ //         | str
+ //         | num
+@@ -2037,13 +2038,18 @@ static Node *primary(Token **rest, Token *tok) {
+     return new_num(node->ty->size, tok);
+   }
+ 
+-  if (equal(tok, "_Alignof")) {
+-    tok = skip(tok->next, "(");
+-    Type *ty = typename(&tok, tok);
++  if (equal(tok, "_Alignof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
++    Type *ty = typename(&tok, tok->next->next);
+     *rest = skip(tok, ")");
+     return new_num(ty->align, tok);
+   }
+ 
++  if (equal(tok, "_Alignof")) {
++    Node *node = unary(rest, tok->next);
++    add_type(node);
++    return new_num(node->ty->align, tok);
++  }
++
+   if (tok->kind == TK_IDENT) {
+     // Function call
+     if (equal(tok->next, "("))
+diff --git a/test/alignof.c b/test/alignof.c
+index 40351d8..952ab8d 100644
+--- a/test/alignof.c
++++ b/test/alignof.c
+@@ -30,6 +30,11 @@ int main() {
+   ASSERT(0, (long)(char *)&g4 % 4);
+   ASSERT(0, (long)(char *)&g5 % 8);
+ 
++  ASSERT(1, ({ char x; _Alignof(x); }));
++  ASSERT(4, ({ int x; _Alignof(x); }));
++  ASSERT(1, ({ char x; _Alignof x; }));
++  ASSERT(4, ({ int x; _Alignof x; }));
++
+   printf("OK\n");
+   return 0;
+ }

@@ -1,0 +1,132 @@
+subject: Add ?: operator
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index e24fce1..a21c2a6 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -107,6 +107,7 @@ typedef enum {
+   ND_LT,        // <
+   ND_LE,        // <=
+   ND_ASSIGN,    // =
++  ND_COND,      // ?:
+   ND_COMMA,     // ,
+   ND_MEMBER,    // . (struct member access)
+   ND_ADDR,      // unary &
+diff --git a/codegen.c b/codegen.c
+index 881095e..ad5ae84 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -210,6 +210,18 @@ static void gen_expr(Node *node) {
+     gen_expr(node->lhs);
+     cast(node->lhs->ty, node->ty);
+     return;
++  case ND_COND: {
++    int c = count();
++    gen_expr(node->cond);
++    println("  cmp $0, %%rax");
++    println("  je .L.else.%d", c);
++    gen_expr(node->then);
++    println("  jmp .L.end.%d", c);
++    println(".L.else.%d:", c);
++    gen_expr(node->els);
++    println(".L.end.%d:", c);
++    return;
++  }
+   case ND_NOT:
+     gen_expr(node->lhs);
+     println("  cmp $0, %%rax");
+diff --git a/parse.c b/parse.c
+index 6fcf10e..88cf2c5 100644
+--- a/parse.c
++++ b/parse.c
+@@ -91,6 +91,7 @@ static Node *expr_stmt(Token **rest, Token *tok);
+ static Node *expr(Token **rest, Token *tok);
+ static Node *assign(Token **rest, Token *tok);
+ static Node *logor(Token **rest, Token *tok);
++static Node *conditional(Token **rest, Token *tok);
+ static Node *logand(Token **rest, Token *tok);
+ static Node *bitor(Token **rest, Token *tok);
+ static Node *bitxor(Token **rest, Token *tok);
+@@ -843,11 +844,11 @@ static Node *to_assign(Node *binary) {
+   return new_binary(ND_COMMA, expr1, expr2, tok);
+ }
+ 
+-// assign    = logor (assign-op assign)?
++// assign    = conditional (assign-op assign)?
+ // assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^="
+ //           | "<<=" | ">>="
+ static Node *assign(Token **rest, Token *tok) {
+-  Node *node = logor(&tok, tok);
++  Node *node = conditional(&tok, tok);
+ 
+   if (equal(tok, "="))
+     return new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+@@ -886,6 +887,23 @@ static Node *assign(Token **rest, Token *tok) {
+   return node;
+ }
+ 
++// conditional = logor ("?" expr ":" conditional)?
++static Node *conditional(Token **rest, Token *tok) {
++  Node *cond = logor(&tok, tok);
++
++  if (!equal(tok, "?")) {
++    *rest = tok;
++    return cond;
++  }
++
++  Node *node = new_node(ND_COND, tok);
++  node->cond = cond;
++  node->then = expr(&tok, tok->next);
++  tok = skip(tok, ":");
++  node->els = conditional(rest, tok);
++  return node;
++}
++
+ // logor = logand ("||" logand)*
+ static Node *logor(Token **rest, Token *tok) {
+   Node *node = logand(&tok, tok);
+diff --git a/test/arith.c b/test/arith.c
+index e9721b0..671c3c7 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -108,6 +108,19 @@ int main() {
+   ASSERT(-1, ({ int i=-1; i; }));
+   ASSERT(-1, ({ int i=-1; i>>=1; i; }));
+ 
++  ASSERT(2, 0?1:2);
++  ASSERT(1, 1?1:2);
++  ASSERT(-1, 0?-2:-1);
++  ASSERT(-2, 1?-2:-1);
++  ASSERT(4, sizeof(0?1:2));
++  ASSERT(8, sizeof(0?(long)1:(long)2));
++  ASSERT(-1, 0?(long)-2:-1);
++  ASSERT(-1, 0?-2:(long)-1);
++  ASSERT(-2, 1?(long)-2:-1);
++  ASSERT(-2, 1?-2:(long)-1);
++
++  1 ? -2 : (void)-1;
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/type.c b/type.c
+index c87acd6..161c961 100644
+--- a/type.c
++++ b/type.c
+@@ -145,6 +145,14 @@ void add_type(Node *node) {
+   case ND_VAR:
+     node->ty = node->var->ty;
+     return;
++  case ND_COND:
++    if (node->then->ty->kind == TY_VOID || node->els->ty->kind == TY_VOID) {
++      node->ty = ty_void;
++    } else {
++      usual_arith_conv(&node->then, &node->els);
++      node->ty = node->then->ty;
++    }
++    return;
+   case ND_COMMA:
+     node->ty = node->rhs->ty;
+     return;

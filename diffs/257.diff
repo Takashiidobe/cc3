@@ -1,0 +1,51 @@
+subject: [GNU] Add ?: operator with omitted operand
+
+
+
+diff --git a/parse.c b/parse.c
+index aed31d6..7965d48 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1936,7 +1936,7 @@ static Node *assign(Token **rest, Token *tok) {
+   return node;
+ }
+ 
+-// conditional = logor ("?" expr ":" conditional)?
++// conditional = logor ("?" expr? ":" conditional)?
+ static Node *conditional(Token **rest, Token *tok) {
+   Node *cond = logor(&tok, tok);
+ 
+@@ -1945,6 +1945,18 @@ static Node *conditional(Token **rest, Token *tok) {
+     return cond;
+   }
+ 
++  if (equal(tok->next, ":")) {
++    // [GNU] Compile `a ?: b` as `tmp = a, tmp ? tmp : b`.
++    add_type(cond);
++    Obj *var = new_lvar("", cond->ty);
++    Node *lhs = new_binary(ND_ASSIGN, new_var_node(var, tok), cond, tok);
++    Node *rhs = new_node(ND_COND, tok);
++    rhs->cond = new_var_node(var, tok);
++    rhs->then = new_var_node(var, tok);
++    rhs->els = conditional(rest, tok->next->next);
++    return new_binary(ND_COMMA, lhs, rhs, tok);
++  }
++
+   Node *node = new_node(ND_COND, tok);
+   node->cond = cond;
+   node->then = expr(&tok, tok->next);
+diff --git a/test/arith.c b/test/arith.c
+index 1f4ae08..f9988af 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -130,6 +130,10 @@ int main() {
+   ASSERT(-15, (char *)0xfffffffffffffff0 - (char *)0xffffffffffffffff);
+   ASSERT(1, (void *)0xffffffffffffffff > (void *)0);
+ 
++  ASSERT(3, 3?:5);
++  ASSERT(5, 0?:5);
++  ASSERT(4, ({ int i = 3; ++i?:10; }));
++
+   printf("OK\n");
+   return 0;
+ }

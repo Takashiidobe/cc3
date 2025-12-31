@@ -1,0 +1,65 @@
+subject: Add return that doesn't take any value
+
+
+
+diff --git a/codegen.c b/codegen.c
+index 916a750..4ee8c09 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -433,7 +433,8 @@ static void gen_stmt(Node *node) {
+     gen_stmt(node->lhs);
+     return;
+   case ND_RETURN:
+-    gen_expr(node->lhs);
++    if (node->lhs)
++      gen_expr(node->lhs);
+     println("  jmp .L.return.%s", current_fn->name);
+     return;
+   case ND_EXPR_STMT:
+diff --git a/parse.c b/parse.c
+index 0271de0..c411a2c 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1050,7 +1050,7 @@ static bool is_typename(Token *tok) {
+   return find_typedef(tok);
+ }
+ 
+-// stmt = "return" expr ";"
++// stmt = "return" expr? ";"
+ //      | "if" "(" expr ")" stmt ("else" stmt)?
+ //      | "switch" "(" expr ")" stmt
+ //      | "case" const-expr ":" stmt
+@@ -1066,6 +1066,9 @@ static bool is_typename(Token *tok) {
+ static Node *stmt(Token **rest, Token *tok) {
+   if (equal(tok, "return")) {
+     Node *node = new_node(ND_RETURN, tok);
++    if (consume(rest, tok->next, ";"))
++      return node;
++
+     Node *exp = expr(&tok, tok->next);
+     *rest = skip(tok, ";");
+ 
+diff --git a/test/function.c b/test/function.c
+index 0d8fd88..ac04431 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -61,6 +61,10 @@ int counter() {
+   return i++ + j++;
+ }
+ 
++void ret_none() {
++  return;
++}
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -100,6 +104,8 @@ int main() {
+   ASSERT(4, counter());
+   ASSERT(6, counter());
+ 
++  ret_none();
++
+   printf("OK\n");
+   return 0;
+ }

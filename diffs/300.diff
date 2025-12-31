@@ -1,0 +1,114 @@
+subject: Add -static option
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 43ecc54..65484ec 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -113,7 +113,6 @@ Token *tokenize_file(char *filename);
+ //
+ 
+ char *search_include_paths(char *filename);
+-bool file_exists(char *path);
+ void init_macros(void);
+ void define_macro(char *name, char *buf);
+ void undef_macro(char *name);
+diff --git a/main.c b/main.c
+index b76640e..694c11a 100644
+--- a/main.c
++++ b/main.c
+@@ -19,6 +19,7 @@ static bool opt_S;
+ static bool opt_c;
+ static bool opt_cc1;
+ static bool opt_hash_hash_hash;
++static bool opt_static;
+ static char *opt_MF;
+ static char *opt_MT;
+ static char *opt_o;
+@@ -277,6 +278,12 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-static")) {
++      opt_static = true;
++      strarray_push(&ld_extra_args, "-static");
++      continue;
++    }
++
+     if (!strcmp(argv[i], "-hashmap-test")) {
+       hashmap_test();
+       exit(0);
+@@ -587,8 +594,6 @@ static void run_linker(StringArray *inputs, char *output) {
+   strarray_push(&arr, output);
+   strarray_push(&arr, "-m");
+   strarray_push(&arr, "elf_x86_64");
+-  strarray_push(&arr, "-dynamic-linker");
+-  strarray_push(&arr, "/lib64/ld-linux-x86-64.so.2");
+ 
+   char *libpath = find_libpath();
+   char *gcc_libpath = find_gcc_libpath();
+@@ -597,8 +602,7 @@ static void run_linker(StringArray *inputs, char *output) {
+   strarray_push(&arr, format("%s/crti.o", libpath));
+   strarray_push(&arr, format("%s/crtbegin.o", gcc_libpath));
+   strarray_push(&arr, format("-L%s", gcc_libpath));
+-  strarray_push(&arr, format("-L%s", libpath));
+-  strarray_push(&arr, format("-L%s/..", libpath));
++  strarray_push(&arr, "-L/usr/lib/x86_64-linux-gnu");
+   strarray_push(&arr, "-L/usr/lib64");
+   strarray_push(&arr, "-L/lib64");
+   strarray_push(&arr, "-L/usr/lib/x86_64-linux-gnu");
+@@ -607,17 +611,31 @@ static void run_linker(StringArray *inputs, char *output) {
+   strarray_push(&arr, "-L/usr/lib");
+   strarray_push(&arr, "-L/lib");
+ 
++  if (!opt_static) {
++    strarray_push(&arr, "-dynamic-linker");
++    strarray_push(&arr, "/lib64/ld-linux-x86-64.so.2");
++  }
++
+   for (int i = 0; i < ld_extra_args.len; i++)
+     strarray_push(&arr, ld_extra_args.data[i]);
+ 
+   for (int i = 0; i < inputs->len; i++)
+     strarray_push(&arr, inputs->data[i]);
+ 
+-  strarray_push(&arr, "-lc");
+-  strarray_push(&arr, "-lgcc");
+-  strarray_push(&arr, "--as-needed");
+-  strarray_push(&arr, "-lgcc_s");
+-  strarray_push(&arr, "--no-as-needed");
++  if (opt_static) {
++    strarray_push(&arr, "--start-group");
++    strarray_push(&arr, "-lgcc");
++    strarray_push(&arr, "-lgcc_eh");
++    strarray_push(&arr, "-lc");
++    strarray_push(&arr, "--end-group");
++  } else {
++    strarray_push(&arr, "-lc");
++    strarray_push(&arr, "-lgcc");
++    strarray_push(&arr, "--as-needed");
++    strarray_push(&arr, "-lgcc_s");
++    strarray_push(&arr, "--no-as-needed");
++  }
++
+   strarray_push(&arr, format("%s/crtend.o", gcc_libpath));
+   strarray_push(&arr, format("%s/crtn.o", libpath));
+   strarray_push(&arr, NULL);
+diff --git a/test/driver.sh b/test/driver.sh
+index b076371..e6d5bf9 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -274,4 +274,12 @@ echo 'foo' > $tmp/next3/file2.h
+ $chibicc -I$tmp/next1 -I$tmp/next2 -I$tmp/next3 -E $tmp/file.c | grep -q foo
+ check '#include_next'
+ 
++# -static
++echo 'extern int bar; int foo() { return bar; }' > $tmp/foo.c
++echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/bar.c
++$chibicc -static -o $tmp/foo $tmp/foo.c $tmp/bar.c
++check -static
++file $tmp/foo | grep -q 'statically linked'
++check -static
++
+ echo OK

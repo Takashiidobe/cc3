@@ -1,0 +1,339 @@
+subject: Run "ld" unless -c is given
+
+
+
+diff --git a/Makefile b/Makefile
+index e773d2d..6d79141 100644
+--- a/Makefile
++++ b/Makefile
+@@ -14,7 +14,7 @@ chibicc: $(OBJS)
+ $(OBJS): chibicc.h
+ 
+ test/%.exe: chibicc test/%.c
+-	$(CC) -o- -E -P -C test/$*.c | ./chibicc -o test/$*.o -
++	$(CC) -o- -E -P -C test/$*.c | ./chibicc -c -o test/$*.o -
+ 	$(CC) -o $@ test/$*.o -xc test/common
+ 
+ test: $(TESTS)
+@@ -31,11 +31,11 @@ stage2/chibicc: $(OBJS:%=stage2/%)
+ stage2/%.o: chibicc self.py %.c
+ 	mkdir -p stage2/test
+ 	./self.py chibicc.h $*.c > stage2/$*.c
+-	./chibicc -o stage2/$*.o stage2/$*.c
++	./chibicc -c -o stage2/$*.o stage2/$*.c
+ 
+ stage2/test/%.exe: stage2/chibicc test/%.c
+ 	mkdir -p stage2/test
+-	$(CC) -o- -E -P -C test/$*.c | ./stage2/chibicc -o stage2/test/$*.o -
++	$(CC) -o- -E -P -C test/$*.c | ./stage2/chibicc -c -o stage2/test/$*.o -
+ 	$(CC) -o $@ stage2/test/$*.o -xc test/common
+ 
+ test-stage2: $(TESTS:test/%=stage2/test/%)
+diff --git a/chibicc.h b/chibicc.h
+index d2c3236..5b8c759 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -2,6 +2,7 @@
+ #include <assert.h>
+ #include <ctype.h>
+ #include <errno.h>
++#include <glob.h>
+ #include <libgen.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
+@@ -10,6 +11,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ #include <strings.h>
++#include <sys/stat.h>
+ #include <sys/types.h>
+ #include <sys/wait.h>
+ #include <unistd.h>
+diff --git a/main.c b/main.c
+index 13a2e16..43c7df2 100644
+--- a/main.c
++++ b/main.c
+@@ -1,6 +1,7 @@
+ #include "chibicc.h"
+ 
+ static bool opt_S;
++static bool opt_c;
+ static bool opt_cc1;
+ static bool opt_hash_hash_hash;
+ static char *opt_o;
+@@ -57,6 +58,11 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-c")) {
++      opt_c = true;
++      continue;
++    }
++
+     if (!strcmp(argv[i], "-cc1-input")) {
+       base_file = argv[++i];
+       continue;
+@@ -87,6 +93,12 @@ static FILE *open_file(char *path) {
+   return out;
+ }
+ 
++static bool endswith(char *p, char *q) {
++  int len1 = strlen(p);
++  int len2 = strlen(q);
++  return (len1 >= len2) && !strcmp(p + len1 - len2, q);
++}
++
+ // Replace file extension
+ static char *replace_extn(char *tmpl, char *extn) {
+   char *filename = basename(strdup(tmpl));
+@@ -169,6 +181,89 @@ static void assemble(char *input, char *output) {
+   run_subprocess(cmd);
+ }
+ 
++static char *find_file(char *pattern) {
++  char *path = NULL;
++  glob_t buf = {};
++  glob(pattern, 0, NULL, &buf);
++  if (buf.gl_pathc > 0)
++    path = strdup(buf.gl_pathv[buf.gl_pathc - 1]);
++  globfree(&buf);
++  return path;
++}
++
++// Returns true if a given file exists.
++static bool file_exists(char *path) {
++  struct stat st;
++  return !stat(path, &st);
++}
++
++static char *find_libpath(void) {
++  if (file_exists("/usr/lib/x86_64-linux-gnu/crti.o"))
++    return "/usr/lib/x86_64-linux-gnu";
++  if (file_exists("/usr/lib64/crti.o"))
++    return "/usr/lib64";
++  error("library path is not found");
++}
++
++static char *find_gcc_libpath(void) {
++  char *paths[] = {
++    "/usr/lib/gcc/x86_64-linux-gnu/*/crtbegin.o",
++    "/usr/lib/gcc/x86_64-pc-linux-gnu/*/crtbegin.o", // For Gentoo
++    "/usr/lib/gcc/x86_64-redhat-linux/*/crtbegin.o", // For Fedora
++  };
++
++  for (int i = 0; i < sizeof(paths) / sizeof(*paths); i++) {
++    char *path = find_file(paths[i]);
++    if (path)
++      return dirname(path);
++  }
++
++  error("gcc library path is not found");
++}
++
++static void run_linker(StringArray *inputs, char *output) {
++  StringArray arr = {};
++
++  strarray_push(&arr, "ld");
++  strarray_push(&arr, "-o");
++  strarray_push(&arr, output);
++  strarray_push(&arr, "-m");
++  strarray_push(&arr, "elf_x86_64");
++  strarray_push(&arr, "-dynamic-linker");
++  strarray_push(&arr, "/lib64/ld-linux-x86-64.so.2");
++
++  char *libpath = find_libpath();
++  char *gcc_libpath = find_gcc_libpath();
++
++  strarray_push(&arr, format("%s/crt1.o", libpath));
++  strarray_push(&arr, format("%s/crti.o", libpath));
++  strarray_push(&arr, format("%s/crtbegin.o", gcc_libpath));
++  strarray_push(&arr, format("-L%s", gcc_libpath));
++  strarray_push(&arr, format("-L%s", libpath));
++  strarray_push(&arr, format("-L%s/..", libpath));
++  strarray_push(&arr, "-L/usr/lib64");
++  strarray_push(&arr, "-L/lib64");
++  strarray_push(&arr, "-L/usr/lib/x86_64-linux-gnu");
++  strarray_push(&arr, "-L/usr/lib/x86_64-pc-linux-gnu");
++  strarray_push(&arr, "-L/usr/lib/x86_64-redhat-linux");
++  strarray_push(&arr, "-L/usr/lib");
++  strarray_push(&arr, "-L/lib");
++
++  for (int i = 0; i < inputs->len; i++)
++    strarray_push(&arr, inputs->data[i]);
++
++  strarray_push(&arr, "-lc");
++  strarray_push(&arr, "-lgcc");
++  strarray_push(&arr, "--as-needed");
++  strarray_push(&arr, "-lgcc_s");
++  strarray_push(&arr, "--no-as-needed");
++  strarray_push(&arr, format("%s/crtend.o", gcc_libpath));
++  strarray_push(&arr, format("%s/crtn.o", libpath));
++  strarray_push(&arr, NULL);
++
++  run_subprocess(arr.data);
++}
++
+ int main(int argc, char **argv) {
+   atexit(cleanup);
+   parse_args(argc, argv);
+@@ -178,8 +273,10 @@ int main(int argc, char **argv) {
+     return 0;
+   }
+ 
+-  if (input_paths.len > 1 && opt_o)
+-    error("cannot specify '-o' with multiple files");
++  if (input_paths.len > 1 && opt_o && (opt_c || opt_S))
++    error("cannot specify '-o' with '-c' or '-S' with multiple files");
++
++  StringArray ld_args = {};
+ 
+   for (int i = 0; i < input_paths.len; i++) {
+     char *input = input_paths.data[i];
+@@ -192,17 +289,47 @@ int main(int argc, char **argv) {
+     else
+       output = replace_extn(input, ".o");
+ 
+-    // If -S is given, assembly text is the final output.
++    // Handle .o
++    if (endswith(input, ".o")) {
++      strarray_push(&ld_args, input);
++      continue;
++    }
++
++    // Handle .s
++    if (endswith(input, ".s")) {
++      if (!opt_S)
++        assemble(input, output);
++      continue;
++    }
++
++    // Handle .c
++    if (!endswith(input, ".c") && strcmp(input, "-"))
++      error("unknown file extension: %s", input);
++
++    // Just compile
+     if (opt_S) {
+       run_cc1(argc, argv, input, output);
+       continue;
+     }
+ 
+-    // Otherwise, run the assembler to assemble our output.
+-    char *tmpfile = create_tmpfile();
+-    run_cc1(argc, argv, input, tmpfile);
+-    assemble(tmpfile, output);
++    // Compile and assemble
++    if (opt_c) {
++      char *tmp = create_tmpfile();
++      run_cc1(argc, argv, input, tmp);
++      assemble(tmp, output);
++      continue;
++    }
++
++    // Compile, assemble and link
++    char *tmp1 = create_tmpfile();
++    char *tmp2 = create_tmpfile();
++    run_cc1(argc, argv, input, tmp1);
++    assemble(tmp1, tmp2);
++    strarray_push(&ld_args, tmp2);
++    continue;
+   }
+ 
++  if (ld_args.len > 0)
++    run_linker(&ld_args, opt_o ? opt_o : "a.out");
+   return 0;
+ }
+diff --git a/self.py b/self.py
+index 10b8f72..8039213 100755
+--- a/self.py
++++ b/self.py
+@@ -32,6 +32,13 @@ struct stat {
+   char _[512];
+ };
+ 
++typedef struct {
++  size_t gl_pathc;
++  char **gl_pathv;
++  size_t gl_offs;
++  char _[512];
++} glob_t;
++
+ void *malloc(long size);
+ void *calloc(long nmemb, long size);
+ void *realloc(void *buf, long size);
+@@ -46,6 +53,10 @@ int fclose(FILE *fp);
+ int fputc(int c, FILE *stream);
+ int feof(FILE *stream);
+ static void assert() {}
++int glob(char *pattern, int flags, void *errfn, glob_t *pglob);
++void globfree(glob_t *pglob);
++int stat(char *pathname, struct stat *statbuf);
++char *dirname(char *path);
+ int strcmp(char *s1, char *s2);
+ int strncasecmp(char *s1, char *s2, long n);
+ int memcmp(char *s1, char *s2, long n);
+diff --git a/test/driver.sh b/test/driver.sh
+index ad1c629..9fcc184 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -16,7 +16,7 @@ check() {
+ 
+ # -o
+ rm -f $tmp/out
+-./chibicc -o $tmp/out $tmp/empty.c
++./chibicc -c -o $tmp/out $tmp/empty.c
+ [ -f $tmp/out ]
+ check -o
+ 
+@@ -31,11 +31,11 @@ check -S
+ # Default output file
+ rm -f $tmp/out.o $tmp/out.s
+ echo 'int main() {}' > $tmp/out.c
+-(cd $tmp; $OLDPWD/$chibicc out.c)
++(cd $tmp; $OLDPWD/$chibicc -c out.c)
+ [ -f $tmp/out.o ]
+ check 'default output file'
+ 
+-(cd $tmp; $OLDPWD/$chibicc -S out.c)
++(cd $tmp; $OLDPWD/$chibicc -c -S out.c)
+ [ -f $tmp/out.s ]
+ check 'default output file'
+ 
+@@ -43,15 +43,36 @@ check 'default output file'
+ rm -f $tmp/foo.o $tmp/bar.o
+ echo 'int x;' > $tmp/foo.c
+ echo 'int y;' > $tmp/bar.c
+-(cd $tmp; $OLDPWD/$chibicc $tmp/foo.c $tmp/bar.c)
++(cd $tmp; $OLDPWD/$chibicc -c $tmp/foo.c $tmp/bar.c)
+ [ -f $tmp/foo.o ] && [ -f $tmp/bar.o ]
+ check 'multiple input files'
+ 
+ rm -f $tmp/foo.s $tmp/bar.s
+ echo 'int x;' > $tmp/foo.c
+ echo 'int y;' > $tmp/bar.c
+-(cd $tmp; $OLDPWD/$chibicc -S $tmp/foo.c $tmp/bar.c)
++(cd $tmp; $OLDPWD/$chibicc -c -S $tmp/foo.c $tmp/bar.c)
+ [ -f $tmp/foo.s ] && [ -f $tmp/bar.s ]
+ check 'multiple input files'
+ 
++# Run linker
++rm -f $tmp/foo
++echo 'int main() { return 0; }' | $chibicc -o $tmp/foo -
++$tmp/foo
++check linker
++
++rm -f $tmp/foo
++echo 'int bar(); int main() { return bar(); }' > $tmp/foo.c
++echo 'int bar() { return 42; }' > $tmp/bar.c
++$chibicc -o $tmp/foo $tmp/foo.c $tmp/bar.c
++$tmp/foo
++[ "$?" = 42 ]
++check linker
++
++# a.out
++rm -f $tmp/a.out
++echo 'int main() {}' > $tmp/foo.c
++(cd $tmp; $OLDPWD/$chibicc foo.c)
++[ -f $tmp/a.out ]
++check a.out
++
+ echo OK

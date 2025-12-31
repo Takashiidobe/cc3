@@ -1,0 +1,66 @@
+subject: Skip extra tokens after `#include "..."`
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 0ac1a00..00faf02 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -77,6 +77,7 @@ struct Token {
+ void error(char *fmt, ...);
+ void error_at(char *loc, char *fmt, ...);
+ void error_tok(Token *tok, char *fmt, ...);
++void warn_tok(Token *tok, char *fmt, ...);
+ bool equal(Token *tok, char *op);
+ Token *skip(Token *tok, char *op);
+ bool consume(Token **rest, Token *tok, char *str);
+diff --git a/preprocess.c b/preprocess.c
+index ce94b1a..81d138a 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -4,6 +4,17 @@ static bool is_hash(Token *tok) {
+   return tok->at_bol && equal(tok, "#");
+ }
+ 
++// Some preprocessor directives such as #include allow extraneous
++// tokens before newline. This function skips such tokens.
++static Token *skip_line(Token *tok) {
++  if (tok->at_bol)
++    return tok;
++  warn_tok(tok, "extra token");
++  while (tok->at_bol)
++    tok = tok->next;
++  return tok;
++}
++
+ static Token *copy_token(Token *tok) {
+   Token *t = calloc(1, sizeof(Token));
+   *t = *tok;
+@@ -51,7 +62,8 @@ static Token *preprocess2(Token *tok) {
+       Token *tok2 = tokenize_file(path);
+       if (!tok2)
+         error_tok(tok, "%s", strerror(errno));
+-      tok = append(tok2, tok->next);
++      tok = skip_line(tok->next);
++      tok = append(tok2, tok);
+       continue;
+     }
+ 
+diff --git a/tokenize.c b/tokenize.c
+index 9777813..07596ec 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -65,6 +65,13 @@ void error_tok(Token *tok, char *fmt, ...) {
+   exit(1);
+ }
+ 
++void warn_tok(Token *tok, char *fmt, ...) {
++  va_list ap;
++  va_start(ap, fmt);
++  verror_at(tok->file->name, tok->file->contents, tok->line_no, tok->loc, fmt, ap);
++  va_end(ap);
++}
++
+ // Consumes the current token if it matches `op`.
+ bool equal(Token *tok, char *op) {
+   return memcmp(tok->loc, op, tok->len) == 0 && op[tok->len] == '\0';

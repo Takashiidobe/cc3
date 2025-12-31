@@ -1,0 +1,140 @@
+subject: Allow to concatenate regular string literals with L/u/U string literals
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index e1a0853..6161716 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -91,6 +91,7 @@ bool consume(Token **rest, Token *tok, char *str);
+ void convert_pp_tokens(Token *tok);
+ File **get_input_files(void);
+ File *new_file(char *name, int file_no, char *contents);
++Token *tokenize_string_literal(Token *tok, Type *basety);
+ Token *tokenize(File *file);
+ Token *tokenize_file(char *filename);
+ 
+diff --git a/preprocess.c b/preprocess.c
+index 65dbb06..67f58f5 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -933,10 +933,59 @@ void init_macros(void) {
+   define_macro("__TIME__", format_time(tm));
+ }
+ 
++typedef enum {
++  STR_NONE, STR_UTF8, STR_UTF16, STR_UTF32, STR_WIDE,
++} StringKind;
++
++static StringKind getStringKind(Token *tok) {
++  if (!strcmp(tok->loc, "u8"))
++    return STR_UTF8;
++
++  switch (tok->loc[0]) {
++  case '"': return STR_NONE;
++  case 'u': return STR_UTF16;
++  case 'U': return STR_UTF32;
++  case 'L': return STR_WIDE;
++  }
++  unreachable();
++}
++
+ // Concatenate adjacent string literals into a single string literal
+ // as per the C spec.
+-static void join_adjacent_string_literals(Token *tok1) {
+-  while (tok1->kind != TK_EOF) {
++static void join_adjacent_string_literals(Token *tok) {
++  // First pass: If regular string literals are adjacent to wide
++  // string literals, regular string literals are converted to a wide
++  // type before concatenation. In this pass, we do the conversion.
++  for (Token *tok1 = tok; tok1->kind != TK_EOF;) {
++    if (tok1->kind != TK_STR || tok1->next->kind != TK_STR) {
++      tok1 = tok1->next;
++      continue;
++    }
++
++    StringKind kind = getStringKind(tok1);
++    Type *basety = tok1->ty->base;
++
++    for (Token *t = tok1->next; t->kind == TK_STR; t = t->next) {
++      StringKind k = getStringKind(t);
++      if (kind == STR_NONE) {
++        kind = k;
++        basety = t->ty->base;
++      } else if (k != STR_NONE && kind != k) {
++        error_tok(t, "unsupported non-standard concatenation of string literals");
++      }
++    }
++
++    if (basety->size > 1)
++      for (Token *t = tok1; t->kind == TK_STR; t = t->next)
++        if (t->ty->base->size == 1)
++          *t = *tokenize_string_literal(t, basety);
++
++    while (tok1->kind == TK_STR)
++      tok1 = tok1->next;
++  }
++
++  // Second pass: concatenate adjacent string literals.
++  for (Token *tok1 = tok; tok1->kind != TK_EOF;) {
+     if (tok1->kind != TK_STR || tok1->next->kind != TK_STR) {
+       tok1 = tok1->next;
+       continue;
+diff --git a/test/string.c b/test/string.c
+index 25f1988..04af2e3 100644
+--- a/test/string.c
++++ b/test/string.c
+@@ -41,6 +41,32 @@ int main() {
+   ASSERT(0, !strcmp("abc" "d", "abcd\nefgh"));
+   ASSERT(0, strcmp("\x9" "0", "\t0"));
+ 
++  ASSERT(16, sizeof(L"abc" ""));
++
++  ASSERT(28, sizeof(L"abc" "def"));
++  ASSERT(28, sizeof(L"abc" L"def"));
++  ASSERT(14, sizeof(u"abc" "def"));
++  ASSERT(14, sizeof(u"abc" u"def"));
++
++  ASSERT(L'a', (L"abc" "def")[0]);
++  ASSERT(L'd', (L"abc" "def")[3]);
++  ASSERT(L'\0', (L"abc" "def")[6]);
++
++  ASSERT(u'a', (u"abc" "def")[0]);
++  ASSERT(u'd', (u"abc" "def")[3]);
++  ASSERT(u'\0', (u"abc" "def")[6]);
++
++  ASSERT(L'あ', ("あ" L"")[0]);
++  ASSERT(0343, ("\343\201\202" L"")[0]);
++  ASSERT(0201, ("\343\201\202" L"")[1]);
++  ASSERT(0202, ("\343\201\202" L"")[2]);
++  ASSERT(0, ("\343\201\202" L"")[3]);
++
++  ASSERT(L'a', ("a" "b" L"c")[0]);
++  ASSERT(L'b', ("a" "b" L"c")[1]);
++  ASSERT(L'c', ("a" "b" L"c")[2]);
++  ASSERT(0, ("a" "b" L"c")[3]);
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 8a87bae..39be6bd 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -469,6 +469,16 @@ static void add_line_numbers(Token *tok) {
+   } while (*p++);
+ }
+ 
++Token *tokenize_string_literal(Token *tok, Type *basety) {
++  Token *t;
++  if (basety->size == 2)
++    t = read_utf16_string_literal(tok->loc, tok->loc);
++  else
++    t = read_utf32_string_literal(tok->loc, tok->loc, basety);
++  t->next = tok->next;
++  return t;
++}
++
+ // Tokenize a given string and returns new tokens.
+ Token *tokenize(File *file) {
+   current_file = file;

@@ -1,0 +1,66 @@
+subject: Handle extern declarations in a block
+
+
+
+diff --git a/parse.c b/parse.c
+index ae75005..b14f210 100644
+--- a/parse.c
++++ b/parse.c
+@@ -147,6 +147,9 @@ static Node *postfix(Token **rest, Token *tok);
+ static Node *unary(Token **rest, Token *tok);
+ static Node *primary(Token **rest, Token *tok);
+ static Token *parse_typedef(Token *tok, Type *basety);
++static bool is_function(Token *tok);
++static Token *function(Token *tok, Type *basety, VarAttr *attr);
++static Token *global_variable(Token *tok, Type *basety, VarAttr *attr);
+ 
+ static void enter_scope(void) {
+   Scope *sc = calloc(1, sizeof(Scope));
+@@ -1214,6 +1217,16 @@ static Node *compound_stmt(Token **rest, Token *tok) {
+         continue;
+       }
+ 
++      if (is_function(tok)) {
++        tok = function(tok, basety, &attr);
++        continue;
++      }
++
++      if (attr.is_extern) {
++        tok = global_variable(tok, basety, &attr);
++        continue;
++      }
++
+       cur = cur->next = declaration(&tok, tok, basety);
+     } else {
+       cur = cur->next = stmt(&tok, tok);
+diff --git a/test/common b/test/common
+index ebc9d99..890d0ec 100644
+--- a/test/common
++++ b/test/common
+@@ -13,3 +13,6 @@ void assert(int expected, int actual, char *code) {
+ static int static_fn() { return 5; }
+ int ext1 = 5;
+ int *ext2 = &ext1;
++int ext3 = 7;
++int ext_fn1(int x) { return x; }
++int ext_fn2(int x) { return x; }
+diff --git a/test/extern.c b/test/extern.c
+index 3fc1f6a..c1e8956 100644
+--- a/test/extern.c
++++ b/test/extern.c
+@@ -7,6 +7,15 @@ int main() {
+   ASSERT(5, ext1);
+   ASSERT(5, *ext2);
+ 
++  extern int ext3;
++  ASSERT(7, ext3);
++
++  int ext_fn1(int x);
++  ASSERT(5, ext_fn1(5));
++
++  extern int ext_fn2(int x);
++  ASSERT(8, ext_fn2(8));
++
+   printf("OK\n");
+   return 0;
+ }

@@ -1,0 +1,204 @@
+subject: Add _Bool type
+
+_Bool isn't just a 1-bit integer because when you convert a value
+to bool, the result is 1 if the original value is non-zero. This
+is contrary to the other small integral types, e.g. char, as you
+can see below:
+
+  char x  = 256; // x is 0
+  _Bool y = 256; // y is 1
+
+
+diff --git a/chibicc.h b/chibicc.h
+index a3c4e1b..1d766ef 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -156,6 +156,7 @@ Obj *parse(Token *tok);
+ 
+ typedef enum {
+   TY_VOID,
++  TY_BOOL,
+   TY_CHAR,
+   TY_SHORT,
+   TY_INT,
+@@ -206,6 +207,7 @@ struct Member {
+ };
+ 
+ extern Type *ty_void;
++extern Type *ty_bool;
+ 
+ extern Type *ty_char;
+ extern Type *ty_short;
+diff --git a/codegen.c b/codegen.c
+index 2fb7e83..4ab87f8 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -118,6 +118,13 @@ static void store(Type *ty) {
+     println("  mov %%rax, (%%rdi)");
+ }
+ 
++static void cmp_zero(Type *ty) {
++  if (is_integer(ty) && ty->size <= 4)
++    println("  cmp $0, %%eax");
++  else
++    println("  cmp $0, %%rax");
++}
++
+ enum { I8, I16, I32, I64 };
+ 
+ static int getTypeId(Type *ty) {
+@@ -148,6 +155,13 @@ static void cast(Type *from, Type *to) {
+   if (to->kind == TY_VOID)
+     return;
+ 
++  if (to->kind == TY_BOOL) {
++    cmp_zero(from);
++    println("  setne %%al");
++    println("  movzx %%al, %%eax");
++    return;
++  }
++
+   int t1 = getTypeId(from);
+   int t2 = getTypeId(to);
+   if (cast_table[t1][t2])
+diff --git a/parse.c b/parse.c
+index 2a4e254..42d7017 100644
+--- a/parse.c
++++ b/parse.c
+@@ -236,7 +236,7 @@ static void push_tag_scope(Token *tok, Type *ty) {
+   scope->tags = sc;
+ }
+ 
+-// declspec = ("void" | "char" | "short" | "int" | "long"
++// declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
+ //             | "typedef"
+ //             | struct-decl | union-decl | typedef-name)+
+ //
+@@ -258,11 +258,12 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+   // as you can see below.
+   enum {
+     VOID  = 1 << 0,
+-    CHAR  = 1 << 2,
+-    SHORT = 1 << 4,
+-    INT   = 1 << 6,
+-    LONG  = 1 << 8,
+-    OTHER = 1 << 10,
++    BOOL  = 1 << 2,
++    CHAR  = 1 << 4,
++    SHORT = 1 << 6,
++    INT   = 1 << 8,
++    LONG  = 1 << 10,
++    OTHER = 1 << 12,
+   };
+ 
+   Type *ty = ty_int;
+@@ -300,6 +301,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+     // Handle built-in types.
+     if (equal(tok, "void"))
+       counter += VOID;
++    else if (equal(tok, "_Bool"))
++      counter += BOOL;
+     else if (equal(tok, "char"))
+       counter += CHAR;
+     else if (equal(tok, "short"))
+@@ -315,6 +318,9 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+     case VOID:
+       ty = ty_void;
+       break;
++    case BOOL:
++      ty = ty_bool;
++      break;
+     case CHAR:
+       ty = ty_char;
+       break;
+@@ -460,7 +466,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety) {
+ // Returns true if a given token represents a type.
+ static bool is_typename(Token *tok) {
+   static char *kw[] = {
+-    "void", "char", "short", "int", "long", "struct", "union",
++    "void", "_Bool", "char", "short", "int", "long", "struct", "union",
+     "typedef",
+   };
+ 
+diff --git a/test/decl.c b/test/decl.c
+index 8536ca9..a8fd0dd 100644
+--- a/test/decl.c
++++ b/test/decl.c
+@@ -10,6 +10,13 @@ int main() {
+ 
+   ASSERT(8, ({ long long x; sizeof(x); }));
+ 
++  ASSERT(0, ({ _Bool x=0; x; }));
++  ASSERT(1, ({ _Bool x=1; x; }));
++  ASSERT(1, ({ _Bool x=2; x; }));
++  ASSERT(1, (_Bool)1);
++  ASSERT(1, (_Bool)2);
++  ASSERT(0, (_Bool)(char)256);
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/function.c b/test/function.c
+index c0feb09..1e990de 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -48,6 +48,9 @@ int div_long(long a, long b) {
+   return a / b;
+ }
+ 
++_Bool bool_fn_add(_Bool x) { return x + 1; }
++_Bool bool_fn_sub(_Bool x) { return x - 1; }
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -72,6 +75,13 @@ int main() {
+   ASSERT(5, int_to_char(261));
+   ASSERT(-5, div_long(-10, 2));
+ 
++  ASSERT(1, bool_fn_add(3));
++  ASSERT(0, bool_fn_sub(3));
++  ASSERT(1, bool_fn_add(-3));
++  ASSERT(0, bool_fn_sub(-3));
++  ASSERT(1, bool_fn_add(0));
++  ASSERT(1, bool_fn_sub(0));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 1e255c4..08ffd68 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -127,7 +127,7 @@ static int read_punct(char *p) {
+ static bool is_keyword(Token *tok) {
+   static char *kw[] = {
+     "return", "if", "else", "for", "while", "int", "sizeof", "char",
+-    "struct", "union", "short", "long", "void", "typedef",
++    "struct", "union", "short", "long", "void", "typedef", "_Bool",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+diff --git a/type.c b/type.c
+index dbdb705..11f64a1 100644
+--- a/type.c
++++ b/type.c
+@@ -1,6 +1,7 @@
+ #include "chibicc.h"
+ 
+ Type *ty_void = &(Type){TY_VOID, 1, 1};
++Type *ty_bool = &(Type){TY_BOOL, 1, 1};
+ 
+ Type *ty_char = &(Type){TY_CHAR, 1, 1};
+ Type *ty_short = &(Type){TY_SHORT, 2, 2};
+@@ -17,8 +18,8 @@ static Type *new_type(TypeKind kind, int size, int align) {
+ 
+ bool is_integer(Type *ty) {
+   TypeKind k = ty->kind;
+-  return k == TY_CHAR || k == TY_SHORT || k == TY_INT ||
+-         k == TY_LONG;
++  return k == TY_BOOL || k == TY_CHAR || k == TY_SHORT ||
++         k == TY_INT  || k == TY_LONG;
+ }
+ 
+ Type *copy_type(Type *ty) {

@@ -1,0 +1,28 @@
+subject: When comparing two pointers, treat them as unsigned
+
+
+
+diff --git a/test/arith.c b/test/arith.c
+index 83ef9b8..1f4ae08 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -128,6 +128,7 @@ int main() {
+ 
+   ASSERT(15, (char *)0xffffffffffffffff - (char *)0xfffffffffffffff0);
+   ASSERT(-15, (char *)0xfffffffffffffff0 - (char *)0xffffffffffffffff);
++  ASSERT(1, (void *)0xffffffffffffffff > (void *)0);
+ 
+   printf("OK\n");
+   return 0;
+diff --git a/type.c b/type.c
+index d688866..6d1aae4 100644
+--- a/type.c
++++ b/type.c
+@@ -36,6 +36,7 @@ Type *copy_type(Type *ty) {
+ Type *pointer_to(Type *base) {
+   Type *ty = new_type(TY_PTR, 8, 8);
+   ty->base = base;
++  ty->is_unsigned = true;
+   return ty;
+ }
+ 

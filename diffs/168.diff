@@ -1,0 +1,52 @@
+subject: Expand macros in the #if and #elif argument context
+
+
+
+diff --git a/preprocess.c b/preprocess.c
+index ba6985a..e67f324 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -20,6 +20,8 @@ struct CondIncl {
+ static Macro *macros;
+ static CondIncl *cond_incl;
+ 
++static Token *preprocess2(Token *tok);
++
+ static bool is_hash(Token *tok) {
+   return tok->at_bol && equal(tok, "#");
+ }
+@@ -113,6 +115,7 @@ static Token *copy_line(Token **rest, Token *tok) {
+ static long eval_const_expr(Token **rest, Token *tok) {
+   Token *start = tok;
+   Token *expr = copy_line(rest, tok->next);
++  expr = preprocess2(expr);
+ 
+   if (expr->kind == TK_EOF)
+     error_tok(start, "no expression");
+diff --git a/test/macro.c b/test/macro.c
+index 6481464..61447f6 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -128,6 +128,22 @@ int main() {
+ 
+   if (0);
+ 
++#define M 5
++#if M
++  m = 5;
++#else
++  m = 6;
++#endif
++  assert(5, m, "m");
++
++#define M 5
++#if M-5
++  m = 6;
++#elif M
++  m = 5;
++#endif
++  assert(5, m, "m");
++
+   printf("OK\n");
+   return 0;
+ }

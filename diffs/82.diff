@@ -1,0 +1,120 @@
+subject: Add % and %=
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 04e4eab..a8ae7ce 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -96,6 +96,7 @@ typedef enum {
+   ND_MUL,       // *
+   ND_DIV,       // /
+   ND_NEG,       // unary -
++  ND_MOD,       // %
+   ND_EQ,        // ==
+   ND_NE,        // !=
+   ND_LT,        // <
+diff --git a/codegen.c b/codegen.c
+index 1cedc99..6953111 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -263,11 +263,15 @@ static void gen_expr(Node *node) {
+     println("  imul %s, %s", di, ax);
+     return;
+   case ND_DIV:
++  case ND_MOD:
+     if (node->lhs->ty->size == 8)
+       println("  cqo");
+     else
+       println("  cdq");
+     println("  idiv %s", di);
++
++    if (node->kind == ND_MOD)
++      println("  mov %%rdx, %%rax");
+     return;
+   case ND_EQ:
+   case ND_NE:
+diff --git a/parse.c b/parse.c
+index e17b528..76080df 100644
+--- a/parse.c
++++ b/parse.c
+@@ -697,7 +697,7 @@ static Node *to_assign(Node *binary) {
+ }
+ 
+ // assign    = equality (assign-op assign)?
+-// assign-op = "=" | "+=" | "-=" | "*=" | "/="
++// assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "%="
+ static Node *assign(Token **rest, Token *tok) {
+   Node *node = equality(&tok, tok);
+ 
+@@ -716,6 +716,9 @@ static Node *assign(Token **rest, Token *tok) {
+   if (equal(tok, "/="))
+     return to_assign(new_binary(ND_DIV, node, assign(rest, tok->next), tok));
+ 
++  if (equal(tok, "%="))
++    return to_assign(new_binary(ND_MOD, node, assign(rest, tok->next), tok));
++
+   *rest = tok;
+   return node;
+ }
+@@ -852,7 +855,7 @@ static Node *add(Token **rest, Token *tok) {
+   }
+ }
+ 
+-// mul = cast ("*" cast | "/" cast)*
++// mul = cast ("*" cast | "/" cast | "%" cast)*
+ static Node *mul(Token **rest, Token *tok) {
+   Node *node = cast(&tok, tok);
+ 
+@@ -869,6 +872,11 @@ static Node *mul(Token **rest, Token *tok) {
+       continue;
+     }
+ 
++    if (equal(tok, "%")) {
++      node = new_binary(ND_MOD, node, cast(&tok, tok->next), start);
++      continue;
++    }
++
+     *rest = tok;
+     return node;
+   }
+diff --git a/test/arith.c b/test/arith.c
+index 4719240..6353813 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -74,6 +74,11 @@ int main() {
+   ASSERT(-1, ~0);
+   ASSERT(0, ~-1);
+ 
++  ASSERT(5, 17%6);
++  ASSERT(5, ((long)17)%6);
++  ASSERT(2, ({ int i=10; i%=4; i; }));
++  ASSERT(2, ({ long i=10; i%=4; i; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 1a30ad7..a9c5eca 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -117,6 +117,7 @@ static int from_hex(char c) {
+ static int read_punct(char *p) {
+   static char *kw[] = {
+     "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=", "++", "--",
++    "%=",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+diff --git a/type.c b/type.c
+index 18f4bfe..c9c7807 100644
+--- a/type.c
++++ b/type.c
+@@ -98,6 +98,7 @@ void add_type(Node *node) {
+   case ND_SUB:
+   case ND_MUL:
+   case ND_DIV:
++  case ND_MOD:
+     usual_arith_conv(&node->lhs, &node->rhs);
+     node->ty = node->lhs->ty;
+     return;

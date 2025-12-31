@@ -1,0 +1,134 @@
+subject: Add continue statement
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 05663e5..d2425ff 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -144,8 +144,9 @@ struct Node {
+   Node *init;
+   Node *inc;
+ 
+-  // "break" label
++  // "break" and "continue" labels
+   char *brk_label;
++  char *cont_label;
+ 
+   // Block or statement expression
+   Node *body;
+diff --git a/codegen.c b/codegen.c
+index 2932dbb..6fc7bb5 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -362,6 +362,7 @@ static void gen_stmt(Node *node) {
+       println("  je %s", node->brk_label);
+     }
+     gen_stmt(node->then);
++    println("%s:", node->cont_label);
+     if (node->inc)
+       gen_expr(node->inc);
+     println("  jmp .L.begin.%d", c);
+diff --git a/parse.c b/parse.c
+index 1abb211..6b017d9 100644
+--- a/parse.c
++++ b/parse.c
+@@ -71,8 +71,9 @@ static Obj *current_fn;
+ static Node *gotos;
+ static Node *labels;
+ 
+-// Current "goto" jump target.
++// Current "goto" and "continue" jump targets.
+ static char *brk_label;
++static char *cont_label;
+ 
+ static bool is_typename(Token *tok);
+ static Type *declspec(Token **rest, Token *tok, VarAttr *attr);
+@@ -586,6 +587,7 @@ static bool is_typename(Token *tok) {
+ //      | "while" "(" expr ")" stmt
+ //      | "goto" ident ";"
+ //      | "break" ";"
++//      | "continue" ";"
+ //      | ident ":" stmt
+ //      | "{" compound-stmt
+ //      | expr-stmt
+@@ -619,7 +621,9 @@ static Node *stmt(Token **rest, Token *tok) {
+     enter_scope();
+ 
+     char *brk = brk_label;
++    char *cont = cont_label;
+     brk_label = node->brk_label = new_unique_name();
++    cont_label = node->cont_label = new_unique_name();
+ 
+     if (is_typename(tok)) {
+       Type *basety = declspec(&tok, tok, NULL);
+@@ -640,6 +644,7 @@ static Node *stmt(Token **rest, Token *tok) {
+ 
+     leave_scope();
+     brk_label = brk;
++    cont_label = cont;
+     return node;
+   }
+ 
+@@ -650,9 +655,14 @@ static Node *stmt(Token **rest, Token *tok) {
+     tok = skip(tok, ")");
+ 
+     char *brk = brk_label;
++    char *cont = cont_label;
+     brk_label = node->brk_label = new_unique_name();
++    cont_label = node->cont_label = new_unique_name();
++
+     node->then = stmt(rest, tok);
++
+     brk_label = brk;
++    cont_label = cont;
+     return node;
+   }
+ 
+@@ -674,6 +684,15 @@ static Node *stmt(Token **rest, Token *tok) {
+     return node;
+   }
+ 
++  if (equal(tok, "continue")) {
++    if (!cont_label)
++      error_tok(tok, "stray continue");
++    Node *node = new_node(ND_GOTO, tok);
++    node->unique_label = cont_label;
++    *rest = skip(tok->next, ";");
++    return node;
++  }
++
+   if (tok->kind == TK_IDENT && equal(tok->next, ":")) {
+     Node *node = new_node(ND_LABEL, tok);
+     node->label = strndup(tok->loc, tok->len);
+diff --git a/test/control.c b/test/control.c
+index 24a8eff..a38734c 100644
+--- a/test/control.c
++++ b/test/control.c
+@@ -47,6 +47,13 @@ int main() {
+   ASSERT(3, ({ int i=0; for(;i<10;i++) { for (;;) break; if (i == 3) break; } i; }));
+   ASSERT(4, ({ int i=0; while (1) { while(1) break; if (i++ == 3) break; } i; }));
+ 
++  ASSERT(10, ({ int i=0; int j=0; for (;i<10;i++) { if (i>5) continue; j++; } i; }));
++  ASSERT(6, ({ int i=0; int j=0; for (;i<10;i++) { if (i>5) continue; j++; } j; }));
++  ASSERT(10, ({ int i=0; int j=0; for(;!i;) { for (;j!=10;j++) continue; break; } j; }));
++  ASSERT(11, ({ int i=0; int j=0; while (i++<10) { if (i>5) continue; j++; } i; }));
++  ASSERT(5, ({ int i=0; int j=0; while (i++<10) { if (i>5) continue; j++; } j; }));
++  ASSERT(11, ({ int i=0; int j=0; while(!i) { while (j++!=10) continue; break; } j; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index cc55ddc..48a804c 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -131,7 +131,7 @@ static bool is_keyword(Token *tok) {
+   static char *kw[] = {
+     "return", "if", "else", "for", "while", "int", "sizeof", "char",
+     "struct", "union", "short", "long", "void", "typedef", "_Bool",
+-    "enum", "static", "goto", "break",
++    "enum", "static", "goto", "break", "continue",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

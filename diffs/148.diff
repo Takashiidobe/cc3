@@ -1,0 +1,29 @@
+subject: Add "long double" as an alias for "double"
+
+
+
+diff --git a/parse.c b/parse.c
+index 7803020..cd54e07 100644
+--- a/parse.c
++++ b/parse.c
+@@ -528,6 +528,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+       ty = ty_float;
+       break;
+     case DOUBLE:
++    case LONG + DOUBLE:
+       ty = ty_double;
+       break;
+     default:
+diff --git a/test/sizeof.c b/test/sizeof.c
+index 1ec50f4..29ea18d 100644
+--- a/test/sizeof.c
++++ b/test/sizeof.c
+@@ -96,6 +96,8 @@ int main() {
+   ASSERT(4, sizeof(1f/2));
+   ASSERT(8, sizeof(1.0/2));
+ 
++  ASSERT(8, sizeof(long double));
++
+   printf("OK\n");
+   return 0;
+ }

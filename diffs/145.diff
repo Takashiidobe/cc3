@@ -1,0 +1,32 @@
+subject: Implement default argument promotion for float
+
+
+
+diff --git a/parse.c b/parse.c
+index fef1192..fb75e26 100644
+--- a/parse.c
++++ b/parse.c
+@@ -2153,6 +2153,10 @@ static Node *funcall(Token **rest, Token *tok) {
+         error_tok(arg->tok, "passing struct or union is not supported yet");
+       arg = new_cast(arg, param_ty);
+       param_ty = param_ty->next;
++    } else if (arg->ty->kind == TY_FLOAT) {
++      // If parameter type is omitted (e.g. in "..."), float
++      // arguments are promoted to double.
++      arg = new_cast(arg, ty_double);
+     }
+ 
+     cur = cur->next = arg;
+diff --git a/test/function.c b/test/function.c
+index df271a2..f4494b5 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -174,6 +174,8 @@ int main() {
+   ASSERT(7, add_float3(2.5, 2.5, 2.5));
+   ASSERT(7, add_double3(2.5, 2.5, 2.5));
+ 
++  ASSERT(0, ({ char buf[100]; sprintf(buf, "%.1f", (float)3.5); strcmp(buf, "3.5"); }));
++
+   printf("OK\n");
+   return 0;
+ }

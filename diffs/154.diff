@@ -1,0 +1,236 @@
+subject: Run "as" command unless -S is given
+
+
+
+diff --git a/Makefile b/Makefile
+index 3733b59..e773d2d 100644
+--- a/Makefile
++++ b/Makefile
+@@ -14,8 +14,8 @@ chibicc: $(OBJS)
+ $(OBJS): chibicc.h
+ 
+ test/%.exe: chibicc test/%.c
+-	$(CC) -o- -E -P -C test/$*.c | ./chibicc -o test/$*.s -
+-	$(CC) -o $@ test/$*.s -xc test/common
++	$(CC) -o- -E -P -C test/$*.c | ./chibicc -o test/$*.o -
++	$(CC) -o $@ test/$*.o -xc test/common
+ 
+ test: $(TESTS)
+ 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
+@@ -28,15 +28,15 @@ test-all: test test-stage2
+ stage2/chibicc: $(OBJS:%=stage2/%)
+ 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
+ 
+-stage2/%.s: chibicc self.py %.c
++stage2/%.o: chibicc self.py %.c
+ 	mkdir -p stage2/test
+ 	./self.py chibicc.h $*.c > stage2/$*.c
+-	./chibicc -o stage2/$*.s stage2/$*.c
++	./chibicc -o stage2/$*.o stage2/$*.c
+ 
+ stage2/test/%.exe: stage2/chibicc test/%.c
+ 	mkdir -p stage2/test
+-	$(CC) -o- -E -P -C test/$*.c | ./stage2/chibicc -o stage2/test/$*.s -
+-	$(CC) -o $@ stage2/test/$*.s -xc test/common
++	$(CC) -o- -E -P -C test/$*.c | ./stage2/chibicc -o stage2/test/$*.o -
++	$(CC) -o $@ stage2/test/$*.o -xc test/common
+ 
+ test-stage2: $(TESTS:test/%=stage2/test/%)
+ 	for i in $^; do echo $$i; ./$$i || exit 1; echo; done
+diff --git a/chibicc.h b/chibicc.h
+index ae71b4a..d2c3236 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -2,6 +2,7 @@
+ #include <assert.h>
+ #include <ctype.h>
+ #include <errno.h>
++#include <libgen.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdint.h>
+@@ -25,6 +26,13 @@ typedef struct Relocation Relocation;
+ // strings.c
+ //
+ 
++typedef struct {
++  char **data;
++  int capacity;
++  int len;
++} StringArray;
++
++void strarray_push(StringArray *arr, char *s);
+ char *format(char *fmt, ...);
+ 
+ //
+diff --git a/main.c b/main.c
+index 02e8fcf..a16eae5 100644
+--- a/main.c
++++ b/main.c
+@@ -1,10 +1,12 @@
+ #include "chibicc.h"
+ 
++static bool opt_S;
+ static bool opt_cc1;
+ static bool opt_hash_hash_hash;
+ static char *opt_o;
+ 
+ static char *input_path;
++static StringArray tmpfiles;
+ 
+ static void usage(int status) {
+   fprintf(stderr, "chibicc [ -o <path> ] <file>\n");
+@@ -38,6 +40,11 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-S")) {
++      opt_S = true;
++      continue;
++    }
++
+     if (argv[i][0] == '-' && argv[i][1] != '\0')
+       error("unknown argument: %s", argv[i]);
+ 
+@@ -58,6 +65,31 @@ static FILE *open_file(char *path) {
+   return out;
+ }
+ 
++// Replace file extension
++static char *replace_extn(char *tmpl, char *extn) {
++  char *filename = basename(strdup(tmpl));
++  char *dot = strrchr(filename, '.');
++  if (dot)
++    *dot = '\0';
++  return format("%s%s", filename, extn);
++}
++
++static void cleanup(void) {
++  for (int i = 0; i < tmpfiles.len; i++)
++    unlink(tmpfiles.data[i]);
++}
++
++static char *create_tmpfile(void) {
++  char *path = strdup("/tmp/chibicc-XXXXXX");
++  int fd = mkstemp(path);
++  if (fd == -1)
++    error("mkstemp failed: %s", strerror(errno));
++  close(fd);
++
++  strarray_push(&tmpfiles, path);
++  return path;
++}
++
+ static void run_subprocess(char **argv) {
+   // If -### is given, dump the subprocess's command line.
+   if (opt_hash_hash_hash) {
+@@ -81,10 +113,19 @@ static void run_subprocess(char **argv) {
+     exit(1);
+ }
+ 
+-static void run_cc1(int argc, char **argv) {
++static void run_cc1(int argc, char **argv, char *input, char *output) {
+   char **args = calloc(argc + 10, sizeof(char *));
+   memcpy(args, argv, argc * sizeof(char *));
+   args[argc++] = "-cc1";
++
++  if (input)
++    args[argc++] = input;
++
++  if (output) {
++    args[argc++] = "-o";
++    args[argc++] = output;
++  }
++
+   run_subprocess(args);
+ }
+ 
+@@ -99,7 +140,13 @@ static void cc1(void) {
+   codegen(prog, out);
+ }
+ 
++static void assemble(char *input, char *output) {
++  char *cmd[] = {"as", "-c", input, "-o", output, NULL};
++  run_subprocess(cmd);
++}
++
+ int main(int argc, char **argv) {
++  atexit(cleanup);
+   parse_args(argc, argv);
+ 
+   if (opt_cc1) {
+@@ -107,6 +154,23 @@ int main(int argc, char **argv) {
+     return 0;
+   }
+ 
+-  run_cc1(argc, argv);
++  char *output;
++  if (opt_o)
++    output = opt_o;
++  else if (opt_S)
++    output = replace_extn(input_path, ".s");
++  else
++    output = replace_extn(input_path, ".o");
++
++  // If -S is given, assembly text is the final output.
++  if (opt_S) {
++    run_cc1(argc, argv, input_path, output);
++    return 0;
++  }
++
++  // Otherwise, run the assembler to assemble our output.
++  char *tmpfile = create_tmpfile();
++  run_cc1(argc, argv, input_path, tmpfile);
++  assemble(tmpfile, output);
+   return 0;
+ }
+diff --git a/strings.c b/strings.c
+index 485d033..9e67428 100644
+--- a/strings.c
++++ b/strings.c
+@@ -1,5 +1,21 @@
+ #include "chibicc.h"
+ 
++void strarray_push(StringArray *arr, char *s) {
++  if (!arr->data) {
++    arr->data = calloc(8, sizeof(char *));
++    arr->capacity = 8;
++  }
++
++  if (arr->capacity == arr->len) {
++    arr->data = realloc(arr->data, sizeof(char *) * arr->capacity * 2);
++    arr->capacity *= 2;
++    for (int i = arr->len; i < arr->capacity; i++)
++      arr->data[i] = NULL;
++  }
++
++  arr->data[arr->len++] = s;
++}
++
+ // Takes a printf-style format string and returns a formatted string.
+ char *format(char *fmt, ...) {
+   char *buf;
+diff --git a/test/driver.sh b/test/driver.sh
+index a35dc71..d30c46d 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -24,4 +24,19 @@ check -o
+ $chibicc --help 2>&1 | grep -q chibicc
+ check --help
+ 
++# -S
++echo 'int main() {}' | $chibicc -S -o - - | grep -q 'main:'
++check -S
++
++# Default output file
++rm -f $tmp/out.o $tmp/out.s
++echo 'int main() {}' > $tmp/out.c
++(cd $tmp; $OLDPWD/$chibicc out.c)
++[ -f $tmp/out.o ]
++check 'default output file'
++
++(cd $tmp; $OLDPWD/$chibicc -S out.c)
++[ -f $tmp/out.s ]
++check 'default output file'
++
+ echo OK

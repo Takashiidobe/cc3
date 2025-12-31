@@ -1,0 +1,149 @@
+subject: Do not emit static inline functions if referenced by no one
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index ff4a99d..bcc7b92 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -146,6 +146,11 @@ struct Obj {
+   Obj *locals;
+   Obj *va_area;
+   int stack_size;
++
++  // Static inline function
++  bool is_live;
++  bool is_root;
++  StringArray refs;
+ };
+ 
+ // Global variable can be initialized either by a constant expression
+diff --git a/codegen.c b/codegen.c
+index 3486430..eb84582 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -1199,6 +1199,11 @@ static void emit_text(Obj *prog) {
+     if (!fn->is_function || !fn->is_definition)
+       continue;
+ 
++    // No code is emitted for "static inline" functions
++    // if no one is referencing them.
++    if (!fn->is_live)
++      continue;
++
+     if (fn->is_static)
+       println("  .local %s", fn->name);
+     else
+diff --git a/parse.c b/parse.c
+index 53374e9..a03e8c1 100644
+--- a/parse.c
++++ b/parse.c
+@@ -2766,6 +2766,14 @@ static Node *primary(Token **rest, Token *tok) {
+     VarScope *sc = find_var(tok);
+     *rest = tok->next;
+ 
++    // For "static inline" function
++    if (sc && sc->var && sc->var->is_function) {
++      if (current_fn)
++        strarray_push(&current_fn->refs, sc->var->name);
++      else
++        sc->var->is_root = true;
++    }
++
+     if (sc) {
+       if (sc->var)
+         return new_var_node(sc->var, tok);
+@@ -2847,6 +2855,29 @@ static void resolve_goto_labels(void) {
+   gotos = labels = NULL;
+ }
+ 
++static Obj *find_func(char *name) {
++  Scope *sc = scope;
++  while (sc->next)
++    sc = sc->next;
++
++  for (VarScope *sc2 = sc->vars; sc2; sc2 = sc2->next)
++    if (!strcmp(sc2->name, name) && sc2->var && sc2->var->is_function)
++      return sc2->var;
++  return NULL;
++}
++
++static void mark_live(Obj *var) {
++  if (!var->is_function || var->is_live)
++    return;
++  var->is_live = true;
++
++  for (int i = 0; i < var->refs.len; i++) {
++    Obj *fn = find_func(var->refs.data[i]);
++    if (fn)
++      mark_live(fn);
++  }
++}
++
+ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
+   Type *ty = declarator(&tok, tok, basety);
+   if (!ty->name)
+@@ -2857,6 +2888,7 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
+   fn->is_definition = !consume(&tok, tok, ";");
+   fn->is_static = attr->is_static || (attr->is_inline && !attr->is_extern);
+   fn->is_inline = attr->is_inline;
++  fn->is_root = !(fn->is_static && fn->is_inline);
+ 
+   if (!fn->is_definition)
+     return tok;
+@@ -2953,5 +2985,10 @@ Obj *parse(Token *tok) {
+     // Global variable
+     tok = global_variable(tok, basety, &attr);
+   }
++
++  for (Obj *var = globals; var; var = var->next)
++    if (var->is_root)
++      mark_live(var);
++
+   return globals;
+ }
+diff --git a/test/driver.sh b/test/driver.sh
+index 9dadeec..c58b657 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -125,4 +125,40 @@ echo 'int foo(); int main() { foo(); }' > $tmp/inline2.c
+ $chibicc -o /dev/null $tmp/inline1.c $tmp/inline2.c
+ check inline
+ 
++echo 'static inline void f1() {}' | $chibicc -o- -S - | grep -v -q f1:
++check inline
++
++echo 'static inline void f1() {} void foo() { f1(); }' | $chibicc -o- -S - | grep -q f1:
++check inline
++
++echo 'static inline void f1() {} static inline void f2() { f1(); } void foo() { f1(); }' | $chibicc -o- -S - | grep -q f1:
++check inline
++
++echo 'static inline void f1() {} static inline void f2() { f1(); } void foo() { f1(); }' | $chibicc -o- -S - | grep -v -q f2:
++check inline
++
++echo 'static inline void f1() {} static inline void f2() { f1(); } void foo() { f2(); }' | $chibicc -o- -S - | grep -q f1:
++check inline
++
++echo 'static inline void f1() {} static inline void f2() { f1(); } void foo() { f2(); }' | $chibicc -o- -S - | grep -q f2:
++check inline
++
++echo 'static inline void f2(); static inline void f1() { f2(); } static inline void f2() { f1(); } void foo() {}' | $chibicc -o- -S - | grep -v -q f1:
++check inline
++
++echo 'static inline void f2(); static inline void f1() { f2(); } static inline void f2() { f1(); } void foo() {}' | $chibicc -o- -S - | grep -v -q f2:
++check inline
++
++echo 'static inline void f2(); static inline void f1() { f2(); } static inline void f2() { f1(); } void foo() { f1(); }' | $chibicc -o- -S - | grep -q f1:
++check inline
++
++echo 'static inline void f2(); static inline void f1() { f2(); } static inline void f2() { f1(); } void foo() { f1(); }' | $chibicc -o- -S - | grep -q f2:
++check inline
++
++echo 'static inline void f2(); static inline void f1() { f2(); } static inline void f2() { f1(); } void foo() { f2(); }' | $chibicc -o- -S - | grep -q f1:
++check inline
++
++echo 'static inline void f2(); static inline void f1() { f2(); } static inline void f2() { f1(); } void foo() { f2(); }' | $chibicc -o- -S - | grep -q f2:
++check inline
++
+ echo OK

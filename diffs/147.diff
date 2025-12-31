@@ -1,0 +1,108 @@
+subject: Add flonum constant expression
+
+
+
+diff --git a/parse.c b/parse.c
+index fb75e26..7803020 100644
+--- a/parse.c
++++ b/parse.c
+@@ -130,6 +130,7 @@ static int64_t eval_rval(Node *node, char **label);
+ static Node *assign(Token **rest, Token *tok);
+ static Node *logor(Token **rest, Token *tok);
+ static int64_t const_expr(Token **rest, Token *tok);
++static double eval_double(Node *node);
+ static Node *conditional(Token **rest, Token *tok);
+ static Node *logand(Token **rest, Token *tok);
+ static Node *bitor(Token **rest, Token *tok);
+@@ -1101,6 +1102,16 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
+   if (!init->expr)
+     return cur;
+ 
++  if (ty->kind == TY_FLOAT) {
++    *(float *)(buf + offset) = eval_double(init->expr);
++    return cur;
++  }
++
++  if (ty->kind == TY_DOUBLE) {
++    *(double *)(buf + offset) = eval_double(init->expr);
++    return cur;
++  }
++
+   char *label = NULL;
+   uint64_t val = eval2(init->expr, &label);
+ 
+@@ -1427,6 +1438,9 @@ static int64_t eval(Node *node) {
+ static int64_t eval2(Node *node, char **label) {
+   add_type(node);
+ 
++  if (is_flonum(node->ty))
++    return eval_double(node);
++
+   switch (node->kind) {
+   case ND_ADD:
+     return eval2(node->lhs, label) + eval(node->rhs);
+@@ -1534,6 +1548,41 @@ static int64_t const_expr(Token **rest, Token *tok) {
+   return eval(node);
+ }
+ 
++static double eval_double(Node *node) {
++  add_type(node);
++
++  if (is_integer(node->ty)) {
++    if (node->ty->is_unsigned)
++      return (unsigned long)eval(node);
++    return eval(node);
++  }
++
++  switch (node->kind) {
++  case ND_ADD:
++    return eval_double(node->lhs) + eval_double(node->rhs);
++  case ND_SUB:
++    return eval_double(node->lhs) - eval_double(node->rhs);
++  case ND_MUL:
++    return eval_double(node->lhs) * eval_double(node->rhs);
++  case ND_DIV:
++    return eval_double(node->lhs) / eval_double(node->rhs);
++  case ND_NEG:
++    return -eval_double(node->lhs);
++  case ND_COND:
++    return eval_double(node->cond) ? eval_double(node->then) : eval_double(node->els);
++  case ND_COMMA:
++    return eval_double(node->rhs);
++  case ND_CAST:
++    if (is_flonum(node->lhs->ty))
++      return eval_double(node->lhs);
++    return eval(node->lhs);
++  case ND_NUM:
++    return node->fval;
++  }
++
++  error_tok(node->tok, "not a compile-time constant");
++}
++
+ // Convert `A op= B` to `tmp = &A, *tmp = *tmp op B`
+ // where tmp is a fresh pointer variable.
+ static Node *to_assign(Node *binary) {
+diff --git a/test/constexpr.c b/test/constexpr.c
+index e32f197..3678e24 100644
+--- a/test/constexpr.c
++++ b/test/constexpr.c
+@@ -1,5 +1,8 @@
+ #include "test.h"
+ 
++float g40 = 1.5;
++double g41 = 0.0 ? 55 : (0, 1 + 1 * 5.0 / 2 * (double)2 * (int)2.0);
++
+ int main() {
+   ASSERT(10, ({ enum { ten=1+2+3+4 }; ten; }));
+   ASSERT(1, ({ int i=0; switch(3) { case 5-2+0*3: i++; } i; }));
+@@ -44,6 +47,9 @@ int main() {
+   ASSERT(1, ({ char x[(unsigned)1<-1]; sizeof(x); }));
+   ASSERT(1, ({ char x[(unsigned)1<=-1]; sizeof(x); }));
+ 
++  ASSERT(1, g40==1.5);
++  ASSERT(1, g41==11);
++
+   printf("OK\n");
+   return 0;
+ }

@@ -1,0 +1,116 @@
+subject: Accept multibyte character as wide character literal
+
+On most Unix-like systems, wide character literal is 32-bit long
+and encodes a Unicode code point. On Windows, that is 16-bit
+long and encodes a UTF-16 code unit. Clearly, there's a portability
+issue here. Personally I've never used wide characters in my code
+as I didn't find it useful.
+
+Being said that, some header files contain wide character literal,
+so we need to support that so that chibicc can include such files.
+
+We assume that source files are always encoded in UTF-8.
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 1632b8c..43385b5 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -361,6 +361,7 @@ int align_to(int n, int align);
+ //
+ 
+ int encode_utf8(char *buf, uint32_t c);
++uint32_t decode_utf8(char **new_pos, char *p);
+ 
+ //
+ // main.c
+diff --git a/test/unicode.c b/test/unicode.c
+index c0ac434..748dd7b 100644
+--- a/test/unicode.c
++++ b/test/unicode.c
+@@ -9,6 +9,11 @@ int main() {
+   ASSERT(0, strcmp("日本語", "\U000065E5\U0000672C\U00008A9E"));
+   ASSERT(0, strcmp("🌮", "\U0001F32E"));
+ 
++  ASSERT(-1, L'\xffffffff'>>31);
++  ASSERT(946, L'β');
++  ASSERT(12354, L'あ');
++  ASSERT(127843, L'🍣');
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 120efc4..83f5ef0 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -251,11 +251,11 @@ static Token *read_char_literal(char *start, char *quote) {
+   if (*p == '\0')
+     error_at(start, "unclosed char literal");
+ 
+-  char c;
++  int c;
+   if (*p == '\\')
+     c = read_escaped_char(&p, p + 1);
+   else
+-    c = *p++;
++    c = decode_utf8(&p, p);
+ 
+   char *end = strchr(p, '\'');
+   if (!end)
+@@ -475,6 +475,7 @@ Token *tokenize(File *file) {
+     // Character literal
+     if (*p == '\'') {
+       cur = cur->next = read_char_literal(p, p);
++      cur->val = (char)cur->val;
+       p += cur->len;
+       continue;
+     }
+diff --git a/unicode.c b/unicode.c
+index 9f0d881..5724580 100644
+--- a/unicode.c
++++ b/unicode.c
+@@ -26,3 +26,43 @@ int encode_utf8(char *buf, uint32_t c) {
+   buf[3] = 0b10000000 | (c & 0b00111111);
+   return 4;
+ }
++
++// Read a UTF-8-encoded Unicode code point from a source file.
++// We assume that source files are always in UTF-8.
++//
++// UTF-8 is a variable-width encoding in which one code point is
++// encoded in one to four bytes. One byte UTF-8 code points are
++// identical to ASCII. Non-ASCII characters are encoded using more
++// than one byte.
++uint32_t decode_utf8(char **new_pos, char *p) {
++  if ((unsigned char)*p < 128) {
++    *new_pos = p + 1;
++    return *p;
++  }
++
++  char *start = p;
++  int len;
++  uint32_t c;
++
++  if ((unsigned char)*p >= 0b11110000) {
++    len = 4;
++    c = *p & 0b111;
++  } else if ((unsigned char)*p >= 0b11100000) {
++    len = 3;
++    c = *p & 0b1111;
++  } else if ((unsigned char)*p >= 0b11000000) {
++    len = 2;
++    c = *p & 0b11111;
++  } else {
++    error_at(start, "invalid UTF-8 sequence");
++  }
++
++  for (int i = 1; i < len; i++) {
++    if ((unsigned char)p[i] >> 6 != 0b10)
++      error_at(start, "invalid UTF-8 sequence");
++    c = (c << 6) | (p[i] & 0b111111);
++  }
++
++  *new_pos = p + len;
++  return c;
++}

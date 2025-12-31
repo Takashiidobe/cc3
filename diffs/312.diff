@@ -1,0 +1,129 @@
+subject: Add __attribute__((packed))
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index a5281af..f73eeec 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -349,6 +349,7 @@ struct Type {
+   // Struct
+   Member *members;
+   bool is_flexible;
++  bool is_packed;
+ 
+   // Function type
+   Type *return_ty;
+diff --git a/parse.c b/parse.c
+index bff47ef..825e91a 100644
+--- a/parse.c
++++ b/parse.c
+@@ -2595,8 +2595,26 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
+   ty->members = head.next;
+ }
+ 
+-// struct-union-decl = ident? ("{" struct-members)?
++// attribute = ("__attribute__" "(" "(" "packed" ")" ")")?
++static Token *attribute(Token *tok, Type *ty) {
++  if (!equal(tok, "__attribute__"))
++    return tok;
++
++  tok = tok->next;
++  tok = skip(tok, "(");
++  tok = skip(tok, "(");
++  tok = skip(tok, "packed");
++  tok = skip(tok, ")");
++  tok = skip(tok, ")");
++  ty->is_packed = true;
++  return tok;
++}
++
++// struct-union-decl = attribute? ident? ("{" struct-members)?
+ static Type *struct_union_decl(Token **rest, Token *tok) {
++  Type *ty = struct_type();
++  tok = attribute(tok, ty);
++
+   // Read a tag.
+   Token *tag = NULL;
+   if (tok->kind == TK_IDENT) {
+@@ -2607,11 +2625,10 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
+   if (tag && !equal(tok, "{")) {
+     *rest = tok;
+ 
+-    Type *ty = find_tag(tag);
+-    if (ty)
+-      return ty;
++    Type *ty2 = find_tag(tag);
++    if (ty2)
++      return ty2;
+ 
+-    ty = struct_type();
+     ty->size = -1;
+     push_tag_scope(tag, ty);
+     return ty;
+@@ -2620,8 +2637,8 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
+   tok = skip(tok, "{");
+ 
+   // Construct a struct object.
+-  Type *ty = struct_type();
+-  struct_members(rest, tok, ty);
++  struct_members(&tok, tok, ty);
++  *rest = attribute(tok, ty);
+ 
+   if (tag) {
+     // If this is a redefinition, overwrite a previous type.
+@@ -2663,12 +2680,13 @@ static Type *struct_decl(Token **rest, Token *tok) {
+       mem->bit_offset = bits % (sz * 8);
+       bits += mem->bit_width;
+     } else {
+-      bits = align_to(bits, mem->align * 8);
++      if (!ty->is_packed)
++        bits = align_to(bits, mem->align * 8);
+       mem->offset = bits / 8;
+       bits += mem->ty->size * 8;
+     }
+ 
+-    if (ty->align < mem->align)
++    if (!ty->is_packed && ty->align < mem->align)
+       ty->align = mem->align;
+   }
+ 
+diff --git a/test/attribute.c b/test/attribute.c
+new file mode 100644
+index 0000000..a9adf39
+--- /dev/null
++++ b/test/attribute.c
+@@ -0,0 +1,21 @@
++#include "test.h"
++#include "stddef.h"
++
++int main() {
++  ASSERT(5, ({ struct { char a; int b; } __attribute__((packed)) x; sizeof(x); }));
++  ASSERT(0, offsetof(struct __attribute__((packed)) { char a; int b; }, a));
++  ASSERT(1, offsetof(struct __attribute__((packed)) { char a; int b; }, b));
++
++  ASSERT(5, ({ struct __attribute__((packed)) { char a; int b; } x; sizeof(x); }));
++  ASSERT(0, offsetof(struct { char a; int b; } __attribute__((packed)), a));
++  ASSERT(1, offsetof(struct { char a; int b; } __attribute__((packed)), b));
++
++  ASSERT(9, ({ typedef struct { char a; int b[2]; } __attribute__((packed)) T; sizeof(T); }));
++  ASSERT(9, ({ typedef struct __attribute__((packed)) { char a; int b[2]; } T; sizeof(T); }));
++
++  ASSERT(1, offsetof(struct __attribute__((packed)) T { char a; int b[2]; }, b));
++  ASSERT(1, _Alignof(struct __attribute__((packed)) { char a; int b[2]; }));
++
++  printf("OK\n");
++  return 0;
++}
+diff --git a/tokenize.c b/tokenize.c
+index 5abb7bc..5c49c02 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -167,6 +167,7 @@ static bool is_keyword(Token *tok) {
+       "unsigned", "const", "volatile", "auto", "register", "restrict",
+       "__restrict", "__restrict__", "_Noreturn", "float", "double",
+       "typeof", "asm", "_Thread_local", "__thread", "_Atomic",
++      "__attribute__",
+     };
+ 
+     for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

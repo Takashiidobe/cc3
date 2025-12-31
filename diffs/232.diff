@@ -1,0 +1,49 @@
+subject: Add UTF-32 string literal initializer
+
+
+
+diff --git a/parse.c b/parse.c
+index a5fb66f..7711d23 100644
+--- a/parse.c
++++ b/parse.c
+@@ -833,6 +833,12 @@ static void string_initializer(Token **rest, Token *tok, Initializer *init) {
+       init->children[i]->expr = new_num(str[i], tok);
+     break;
+   }
++  case 4: {
++    uint32_t *str = (uint32_t *)tok->str;
++    for (int i = 0; i < len; i++)
++      init->children[i]->expr = new_num(str[i], tok);
++    break;
++  }
+   default:
+     unreachable();
+   }
+diff --git a/test/unicode.c b/test/unicode.c
+index 72c4cf5..377cc22 100644
+--- a/test/unicode.c
++++ b/test/unicode.c
+@@ -3,6 +3,8 @@
+ #define STR(x) #x
+ 
+ typedef unsigned short char16_t;
++typedef unsigned int char32_t;
++typedef int wchar_t;
+ 
+ int main() {
+   ASSERT(4, sizeof(L'\0'));
+@@ -83,6 +85,14 @@ int main() {
+   ASSERT(u'β', ({ char16_t x[] = u"αβ"; x[1]; }));
+   ASSERT(6, ({ char16_t x[] = u"αβ"; sizeof(x); }));
+ 
++  ASSERT(U'🤔', ({ char32_t x[] = U"🤔x"; x[0]; }));
++  ASSERT(U'x', ({ char32_t x[] = U"🤔x"; x[1]; }));
++  ASSERT(12, ({ char32_t x[] = U"🤔x"; sizeof(x); }));
++
++  ASSERT(L'🤔', ({ wchar_t x[] = L"🤔x"; x[0]; }));
++  ASSERT(L'x', ({ wchar_t x[] = L"🤔x"; x[1]; }));
++  ASSERT(12, ({ wchar_t x[] = L"🤔x"; sizeof(x); }));
++
+   printf("OK\n");
+   return 0;
+ }

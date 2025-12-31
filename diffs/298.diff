@@ -1,0 +1,56 @@
+subject: [GNU] Add "#pragma once"
+
+
+
+diff --git a/preprocess.c b/preprocess.c
+index dee0a7c..f877dd2 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -67,6 +67,7 @@ struct Hideset {
+ 
+ static HashMap macros;
+ static CondIncl *cond_incl;
++static HashMap pragma_once;
+ 
+ static Token *preprocess2(Token *tok);
+ static Macro *find_macro(Token *tok);
+@@ -781,6 +782,10 @@ static char *detect_include_guard(Token *tok) {
+ }
+ 
+ static Token *include_file(Token *tok, char *path, Token *filename_tok) {
++  // Check for "#pragma once"
++  if (hashmap_get(&pragma_once, path))
++    return tok;
++
+   // If we read the same file before, and if the file was guarded
+   // by the usual #ifndef ... #endif pattern, we may be able to
+   // skip the file without opening it.
+@@ -939,6 +944,12 @@ static Token *preprocess2(Token *tok) {
+       continue;
+     }
+ 
++    if (equal(tok, "pragma") && equal(tok->next, "once")) {
++      hashmap_put(&pragma_once, tok->file->name, (void *)1);
++      tok = skip_line(tok->next->next);
++      continue;
++    }
++
+     if (equal(tok, "pragma")) {
+       do {
+         tok = tok->next;
+diff --git a/test/pragma-once.c b/test/pragma-once.c
+new file mode 100644
+index 0000000..263a2eb
+--- /dev/null
++++ b/test/pragma-once.c
+@@ -0,0 +1,10 @@
++#include "test.h"
++
++#pragma once
++
++#include "test/pragma-once.c"
++
++int main() {
++  printf("OK\n");
++  return 0;
++}

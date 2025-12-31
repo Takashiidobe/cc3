@@ -1,0 +1,56 @@
+subject: Make an array of at least 16 bytes long to have alignment of at least 16 bytes
+
+Quote from AMD64 System V ABI: "An array uses the same alignment as
+its elements, except that a local or global array variable of length
+at least 16 bytes or a C99 variable-length array variable always has
+alignment of at least 16 bytes."
+
+
+diff --git a/codegen.c b/codegen.c
+index 311ce68..9d8a713 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -1102,8 +1102,15 @@ static void assign_lvar_offsets(Obj *prog) {
+       if (var->offset)
+         continue;
+ 
++      // AMD64 System V ABI has a special alignment rule for an array of
++      // length at least 16 bytes. We need to align such array to at least
++      // 16-byte boundaries. See p.14 of
++      // https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-draft.pdf.
++      int align = (var->ty->kind == TY_ARRAY && var->ty->size >= 16)
++        ? MAX(16, var->align) : var->align;
++
+       bottom += var->ty->size;
+-      bottom = align_to(bottom, var->align);
++      bottom = align_to(bottom, align);
+       var->offset = -bottom;
+     }
+ 
+@@ -1121,7 +1128,9 @@ static void emit_data(Obj *prog) {
+     else
+       println("  .globl %s", var->name);
+ 
+-    println("  .align %d", var->align);
++    int align = (var->ty->kind == TY_ARRAY && var->ty->size >= 16)
++      ? MAX(16, var->align) : var->align;
++    println("  .align %d", align);
+ 
+     if (var->init_data) {
+       println("  .data");
+diff --git a/test/alignof.c b/test/alignof.c
+index d71abde..d5c2594 100644
+--- a/test/alignof.c
++++ b/test/alignof.c
+@@ -39,6 +39,11 @@ int main() {
+   ASSERT(1, _Alignof(char) << 63 >> 63);
+   ASSERT(1, ({ char x; _Alignof(x) << 63 >> 63; }));
+ 
++  ASSERT(0, ({ char x[16]; (unsigned long)&x % 16; }));
++  ASSERT(0, ({ char x[17]; (unsigned long)&x % 16; }));
++  ASSERT(0, ({ char x[100]; (unsigned long)&x % 16; }));
++  ASSERT(0, ({ char x[101]; (unsigned long)&x % 16; }));
++
+   printf("OK\n");
+   return 0;
+ }

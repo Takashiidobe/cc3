@@ -1,0 +1,291 @@
+subject: Add one dimensional arrays
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index a7f016b..76640ae 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -128,17 +128,29 @@ typedef enum {
+   TY_INT,
+   TY_PTR,
+   TY_FUNC,
++  TY_ARRAY,
+ } TypeKind;
+ 
+ struct Type {
+   TypeKind kind;
+-
+-  // Pointer
++  int size;      // sizeof() value
++
++  // Pointer-to or array-of type. We intentionally use the same member
++  // to represent pointer/array duality in C.
++  //
++  // In many contexts in which a pointer is expected, we examine this
++  // member instead of "kind" member to determine whether a type is a
++  // pointer or not. That means in many contexts "array of T" is
++  // naturally handled as if it were "pointer to T", as required by
++  // the C spec.
+   Type *base;
+ 
+   // Declaration
+   Token *name;
+ 
++  // Array
++  int array_len;
++
+   // Function type
+   Type *return_ty;
+   Type *params;
+@@ -151,6 +163,7 @@ bool is_integer(Type *ty);
+ Type *copy_type(Type *ty);
+ Type *pointer_to(Type *base);
+ Type *func_type(Type *return_ty);
++Type *array_of(Type *base, int size);
+ void add_type(Node *node);
+ 
+ //
+diff --git a/codegen.c b/codegen.c
+index 5d6641a..041bd1e 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -42,6 +42,27 @@ static void gen_addr(Node *node) {
+   error_tok(node->tok, "not an lvalue");
+ }
+ 
++// Load a value from where %rax is pointing to.
++static void load(Type *ty) {
++  if (ty->kind == TY_ARRAY) {
++    // If it is an array, do not attempt to load a value to the
++    // register because in general we can't load an entire array to a
++    // register. As a result, the result of an evaluation of an array
++    // becomes not the array itself but the address of the array.
++    // This is where "array is automatically converted to a pointer to
++    // the first element of the array in C" occurs.
++    return;
++  }
++
++  printf("  mov (%%rax), %%rax\n");
++}
++
++// Store %rax to an address that the stack top is pointing to.
++static void store(void) {
++  pop("%rdi");
++  printf("  mov %%rax, (%%rdi)\n");
++}
++
+ // Generate code for a given node.
+ static void gen_expr(Node *node) {
+   switch (node->kind) {
+@@ -54,11 +75,11 @@ static void gen_expr(Node *node) {
+     return;
+   case ND_VAR:
+     gen_addr(node);
+-    printf("  mov (%%rax), %%rax\n");
++    load(node->ty);
+     return;
+   case ND_DEREF:
+     gen_expr(node->lhs);
+-    printf("  mov (%%rax), %%rax\n");
++    load(node->ty);
+     return;
+   case ND_ADDR:
+     gen_addr(node->lhs);
+@@ -67,8 +88,7 @@ static void gen_expr(Node *node) {
+     gen_addr(node->lhs);
+     push();
+     gen_expr(node->rhs);
+-    pop("%rdi");
+-    printf("  mov %%rax, (%%rdi)\n");
++    store();
+     return;
+   case ND_FUNCALL: {
+     int nargs = 0;
+@@ -181,7 +201,7 @@ static void assign_lvar_offsets(Function *prog) {
+   for (Function *fn = prog; fn; fn = fn->next) {
+     int offset = 0;
+     for (Obj *var = fn->locals; var; var = var->next) {
+-      offset += 8;
++      offset += var->ty->size;
+       var->offset = -offset;
+     }
+     fn->stack_size = align_to(offset, 16);
+diff --git a/parse.c b/parse.c
+index 1661846..0a380c5 100644
+--- a/parse.c
++++ b/parse.c
+@@ -92,34 +92,49 @@ static char *get_ident(Token *tok) {
+   return strndup(tok->loc, tok->len);
+ }
+ 
++static int get_number(Token *tok) {
++  if (tok->kind != TK_NUM)
++    error_tok(tok, "expected a number");
++  return tok->val;
++}
++
+ // declspec = "int"
+ static Type *declspec(Token **rest, Token *tok) {
+   *rest = skip(tok, "int");
+   return ty_int;
+ }
+ 
+-// type-suffix = ("(" func-params? ")")?
+-// func-params = param ("," param)*
++// func-params = (param ("," param)*)? ")"
+ // param       = declspec declarator
+-static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
+-  if (equal(tok, "(")) {
+-    tok = tok->next;
++static Type *func_params(Token **rest, Token *tok, Type *ty) {
++  Type head = {};
++  Type *cur = &head;
++
++  while (!equal(tok, ")")) {
++    if (cur != &head)
++      tok = skip(tok, ",");
++    Type *basety = declspec(&tok, tok);
++    Type *ty = declarator(&tok, tok, basety);
++    cur = cur->next = copy_type(ty);
++  }
+ 
+-    Type head = {};
+-    Type *cur = &head;
++  ty = func_type(ty);
++  ty->params = head.next;
++  *rest = tok->next;
++  return ty;
++}
+ 
+-    while (!equal(tok, ")")) {
+-      if (cur != &head)
+-        tok = skip(tok, ",");
+-      Type *basety = declspec(&tok, tok);
+-      Type *ty = declarator(&tok, tok, basety);
+-      cur = cur->next = copy_type(ty);
+-    }
++// type-suffix = "(" func-params
++//             | "[" num "]"
++//             | ε
++static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
++  if (equal(tok, "("))
++    return func_params(rest, tok->next, ty);
+ 
+-    ty = func_type(ty);
+-    ty->params = head.next;
+-    *rest = tok->next;
+-    return ty;
++  if (equal(tok, "[")) {
++    int sz = get_number(tok->next);
++    *rest = skip(tok->next->next, "]");
++    return array_of(ty, sz);
+   }
+ 
+   *rest = tok;
+@@ -353,7 +368,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
+   }
+ 
+   // ptr + num
+-  rhs = new_binary(ND_MUL, rhs, new_num(8, tok), tok);
++  rhs = new_binary(ND_MUL, rhs, new_num(lhs->ty->base->size, tok), tok);
+   return new_binary(ND_ADD, lhs, rhs, tok);
+ }
+ 
+@@ -368,7 +383,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
+ 
+   // ptr - num
+   if (lhs->ty->base && is_integer(rhs->ty)) {
+-    rhs = new_binary(ND_MUL, rhs, new_num(8, tok), tok);
++    rhs = new_binary(ND_MUL, rhs, new_num(lhs->ty->base->size, tok), tok);
+     add_type(rhs);
+     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
+     node->ty = lhs->ty;
+@@ -379,7 +394,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
+   if (lhs->ty->base && rhs->ty->base) {
+     Node *node = new_binary(ND_SUB, lhs, rhs, tok);
+     node->ty = ty_int;
+-    return new_binary(ND_DIV, node, new_num(8, tok), tok);
++    return new_binary(ND_DIV, node, new_num(lhs->ty->base->size, tok), tok);
+   }
+ 
+   error_tok(tok, "invalid operands");
+diff --git a/test.sh b/test.sh
+index 27dc787..9377a4c 100755
+--- a/test.sh
++++ b/test.sh
+@@ -112,4 +112,10 @@ assert 7 'int main() { return add2(3,4); } int add2(int x, int y) { return x+y;
+ assert 1 'int main() { return sub2(4,3); } int sub2(int x, int y) { return x-y; }'
+ assert 55 'int main() { return fib(9); } int fib(int x) { if (x<=1) return 1; return fib(x-1) + fib(x-2); }'
+ 
++assert 3 'int main() { int x[2]; int *y=&x; *y=3; return *x; }'
++
++assert 3 'int main() { int x[3]; *x=3; *(x+1)=4; *(x+2)=5; return *x; }'
++assert 4 'int main() { int x[3]; *x=3; *(x+1)=4; *(x+2)=5; return *(x+1); }'
++assert 5 'int main() { int x[3]; *x=3; *(x+1)=4; *(x+2)=5; return *(x+2); }'
++
+ echo OK
+diff --git a/type.c b/type.c
+index c838db2..c4e9f24 100644
+--- a/type.c
++++ b/type.c
+@@ -1,6 +1,6 @@
+ #include "chibicc.h"
+ 
+-Type *ty_int = &(Type){TY_INT};
++Type *ty_int = &(Type){TY_INT, 8};
+ 
+ bool is_integer(Type *ty) {
+   return ty->kind == TY_INT;
+@@ -15,6 +15,7 @@ Type *copy_type(Type *ty) {
+ Type *pointer_to(Type *base) {
+   Type *ty = calloc(1, sizeof(Type));
+   ty->kind = TY_PTR;
++  ty->size = 8;
+   ty->base = base;
+   return ty;
+ }
+@@ -26,6 +27,15 @@ Type *func_type(Type *return_ty) {
+   return ty;
+ }
+ 
++Type *array_of(Type *base, int len) {
++  Type *ty = calloc(1, sizeof(Type));
++  ty->kind = TY_ARRAY;
++  ty->size = base->size * len;
++  ty->base = base;
++  ty->array_len = len;
++  return ty;
++}
++
+ void add_type(Node *node) {
+   if (!node || node->ty)
+     return;
+@@ -49,7 +59,11 @@ void add_type(Node *node) {
+   case ND_MUL:
+   case ND_DIV:
+   case ND_NEG:
++    node->ty = node->lhs->ty;
++    return;
+   case ND_ASSIGN:
++    if (node->lhs->ty->kind == TY_ARRAY)
++      error_tok(node->lhs->tok, "not an lvalue");
+     node->ty = node->lhs->ty;
+     return;
+   case ND_EQ:
+@@ -64,10 +78,13 @@ void add_type(Node *node) {
+     node->ty = node->var->ty;
+     return;
+   case ND_ADDR:
+-    node->ty = pointer_to(node->lhs->ty);
++    if (node->lhs->ty->kind == TY_ARRAY)
++      node->ty = pointer_to(node->lhs->ty->base);
++    else
++      node->ty = pointer_to(node->lhs->ty);
+     return;
+   case ND_DEREF:
+-    if (node->lhs->ty->kind != TY_PTR)
++    if (!node->lhs->ty->base)
+       error_tok(node->tok, "invalid pointer dereference");
+     node->ty = node->lhs->ty->base;
+     return;

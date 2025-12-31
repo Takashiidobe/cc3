@@ -1,0 +1,75 @@
+subject: Add UTF-32 string literal
+
+
+
+diff --git a/test/unicode.c b/test/unicode.c
+index 145e01c..1b36547 100644
+--- a/test/unicode.c
++++ b/test/unicode.c
+@@ -51,6 +51,19 @@ int main() {
+ 
+   ASSERT(0, strcmp(STR(u"a"), "u\"a\""));
+ 
++  ASSERT(4, sizeof(U""));
++  ASSERT(20, sizeof(U"\xffzzz"));
++  ASSERT(0, memcmp(U"", "\0\0\0\0", 4));
++  ASSERT(0, memcmp(U"abc", "a\0\0\0b\0\0\0c\0\0\0\0\0\0\0", 16));
++  ASSERT(0, memcmp(U"日本語", "\345e\0\0,g\0\0\236\212\0\0\0\0\0\0", 16));
++  ASSERT(0, memcmp(U"🍣", "c\363\001\0\0\0\0\0", 8));
++  ASSERT(u'β', U"βb"[0]);
++  ASSERT(u'b', U"βb"[1]);
++  ASSERT(0, U"βb"[2]);
++  ASSERT(1, U"\xffffffff"[0] >> 31);
++
++  ASSERT(0, strcmp(STR(U"a"), "U\"a\""));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 804b0cd..e5c7f38 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -282,6 +282,28 @@ static Token *read_utf16_string_literal(char *start, char *quote) {
+   return tok;
+ }
+ 
++// Read a UTF-8-encoded string literal and transcode it in UTF-32.
++//
++// UTF-32 is a fixed-width encoding for Unicode. Each code point is
++// encoded in 4 bytes.
++static Token *read_utf32_string_literal(char *start, char *quote, Type *ty) {
++  char *end = string_literal_end(quote + 1);
++  uint32_t *buf = calloc(4, end - quote);
++  int len = 0;
++
++  for (char *p = quote + 1; p < end;) {
++    if (*p == '\\')
++      buf[len++] = read_escaped_char(&p, p + 1);
++    else
++      buf[len++] = decode_utf8(&p, p);
++  }
++
++  Token *tok = new_token(TK_STR, start, end + 1);
++  tok->ty = array_of(ty, len + 1);
++  tok->str = (char *)buf;
++  return tok;
++}
++
+ static Token *read_char_literal(char *start, char *quote, Type *ty) {
+   char *p = quote + 1;
+   if (*p == '\0')
+@@ -522,6 +544,13 @@ Token *tokenize(File *file) {
+       continue;
+     }
+ 
++    // UTF-32 string literal
++    if (startswith(p, "U\"")) {
++      cur = cur->next = read_utf32_string_literal(p, p + 1, ty_uint);
++      p += cur->len;
++      continue;
++    }
++
+     // Character literal
+     if (*p == '\'') {
+       cur = cur->next = read_char_literal(p, p, ty_int);

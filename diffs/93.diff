@@ -1,0 +1,184 @@
+subject: Add <<, >>, <<= and >>=
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index e1950cd..e24fce1 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -100,6 +100,8 @@ typedef enum {
+   ND_BITAND,    // &
+   ND_BITOR,     // |
+   ND_BITXOR,    // ^
++  ND_SHL,       // <<
++  ND_SHR,       // >>
+   ND_EQ,        // ==
+   ND_NE,        // !=
+   ND_LT,        // <
+diff --git a/codegen.c b/codegen.c
+index e2602bc..881095e 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -329,6 +329,17 @@ static void gen_expr(Node *node) {
+ 
+     println("  movzb %%al, %%rax");
+     return;
++  case ND_SHL:
++    println("  mov %%rdi, %%rcx");
++    println("  shl %%cl, %s", ax);
++    return;
++  case ND_SHR:
++    println("  mov %%rdi, %%rcx");
++    if (node->ty->size == 8)
++      println("  sar %%cl, %s", ax);
++    else
++      println("  sar %%cl, %s", ax);
++    return;
+   }
+ 
+   error_tok(node->tok, "invalid expression");
+diff --git a/parse.c b/parse.c
+index fc72e88..6fcf10e 100644
+--- a/parse.c
++++ b/parse.c
+@@ -97,6 +97,7 @@ static Node *bitxor(Token **rest, Token *tok);
+ static Node *bitand(Token **rest, Token *tok);
+ static Node *equality(Token **rest, Token *tok);
+ static Node *relational(Token **rest, Token *tok);
++static Node *shift(Token **rest, Token *tok);
+ static Node *add(Token **rest, Token *tok);
+ static Node *new_add(Node *lhs, Node *rhs, Token *tok);
+ static Node *new_sub(Node *lhs, Node *rhs, Token *tok);
+@@ -844,6 +845,7 @@ static Node *to_assign(Node *binary) {
+ 
+ // assign    = logor (assign-op assign)?
+ // assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^="
++//           | "<<=" | ">>="
+ static Node *assign(Token **rest, Token *tok) {
+   Node *node = logor(&tok, tok);
+ 
+@@ -874,6 +876,12 @@ static Node *assign(Token **rest, Token *tok) {
+   if (equal(tok, "^="))
+     return to_assign(new_binary(ND_BITXOR, node, assign(rest, tok->next), tok));
+ 
++  if (equal(tok, "<<="))
++    return to_assign(new_binary(ND_SHL, node, assign(rest, tok->next), tok));
++
++  if (equal(tok, ">>="))
++    return to_assign(new_binary(ND_SHR, node, assign(rest, tok->next), tok));
++
+   *rest = tok;
+   return node;
+ }
+@@ -955,30 +963,52 @@ static Node *equality(Token **rest, Token *tok) {
+   }
+ }
+ 
+-// relational = add ("<" add | "<=" add | ">" add | ">=" add)*
++// relational = shift ("<" shift | "<=" shift | ">" shift | ">=" shift)*
+ static Node *relational(Token **rest, Token *tok) {
+-  Node *node = add(&tok, tok);
++  Node *node = shift(&tok, tok);
+ 
+   for (;;) {
+     Token *start = tok;
+ 
+     if (equal(tok, "<")) {
+-      node = new_binary(ND_LT, node, add(&tok, tok->next), start);
++      node = new_binary(ND_LT, node, shift(&tok, tok->next), start);
+       continue;
+     }
+ 
+     if (equal(tok, "<=")) {
+-      node = new_binary(ND_LE, node, add(&tok, tok->next), start);
++      node = new_binary(ND_LE, node, shift(&tok, tok->next), start);
+       continue;
+     }
+ 
+     if (equal(tok, ">")) {
+-      node = new_binary(ND_LT, add(&tok, tok->next), node, start);
++      node = new_binary(ND_LT, shift(&tok, tok->next), node, start);
+       continue;
+     }
+ 
+     if (equal(tok, ">=")) {
+-      node = new_binary(ND_LE, add(&tok, tok->next), node, start);
++      node = new_binary(ND_LE, shift(&tok, tok->next), node, start);
++      continue;
++    }
++
++    *rest = tok;
++    return node;
++  }
++}
++
++// shift = add ("<<" add | ">>" add)*
++static Node *shift(Token **rest, Token *tok) {
++  Node *node = add(&tok, tok);
++
++  for (;;) {
++    Token *start = tok;
++
++    if (equal(tok, "<<")) {
++      node = new_binary(ND_SHL, node, add(&tok, tok->next), start);
++      continue;
++    }
++
++    if (equal(tok, ">>")) {
++      node = new_binary(ND_SHR, node, add(&tok, tok->next), start);
+       continue;
+     }
+ 
+diff --git a/test/arith.c b/test/arith.c
+index 164627a..e9721b0 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -95,6 +95,19 @@ int main() {
+   ASSERT(7, ({ int i=6; i|=3; i; }));
+   ASSERT(10, ({ int i=15; i^=5; i; }));
+ 
++  ASSERT(1, 1<<0);
++  ASSERT(8, 1<<3);
++  ASSERT(10, 5<<1);
++  ASSERT(2, 5>>1);
++  ASSERT(-1, -1>>1);
++  ASSERT(1, ({ int i=1; i<<=0; i; }));
++  ASSERT(8, ({ int i=1; i<<=3; i; }));
++  ASSERT(10, ({ int i=5; i<<=1; i; }));
++  ASSERT(2, ({ int i=5; i>>=1; i; }));
++  ASSERT(-1, -1);
++  ASSERT(-1, ({ int i=-1; i; }));
++  ASSERT(-1, ({ int i=-1; i>>=1; i; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 98360c6..64debc4 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -116,8 +116,9 @@ static int from_hex(char c) {
+ // Read a punctuator token from p and returns its length.
+ static int read_punct(char *p) {
+   static char *kw[] = {
+-    "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=", "++", "--",
+-    "%=", "&=", "|=", "^=", "&&", "||",
++    "<<=", ">>=", "==", "!=", "<=", ">=", "->", "+=",
++    "-=", "*=", "/=", "++", "--", "%=", "&=", "|=", "^=", "&&",
++    "||", "<<", ">>",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+diff --git a/type.c b/type.c
+index c482d15..c87acd6 100644
+--- a/type.c
++++ b/type.c
+@@ -138,6 +138,8 @@ void add_type(Node *node) {
+     node->ty = ty_int;
+     return;
+   case ND_BITNOT:
++  case ND_SHL:
++  case ND_SHR:
+     node->ty = node->lhs->ty;
+     return;
+   case ND_VAR:

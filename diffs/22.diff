@@ -1,0 +1,112 @@
+subject: Support zero-arity function calls
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index c449234..f49aed4 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -80,6 +80,7 @@ typedef enum {
+   ND_IF,        // "if"
+   ND_FOR,       // "for" or "while"
+   ND_BLOCK,     // { ... }
++  ND_FUNCALL,   // Function call
+   ND_EXPR_STMT, // Expression statement
+   ND_VAR,       // Variable
+   ND_NUM,       // Integer
+@@ -105,6 +106,9 @@ struct Node {
+   // Block
+   Node *body;
+ 
++  // Function call
++  char *funcname;
++
+   Obj *var;      // Used if kind == ND_VAR
+   int val;       // Used if kind == ND_NUM
+ };
+diff --git a/codegen.c b/codegen.c
+index 2c4834e..1a8f2ff 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -68,6 +68,10 @@ static void gen_expr(Node *node) {
+     pop("%rdi");
+     printf("  mov %%rax, (%%rdi)\n");
+     return;
++  case ND_FUNCALL:
++    printf("  mov $0, %%rax\n");
++    printf("  call %s\n", node->funcname);
++    return;
+   }
+ 
+   gen_expr(node->rhs);
+diff --git a/parse.c b/parse.c
+index 2716f4d..1f5d754 100644
+--- a/parse.c
++++ b/parse.c
+@@ -418,7 +418,8 @@ static Node *unary(Token **rest, Token *tok) {
+   return primary(rest, tok);
+ }
+ 
+-// primary = "(" expr ")" | ident | num
++// primary = "(" expr ")" | ident args? | num
++// args = "(" ")"
+ static Node *primary(Token **rest, Token *tok) {
+   if (equal(tok, "(")) {
+     Node *node = expr(&tok, tok->next);
+@@ -427,6 +428,15 @@ static Node *primary(Token **rest, Token *tok) {
+   }
+ 
+   if (tok->kind == TK_IDENT) {
++    // Function call
++    if (equal(tok->next, "(")) {
++      Node *node = new_node(ND_FUNCALL, tok);
++      node->funcname = strndup(tok->loc, tok->len);
++      *rest = skip(tok->next->next, ")");
++      return node;
++    }
++
++    // Variable
+     Obj *var = find_var(tok);
+     if (!var)
+       error_tok(tok, "undefined variable");
+diff --git a/test.sh b/test.sh
+index ef5b21e..973e5cd 100755
+--- a/test.sh
++++ b/test.sh
+@@ -1,10 +1,15 @@
+ #!/bin/bash
++cat <<EOF | gcc -xc -c -o tmp2.o -
++int ret3() { return 3; }
++int ret5() { return 5; }
++EOF
++
+ assert() {
+   expected="$1"
+   input="$2"
+ 
+   ./chibicc "$input" > tmp.s || exit
+-  gcc -static -o tmp tmp.s
++  gcc -static -o tmp tmp.s tmp2.o
+   ./tmp
+   actual="$?"
+ 
+@@ -92,4 +97,7 @@ assert 5 '{ int x=3; return (&x+2)-&x+3; }'
+ assert 8 '{ int x, y; x=3; y=5; return x+y; }'
+ assert 8 '{ int x=3, y=5; return x+y; }'
+ 
++assert 3 '{ return ret3(); }'
++assert 5 '{ return ret5(); }'
++
+ echo OK
+diff --git a/type.c b/type.c
+index 75d4b47..fc892a6 100644
+--- a/type.c
++++ b/type.c
+@@ -42,6 +42,7 @@ void add_type(Node *node) {
+   case ND_LT:
+   case ND_LE:
+   case ND_NUM:
++  case ND_FUNCALL:
+     node->ty = ty_int;
+     return;
+   case ND_VAR:

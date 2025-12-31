@@ -1,0 +1,67 @@
+subject: Add sizeof
+
+
+
+diff --git a/parse.c b/parse.c
+index 26062a7..e037405 100644
+--- a/parse.c
++++ b/parse.c
+@@ -501,7 +501,7 @@ static Node *funcall(Token **rest, Token *tok) {
+   return node;
+ }
+ 
+-// primary = "(" expr ")" | ident func-args? | num
++// primary = "(" expr ")" | "sizeof" unary | ident func-args? | num
+ static Node *primary(Token **rest, Token *tok) {
+   if (equal(tok, "(")) {
+     Node *node = expr(&tok, tok->next);
+@@ -509,6 +509,12 @@ static Node *primary(Token **rest, Token *tok) {
+     return node;
+   }
+ 
++  if (equal(tok, "sizeof")) {
++    Node *node = unary(rest, tok->next);
++    add_type(node);
++    return new_num(node->ty->size, tok);
++  }
++
+   if (tok->kind == TK_IDENT) {
+     // Function call
+     if (equal(tok->next, "("))
+diff --git a/test.sh b/test.sh
+index 8918c0d..8bc6a42 100755
+--- a/test.sh
++++ b/test.sh
+@@ -138,4 +138,17 @@ assert 3 'int main() { int x[2][3]; int *y=x; y[3]=3; return x[1][0]; }'
+ assert 4 'int main() { int x[2][3]; int *y=x; y[4]=4; return x[1][1]; }'
+ assert 5 'int main() { int x[2][3]; int *y=x; y[5]=5; return x[1][2]; }'
+ 
++assert 8 'int main() { int x; return sizeof(x); }'
++assert 8 'int main() { int x; return sizeof x; }'
++assert 8 'int main() { int *x; return sizeof(x); }'
++assert 32 'int main() { int x[4]; return sizeof(x); }'
++assert 96 'int main() { int x[3][4]; return sizeof(x); }'
++assert 32 'int main() { int x[3][4]; return sizeof(*x); }'
++assert 8 'int main() { int x[3][4]; return sizeof(**x); }'
++assert 9 'int main() { int x[3][4]; return sizeof(**x) + 1; }'
++assert 9 'int main() { int x[3][4]; return sizeof **x + 1; }'
++assert 8 'int main() { int x[3][4]; return sizeof(**x + 1); }'
++assert 8 'int main() { int x=1; return sizeof(x=2); }'
++assert 1 'int main() { int x=1; sizeof(x=2); return x; }'
++
+ echo OK
+diff --git a/tokenize.c b/tokenize.c
+index a1b80e7..701a018 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -89,7 +89,9 @@ static int read_punct(char *p) {
+ }
+ 
+ static bool is_keyword(Token *tok) {
+-  static char *kw[] = {"return", "if", "else", "for", "while", "int"};
++  static char *kw[] = {
++    "return", "if", "else", "for", "while", "int", "sizeof",
++  };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+     if (equal(tok, kw[i]))

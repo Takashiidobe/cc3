@@ -1,0 +1,84 @@
+subject: Compile an integer to an exectuable that exits with the given number
+
+
+
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..efe9ce5
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,7 @@
++**/*~
++**/\#*
++**/*.o
++**/*.s
++**/a.out
++/tmp*
++/chibicc
+diff --git a/Makefile b/Makefile
+new file mode 100644
+index 0000000..e6a3398
+--- /dev/null
++++ b/Makefile
+@@ -0,0 +1,12 @@
++CFLAGS=-std=c11 -g -fno-common
++
++chibicc: main.o
++	$(CC) -o chibicc main.o $(LDFLAGS)
++
++test: chibicc
++	./test.sh
++
++clean:
++	rm -f chibicc *.o *~ tmp*
++
++.PHONY: test clean
+diff --git a/main.c b/main.c
+new file mode 100644
+index 0000000..c99ceac
+--- /dev/null
++++ b/main.c
+@@ -0,0 +1,15 @@
++#include <stdio.h>
++#include <stdlib.h>
++
++int main(int argc, char **argv) {
++  if (argc != 2) {
++    fprintf(stderr, "%s: invalid number of arguments\n", argv[0]);
++    return 1;
++  }
++
++  printf("  .globl main\n");
++  printf("main:\n");
++  printf("  mov $%d, %%rax\n", atoi(argv[1]));
++  printf("  ret\n");
++  return 0;
++}
+diff --git a/test.sh b/test.sh
+new file mode 100755
+index 0000000..4e766a9
+--- /dev/null
++++ b/test.sh
+@@ -0,0 +1,22 @@
++#!/bin/bash
++assert() {
++  expected="$1"
++  input="$2"
++
++  ./chibicc "$input" > tmp.s || exit
++  gcc -static -o tmp tmp.s
++  ./tmp
++  actual="$?"
++
++  if [ "$actual" = "$expected" ]; then
++    echo "$input => $actual"
++  else
++    echo "$input => $expected expected, but got $actual"
++    exit 1
++  fi
++}
++
++assert 0 0
++assert 42 42
++
++echo OK

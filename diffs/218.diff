@@ -1,0 +1,32 @@
+subject: Make "main" to implicitly return 0
+
+
+
+diff --git a/codegen.c b/codegen.c
+index 9d8a713..b31087b 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -1284,6 +1284,13 @@ static void emit_text(Obj *prog) {
+     gen_stmt(fn->body);
+     assert(depth == 0);
+ 
++    // [https://www.sigbus.info/n1570#5.1.2.2.3p1] The C spec defines
++    // a special rule for the main function. Reaching the end of the
++    // main function is equivalent to returning 0, even though the
++    // behavior is undefined for the other functions.
++    if (strcmp(fn->name, "main") == 0)
++      println("  mov $0, %%rax");
++
+     // Epilogue
+     println(".L.return.%s:", fn->name);
+     println("  mov %%rbp, %%rsp");
+diff --git a/test/function.c b/test/function.c
+index d401952..0fff547 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -366,5 +366,4 @@ int main() {
+   ASSERT(5, (***add2)(2,3));
+ 
+   printf("OK\n");
+-  return 0;
+ }

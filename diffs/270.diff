@@ -1,0 +1,152 @@
+subject: Add alloca()
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 83f81fb..ad4a6d7 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -153,6 +153,7 @@ struct Obj {
+   Node *body;
+   Obj *locals;
+   Obj *va_area;
++  Obj *alloca_bottom;
+   int stack_size;
+ 
+   // Static inline function
+diff --git a/codegen.c b/codegen.c
+index 69cc423..907c1aa 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -560,6 +560,34 @@ static void copy_struct_mem(void) {
+   }
+ }
+ 
++static void builtin_alloca(void) {
++  // Align size to 16 bytes.
++  println("  add $15, %%rdi");
++  println("  and $0xfffffff0, %%edi");
++
++  // Shift the temporary area by %rdi.
++  println("  mov %d(%%rbp), %%rcx", current_fn->alloca_bottom->offset);
++  println("  sub %%rsp, %%rcx");
++  println("  mov %%rsp, %%rax");
++  println("  sub %%rdi, %%rsp");
++  println("  mov %%rsp, %%rdx");
++  println("1:");
++  println("  cmp $0, %%rcx");
++  println("  je 2f");
++  println("  mov (%%rax), %%r8b");
++  println("  mov %%r8b, (%%rdx)");
++  println("  inc %%rdx");
++  println("  inc %%rax");
++  println("  dec %%rcx");
++  println("  jmp 1b");
++  println("2:");
++
++  // Move alloca_bottom pointer.
++  println("  mov %d(%%rbp), %%rax", current_fn->alloca_bottom->offset);
++  println("  sub %%rdi, %%rax");
++  println("  mov %%rax, %d(%%rbp)", current_fn->alloca_bottom->offset);
++}
++
+ // Generate code for a given node.
+ static void gen_expr(Node *node) {
+   println("  .loc %d %d", node->tok->file->file_no, node->tok->line_no);
+@@ -732,6 +760,13 @@ static void gen_expr(Node *node) {
+     return;
+   }
+   case ND_FUNCALL: {
++    if (node->lhs->kind == ND_VAR && !strcmp(node->lhs->var->name, "alloca")) {
++      gen_expr(node->args);
++      println("  mov %%rax, %%rdi");
++      builtin_alloca();
++      return;
++    }
++
+     int stack_args = push_args(node);
+     gen_expr(node->lhs);
+ 
+@@ -1241,6 +1276,7 @@ static void emit_text(Obj *prog) {
+     println("  push %%rbp");
+     println("  mov %%rsp, %%rbp");
+     println("  sub $%d, %%rsp", fn->stack_size);
++    println("  mov %%rsp, %d(%%rbp)", fn->alloca_bottom->offset);
+ 
+     // Save arg registers if function is variadic
+     if (fn->va_area) {
+diff --git a/parse.c b/parse.c
+index b3c57f8..1b39afb 100644
+--- a/parse.c
++++ b/parse.c
+@@ -2912,8 +2912,10 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
+     new_lvar("", pointer_to(rty));
+ 
+   fn->params = locals;
++
+   if (ty->is_variadic)
+     fn->va_area = new_lvar("__va_area__", array_of(ty_char, 136));
++  fn->alloca_bottom = new_lvar("__alloca_size__", pointer_to(ty_char));
+ 
+   tok = skip(tok, "{");
+ 
+@@ -2999,8 +3001,16 @@ static void scan_globals(void) {
+   globals = head.next;
+ }
+ 
++static void declare_builtin_functions(void) {
++  Type *ty = func_type(pointer_to(ty_void));
++  ty->params = copy_type(ty_int);
++  Obj *builtin = new_gvar("alloca", ty);
++  builtin->is_definition = false;
++}
++
+ // program = (typedef | function-definition | global-variable)*
+ Obj *parse(Token *tok) {
++  declare_builtin_functions();
+   globals = NULL;
+ 
+   while (tok->kind != TK_EOF) {
+diff --git a/test/alloca.c b/test/alloca.c
+new file mode 100644
+index 0000000..ed6ffbc
+--- /dev/null
++++ b/test/alloca.c
+@@ -0,0 +1,28 @@
++#include "test.h"
++
++void *fn(int x, void *p, int y) { return p; }
++
++int main() {
++  int i = 0;
++
++  char *p1 = alloca(16);
++  char *p2 = alloca(16);
++  char *p3 = 1 + (char *)alloca(3) + 1;
++  p3 -= 2;
++  char *p4 = fn(1, alloca(16), 3);
++
++  ASSERT(16, p1 - p2);
++  ASSERT(16, p2 - p3);
++  ASSERT(16, p3 - p4);
++
++  memcpy(p1, "0123456789abcdef", 16);
++  memcpy(p2, "ghijklmnopqrstuv", 16);
++  memcpy(p3, "wxy", 3);
++
++  ASSERT(0, memcmp(p1, "0123456789abcdef", 16));
++  ASSERT(0, memcmp(p2, "ghijklmnopqrstuv", 16));
++  ASSERT(0, memcmp(p3, "wxy", 3));
++
++  printf("OK\n");
++  return 0;
++}
+diff --git a/test/test.h b/test/test.h
+index f6fa2db..1e640ae 100644
+--- a/test/test.h
++++ b/test/test.h
+@@ -10,3 +10,4 @@ int memcmp(char *p, char *q, long n);
+ void exit(int n);
+ int vsprintf();
+ long strlen(char *s);
++void *memcpy(void *dest, void *src, long n);

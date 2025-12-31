@@ -1,0 +1,37 @@
+subject: Make struct member access to work with `=` and `?:`
+
+
+
+diff --git a/codegen.c b/codegen.c
+index f5e3571..da11fd7 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -167,6 +167,13 @@ static void gen_addr(Node *node) {
+       return;
+     }
+     break;
++  case ND_ASSIGN:
++  case ND_COND:
++    if (node->ty->kind == TY_STRUCT || node->ty->kind == TY_UNION) {
++      gen_expr(node);
++      return;
++    }
++    break;
+   case ND_VLA_PTR:
+     println("  lea %d(%%rbp), %%rax", node->var->offset);
+     return;
+diff --git a/test/struct.c b/test/struct.c
+index 64fb03f..40f77f0 100644
+--- a/test/struct.c
++++ b/test/struct.c
+@@ -57,6 +57,10 @@ int main() {
+   ASSERT(1, ({ struct T { struct T *next; int x; } a; struct T b; b.x=1; a.next=&b; a.next->x; }));
+   ASSERT(4, ({ typedef struct T T; struct T { int x; }; sizeof(T); }));
+ 
++  ASSERT(2, ({ struct {int a;} x={1}, y={2}; (x=y).a; }));
++  ASSERT(1, ({ struct {int a;} x={1}, y={2}; (1?x:y).a; }));
++  ASSERT(2, ({ struct {int a;} x={1}, y={2}; (0?x:y).a; }));
++
+   printf("OK\n");
+   return 0;
+ }

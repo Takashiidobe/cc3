@@ -1,0 +1,207 @@
+subject: Merge Function with Var
+
+No functional change
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 76640ae..9a96816 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -45,22 +45,22 @@ Token *tokenize(char *input);
+ // parse.c
+ //
+ 
+-// Local variable
++// Variable or function
+ typedef struct Obj Obj;
+ struct Obj {
+   Obj *next;
+-  char *name; // Variable name
+-  Type *ty;   // Type
+-  int offset; // Offset from RBP
+-};
++  char *name;    // Variable name
++  Type *ty;      // Type
++  bool is_local; // local or global/function
+ 
+-// Function
+-typedef struct Function Function;
+-struct Function {
+-  Function *next;
+-  char *name;
+-  Obj *params;
++  // Local variable
++  int offset;
+ 
++  // Global variable or function
++  bool is_function;
++
++  // Function
++  Obj *params;
+   Node *body;
+   Obj *locals;
+   int stack_size;
+@@ -118,7 +118,7 @@ struct Node {
+   int val;       // Used if kind == ND_NUM
+ };
+ 
+-Function *parse(Token *tok);
++Obj *parse(Token *tok);
+ 
+ //
+ // type.c
+@@ -170,4 +170,4 @@ void add_type(Node *node);
+ // codegen.c
+ //
+ 
+-void codegen(Function *prog);
++void codegen(Obj *prog);
+diff --git a/codegen.c b/codegen.c
+index 041bd1e..cbbe25f 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -2,7 +2,7 @@
+ 
+ static int depth;
+ static char *argreg[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+-static Function *current_fn;
++static Obj *current_fn;
+ 
+ static void gen_expr(Node *node);
+ 
+@@ -197,8 +197,11 @@ static void gen_stmt(Node *node) {
+ }
+ 
+ // Assign offsets to local variables.
+-static void assign_lvar_offsets(Function *prog) {
+-  for (Function *fn = prog; fn; fn = fn->next) {
++static void assign_lvar_offsets(Obj *prog) {
++  for (Obj *fn = prog; fn; fn = fn->next) {
++    if (!fn->is_function)
++      continue;
++
+     int offset = 0;
+     for (Obj *var = fn->locals; var; var = var->next) {
+       offset += var->ty->size;
+@@ -208,11 +211,15 @@ static void assign_lvar_offsets(Function *prog) {
+   }
+ }
+ 
+-void codegen(Function *prog) {
++void codegen(Obj *prog) {
+   assign_lvar_offsets(prog);
+ 
+-  for (Function *fn = prog; fn; fn = fn->next) {
++  for (Obj *fn = prog; fn; fn = fn->next) {
++    if (!fn->is_function)
++      continue;
++
+     printf("  .globl %s\n", fn->name);
++    printf("  .text\n");
+     printf("%s:\n", fn->name);
+     current_fn = fn;
+ 
+diff --git a/main.c b/main.c
+index a855d90..f0e7518 100644
+--- a/main.c
++++ b/main.c
+@@ -4,8 +4,9 @@ int main(int argc, char **argv) {
+   if (argc != 2)
+     error("%s: invalid number of arguments", argv[0]);
+ 
++  // Tokenize and parse.
+   Token *tok = tokenize(argv[1]);
+-  Function *prog = parse(tok);
++  Obj *prog = parse(tok);
+ 
+   // Traverse the AST to emit assembly.
+   codegen(prog);
+diff --git a/parse.c b/parse.c
+index e037405..059fcb9 100644
+--- a/parse.c
++++ b/parse.c
+@@ -20,7 +20,8 @@
+ 
+ // All local variable instances created during parsing are
+ // accumulated to this list.
+-Obj *locals;
++static Obj *locals;
++static Obj *globals;
+ 
+ static Type *declspec(Token **rest, Token *tok);
+ static Type *declarator(Token **rest, Token *tok, Type *ty);
+@@ -78,15 +79,28 @@ static Node *new_var_node(Obj *var, Token *tok) {
+   return node;
+ }
+ 
+-static Obj *new_lvar(char *name, Type *ty) {
++static Obj *new_var(char *name, Type *ty) {
+   Obj *var = calloc(1, sizeof(Obj));
+   var->name = name;
+   var->ty = ty;
++  return var;
++}
++
++static Obj *new_lvar(char *name, Type *ty) {
++  Obj *var = new_var(name, ty);
++  var->is_local = true;
+   var->next = locals;
+   locals = var;
+   return var;
+ }
+ 
++static Obj *new_gvar(char *name, Type *ty) {
++  Obj *var = new_var(name, ty);
++  var->next = globals;
++  globals = var;
++  return var;
++}
++
+ static char *get_ident(Token *tok) {
+   if (tok->kind != TK_IDENT)
+     error_tok(tok, "expected an identifier");
+@@ -544,29 +558,29 @@ static void create_param_lvars(Type *param) {
+   }
+ }
+ 
+-static Function *function(Token **rest, Token *tok) {
+-  Type *ty = declspec(&tok, tok);
+-  ty = declarator(&tok, tok, ty);
++static Token *function(Token *tok, Type *basety) {
++  Type *ty = declarator(&tok, tok, basety);
+ 
+-  locals = NULL;
++  Obj *fn = new_gvar(get_ident(ty->name), ty);
++  fn->is_function = true;
+ 
+-  Function *fn = calloc(1, sizeof(Function));
+-  fn->name = get_ident(ty->name);
++  locals = NULL;
+   create_param_lvars(ty->params);
+   fn->params = locals;
+ 
+   tok = skip(tok, "{");
+-  fn->body = compound_stmt(rest, tok);
++  fn->body = compound_stmt(&tok, tok);
+   fn->locals = locals;
+-  return fn;
++  return tok;
+ }
+ 
+-// program = function-definition*
+-Function *parse(Token *tok) {
+-  Function head = {};
+-  Function *cur = &head;
++// program = (function-definition | global-variable)*
++Obj *parse(Token *tok) {
++  globals = NULL;
+ 
+-  while (tok->kind != TK_EOF)
+-    cur = cur->next = function(&tok, tok);
+-  return head.next;
++  while (tok->kind != TK_EOF) {
++    Type *basety = declspec(&tok, tok);
++    tok = function(tok, basety);
++  }
++  return globals;
+ }

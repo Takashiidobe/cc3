@@ -1,0 +1,168 @@
+subject: Add flonum +, -, * and /
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 31c5479..b850385 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -291,6 +291,7 @@ extern Type *ty_double;
+ 
+ bool is_integer(Type *ty);
+ bool is_flonum(Type *ty);
++bool is_numeric(Type *ty);
+ Type *copy_type(Type *ty);
+ Type *pointer_to(Type *base);
+ Type *func_type(Type *return_ty);
+diff --git a/codegen.c b/codegen.c
+index a775136..70b9f63 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -279,6 +279,22 @@ static void gen_expr(Node *node) {
+   }
+   case ND_NEG:
+     gen_expr(node->lhs);
++
++    switch (node->ty->kind) {
++    case TY_FLOAT:
++      println("  mov $1, %%rax");
++      println("  shl $31, %%rax");
++      println("  movq %%rax, %%xmm1");
++      println("  xorps %%xmm1, %%xmm0");
++      return;
++    case TY_DOUBLE:
++      println("  mov $1, %%rax");
++      println("  shl $63, %%rax");
++      println("  movq %%rax, %%xmm1");
++      println("  xorpd %%xmm1, %%xmm0");
++      return;
++    }
++
+     println("  neg %%rax");
+     return;
+   case ND_VAR:
+@@ -424,6 +440,18 @@ static void gen_expr(Node *node) {
+     char *sz = (node->lhs->ty->kind == TY_FLOAT) ? "ss" : "sd";
+ 
+     switch (node->kind) {
++    case ND_ADD:
++      println("  add%s %%xmm1, %%xmm0", sz);
++      return;
++    case ND_SUB:
++      println("  sub%s %%xmm1, %%xmm0", sz);
++      return;
++    case ND_MUL:
++      println("  mul%s %%xmm1, %%xmm0", sz);
++      return;
++    case ND_DIV:
++      println("  div%s %%xmm1, %%xmm0", sz);
++      return;
+     case ND_EQ:
+     case ND_NE:
+     case ND_LT:
+@@ -496,13 +524,13 @@ static void gen_expr(Node *node) {
+       println("  mov %%rdx, %%rax");
+     return;
+   case ND_BITAND:
+-    println("  and %%rdi, %%rax");
++    println("  and %s, %s", di, ax);
+     return;
+   case ND_BITOR:
+-    println("  or %%rdi, %%rax");
++    println("  or %s, %s", di, ax);
+     return;
+   case ND_BITXOR:
+-    println("  xor %%rdi, %%rax");
++    println("  xor %s, %s", di, ax);
+     return;
+   case ND_EQ:
+   case ND_NE:
+diff --git a/parse.c b/parse.c
+index ac1a792..fef1192 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1759,7 +1759,7 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
+   add_type(rhs);
+ 
+   // num + num
+-  if (is_integer(lhs->ty) && is_integer(rhs->ty))
++  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
+     return new_binary(ND_ADD, lhs, rhs, tok);
+ 
+   if (lhs->ty->base && rhs->ty->base)
+@@ -1783,7 +1783,7 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
+   add_type(rhs);
+ 
+   // num - num
+-  if (is_integer(lhs->ty) && is_integer(rhs->ty))
++  if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
+     return new_binary(ND_SUB, lhs, rhs, tok);
+ 
+   // ptr - num
+diff --git a/test/float.c b/test/float.c
+index 082a9fa..2ad0853 100644
+--- a/test/float.c
++++ b/test/float.c
+@@ -59,6 +59,27 @@ int main() {
+   ASSERT(1, 5.0f<=5);
+   ASSERT(1, 4.9f<=5);
+ 
++  ASSERT(6, 2.3+3.8);
++  ASSERT(-1, 2.3-3.8);
++  ASSERT(-3, -3.8);
++  ASSERT(13, 3.3*4);
++  ASSERT(2, 5.0/2);
++
++  ASSERT(6, 2.3f+3.8f);
++  ASSERT(6, 2.3f+3.8);
++  ASSERT(-1, 2.3f-3.8);
++  ASSERT(-3, -3.8f);
++  ASSERT(13, 3.3f*4);
++  ASSERT(2, 5.0f/2);
++
++  ASSERT(0, 0.0/0.0 == 0.0/0.0);
++  ASSERT(1, 0.0/0.0 != 0.0/0.0);
++
++  ASSERT(0, 0.0/0.0 < 0);
++  ASSERT(0, 0.0/0.0 <= 0);
++  ASSERT(0, 0.0/0.0 > 0);
++  ASSERT(0, 0.0/0.0 >= 0);
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/sizeof.c b/test/sizeof.c
+index c550c8c..1ec50f4 100644
+--- a/test/sizeof.c
++++ b/test/sizeof.c
+@@ -87,6 +87,15 @@ int main() {
+   ASSERT(4, sizeof(float));
+   ASSERT(8, sizeof(double));
+ 
++  ASSERT(4, sizeof(1f+2));
++  ASSERT(8, sizeof(1.0+2));
++  ASSERT(4, sizeof(1f-2));
++  ASSERT(8, sizeof(1.0-2));
++  ASSERT(4, sizeof(1f*2));
++  ASSERT(8, sizeof(1.0*2));
++  ASSERT(4, sizeof(1f/2));
++  ASSERT(8, sizeof(1.0/2));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/type.c b/type.c
+index 358919f..6c3a14d 100644
+--- a/type.c
++++ b/type.c
+@@ -34,6 +34,10 @@ bool is_flonum(Type *ty) {
+   return ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE;
+ }
+ 
++bool is_numeric(Type *ty) {
++  return is_integer(ty) || is_flonum(ty);
++}
++
+ Type *copy_type(Type *ty) {
+   Type *ret = calloc(1, sizeof(Type));
+   *ret = *ty;

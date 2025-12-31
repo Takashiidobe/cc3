@@ -1,0 +1,204 @@
+subject: Add floating-point constant
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index d4fcabf..31c5479 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -44,6 +44,7 @@ struct Token {
+   TokenKind kind; // Token kind
+   Token *next;    // Next token
+   int64_t val;    // If kind is TK_NUM, its value
++  double fval;    // If kind is TK_NUM, its value
+   char *loc;      // Token location
+   int len;        // Token length
+   Type *ty;       // Used if TK_NUM or TK_STR
+@@ -200,6 +201,7 @@ struct Node {
+ 
+   // Numeric literal
+   int64_t val;
++  double fval;
+ };
+ 
+ Node *new_cast(Node *expr, Type *ty);
+@@ -216,6 +218,8 @@ typedef enum {
+   TY_SHORT,
+   TY_INT,
+   TY_LONG,
++  TY_FLOAT,
++  TY_DOUBLE,
+   TY_ENUM,
+   TY_PTR,
+   TY_FUNC,
+@@ -282,7 +286,11 @@ extern Type *ty_ushort;
+ extern Type *ty_uint;
+ extern Type *ty_ulong;
+ 
++extern Type *ty_float;
++extern Type *ty_double;
++
+ bool is_integer(Type *ty);
++bool is_flonum(Type *ty);
+ Type *copy_type(Type *ty);
+ Type *pointer_to(Type *base);
+ Type *func_type(Type *return_ty);
+diff --git a/codegen.c b/codegen.c
+index bff6b5a..fb27fb5 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -187,9 +187,25 @@ static void gen_expr(Node *node) {
+   switch (node->kind) {
+   case ND_NULL_EXPR:
+     return;
+-  case ND_NUM:
++  case ND_NUM: {
++    union { float f32; double f64; uint32_t u32; uint64_t u64; } u;
++
++    switch (node->ty->kind) {
++    case TY_FLOAT:
++      u.f32 = node->fval;
++      println("  mov $%u, %%eax  # float %f", u.u32, node->fval);
++      println("  movq %%rax, %%xmm0");
++      return;
++    case TY_DOUBLE:
++      u.f64 = node->fval;
++      println("  mov $%lu, %%rax  # double %f", u.u64, node->fval);
++      println("  movq %%rax, %%xmm0");
++      return;
++    }
++
+     println("  mov $%ld, %%rax", node->val);
+     return;
++  }
+   case ND_NEG:
+     gen_expr(node->lhs);
+     println("  neg %%rax");
+diff --git a/parse.c b/parse.c
+index 81bc84f..c39865c 100644
+--- a/parse.c
++++ b/parse.c
+@@ -2236,7 +2236,14 @@ static Node *primary(Token **rest, Token *tok) {
+   }
+ 
+   if (tok->kind == TK_NUM) {
+-    Node *node = new_num(tok->val, tok);
++    Node *node;
++    if (is_flonum(tok->ty)) {
++      node = new_node(ND_NUM, tok);
++      node->fval = tok->fval;
++    } else {
++      node = new_num(tok->val, tok);
++    }
++
+     node->ty = tok->ty;
+     *rest = tok->next;
+     return node;
+diff --git a/test/literal.c b/test/literal.c
+index 4521c90..bc7c173 100644
+--- a/test/literal.c
++++ b/test/literal.c
+@@ -78,6 +78,19 @@ int main() {
+   ASSERT(-1, 0x1 << 31 >> 31);
+   ASSERT(-1, 0b1 << 31 >> 31);
+ 
++  0.0;
++  1.0;
++  3e+8;
++  0x10.1p0;
++  .1E4f;
++
++  ASSERT(4, sizeof(8f));
++  ASSERT(4, sizeof(0.3F));
++  ASSERT(8, sizeof(0.));
++  ASSERT(8, sizeof(.0));
++  ASSERT(8, sizeof(5.l));
++  ASSERT(8, sizeof(2.0L));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 144e6e3..ce16a84 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -289,9 +289,6 @@ static Token *read_int_literal(char *start) {
+     u = true;
+   }
+ 
+-  if (isalnum(*p))
+-    error_at(p, "invalid digit");
+-
+   // Infer a type.
+   Type *ty;
+   if (base == 10) {
+@@ -326,6 +323,33 @@ static Token *read_int_literal(char *start) {
+   return tok;
+ }
+ 
++static Token *read_number(char *start) {
++  // Try to parse as an integer constant.
++  Token *tok = read_int_literal(start);
++  if (!strchr(".eEfF", start[tok->len]))
++    return tok;
++
++  // If it's not an integer, it must be a floating point constant.
++  char *end;
++  double val = strtod(start, &end);
++
++  Type *ty;
++  if (*end == 'f' || *end == 'F') {
++    ty = ty_float;
++    end++;
++  } else if (*end == 'l' || *end == 'L') {
++    ty = ty_double;
++    end++;
++  } else {
++    ty = ty_double;
++  }
++
++  tok = new_token(TK_NUM, start, end);
++  tok->fval = val;
++  tok->ty = ty;
++  return tok;
++}
++
+ static void convert_keywords(Token *tok) {
+   for (Token *t = tok; t->kind != TK_EOF; t = t->next)
+     if (is_keyword(t))
+@@ -379,8 +403,8 @@ static Token *tokenize(char *filename, char *p) {
+     }
+ 
+     // Numeric literal
+-    if (isdigit(*p)) {
+-      cur = cur->next = read_int_literal(p);
++    if (isdigit(*p) || (*p == '.' && isdigit(p[1]))) {
++      cur = cur->next = read_number(p);
+       p += cur->len;
+       continue;
+     }
+diff --git a/type.c b/type.c
+index 6d1aae4..7bcec3d 100644
+--- a/type.c
++++ b/type.c
+@@ -13,6 +13,9 @@ Type *ty_ushort = &(Type){TY_SHORT, 2, 2, true};
+ Type *ty_uint = &(Type){TY_INT, 4, 4, true};
+ Type *ty_ulong = &(Type){TY_LONG, 8, 8, true};
+ 
++Type *ty_float = &(Type){TY_FLOAT, 4, 4};
++Type *ty_double = &(Type){TY_DOUBLE, 8, 8};
++
+ static Type *new_type(TypeKind kind, int size, int align) {
+   Type *ty = calloc(1, sizeof(Type));
+   ty->kind = kind;
+@@ -27,6 +30,10 @@ bool is_integer(Type *ty) {
+          k == TY_INT  || k == TY_LONG || k == TY_ENUM;
+ }
+ 
++bool is_flonum(Type *ty) {
++  return ty->kind == TY_FLOAT || ty->kind == TY_DOUBLE;
++}
++
+ Type *copy_type(Type *ty) {
+   Type *ret = calloc(1, sizeof(Type));
+   *ret = *ty;

@@ -1,0 +1,99 @@
+subject: Add atomic_exchange
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 6f19a5e..339ebce 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -221,6 +221,7 @@ typedef enum {
+   ND_MEMZERO,   // Zero-clear a stack variable
+   ND_ASM,       // "asm"
+   ND_CAS,       // Atomic compare-and-swap
++  ND_EXCH,      // Atomic exchange
+ } NodeKind;
+ 
+ // AST node type
+diff --git a/codegen.c b/codegen.c
+index ac296c0..f5e3571 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -983,6 +983,16 @@ static void gen_expr(Node *node) {
+     println("  movzbl %%cl, %%eax");
+     return;
+   }
++  case ND_EXCH: {
++    gen_expr(node->lhs);
++    push();
++    gen_expr(node->rhs);
++    pop("%rdi");
++
++    int sz = node->lhs->ty->base->size;
++    println("  xchg %s, (%%rdi)", reg_ax(sz));
++    return;
++  }
+   }
+ 
+   switch (node->lhs->ty->kind) {
+diff --git a/include/stdatomic.h b/include/stdatomic.h
+index 238f10b..560d223 100644
+--- a/include/stdatomic.h
++++ b/include/stdatomic.h
+@@ -7,4 +7,7 @@
+ #define atomic_compare_exchange_strong(p, old, new) \
+   __builtin_compare_and_swap((p), (old), (new))
+ 
++#define atomic_exchange(obj, val) __builtin_atomic_exchange(obj, val)
++#define atomic_exchange_explicit(obj, val, order) __builtin_atomic_exchange(obj, val)
++
+ #endif
+diff --git a/parse.c b/parse.c
+index df86076..1c2348b 100644
+--- a/parse.c
++++ b/parse.c
+@@ -2954,6 +2954,16 @@ static Node *primary(Token **rest, Token *tok) {
+     return node;
+   }
+ 
++  if (equal(tok, "__builtin_atomic_exchange")) {
++    Node *node = new_node(ND_EXCH, tok);
++    tok = skip(tok->next, "(");
++    node->lhs = assign(&tok, tok);
++    tok = skip(tok, ",");
++    node->rhs = assign(&tok, tok);
++    *rest = skip(tok, ")");
++    return node;
++  }
++
+   if (tok->kind == TK_IDENT) {
+     // Variable or enum constant
+     VarScope *sc = find_var(tok);
+diff --git a/test/atomic.c b/test/atomic.c
+index 748db27..d358bae 100644
+--- a/test/atomic.c
++++ b/test/atomic.c
+@@ -38,6 +38,9 @@ static int add_millions(void) {
+ int main() {
+   ASSERT(3*1000*1000, add_millions());
+ 
++  ASSERT(3, ({ int x=3; atomic_exchange(&x, 5); }));
++  ASSERT(5, ({ int x=3; atomic_exchange(&x, 5); x; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/type.c b/type.c
+index 440d4aa..02ade59 100644
+--- a/type.c
++++ b/type.c
+@@ -298,5 +298,10 @@ void add_type(Node *node) {
+     if (node->cas_old->ty->kind != TY_PTR)
+       error_tok(node->cas_old->tok, "pointer expected");
+     return;
++  case ND_EXCH:
++    if (node->lhs->ty->kind != TY_PTR)
++      error_tok(node->cas_addr->tok, "pointer expected");
++    node->ty = node->lhs->ty->base;
++    return;
+   }
+ }

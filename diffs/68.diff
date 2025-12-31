@@ -1,0 +1,82 @@
+subject: Report an error on undefined/undeclared functions
+
+
+
+diff --git a/parse.c b/parse.c
+index ba29f00..d801251 100644
+--- a/parse.c
++++ b/parse.c
+@@ -925,6 +925,13 @@ static Node *funcall(Token **rest, Token *tok) {
+   Token *start = tok;
+   tok = tok->next->next;
+ 
++  VarScope *sc = find_var(start);
++  if (!sc)
++    error_tok(start, "implicit declaration of a function");
++  if (!sc->var || sc->var->ty->kind != TY_FUNC)
++    error_tok(start, "not a function");
++
++  Type *ty = sc->var->ty->return_ty;
+   Node head = {};
+   Node *cur = &head;
+ 
+@@ -932,12 +939,14 @@ static Node *funcall(Token **rest, Token *tok) {
+     if (cur != &head)
+       tok = skip(tok, ",");
+     cur = cur->next = assign(&tok, tok);
++    add_type(cur);
+   }
+ 
+   *rest = skip(tok, ")");
+ 
+   Node *node = new_node(ND_FUNCALL, start);
+   node->funcname = strndup(start->loc, start->len);
++  node->ty = ty;
+   node->args = head.next;
+   return node;
+ }
+diff --git a/test/test.h b/test/test.h
+index 0e7b236..d5fa40d 100644
+--- a/test/test.h
++++ b/test/test.h
+@@ -1,3 +1,4 @@
+ #define ASSERT(x, y) assert(x, y, #y)
+ 
++void assert(int expected, int actual, char *code);
+ int printf();
+diff --git a/tokenize.c b/tokenize.c
+index a194ada..1e255c4 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -15,7 +15,7 @@ void error(char *fmt, ...) {
+   exit(1);
+ }
+ 
+-// Reports an error message in the following format and exit.
++// Reports an error message in the following format.
+ //
+ // foo.c:10: x = y + 1;
+ //               ^ <error message here>
+@@ -40,7 +40,6 @@ static void verror_at(int line_no, char *loc, char *fmt, va_list ap) {
+   fprintf(stderr, "^ ");
+   vfprintf(stderr, fmt, ap);
+   fprintf(stderr, "\n");
+-  exit(1);
+ }
+ 
+ void error_at(char *loc, char *fmt, ...) {
+@@ -52,12 +51,14 @@ void error_at(char *loc, char *fmt, ...) {
+   va_list ap;
+   va_start(ap, fmt);
+   verror_at(line_no, loc, fmt, ap);
++  exit(1);
+ }
+ 
+ void error_tok(Token *tok, char *fmt, ...) {
+   va_list ap;
+   va_start(ap, fmt);
+   verror_at(tok->line_no, tok->loc, fmt, ap);
++  exit(1);
+ }
+ 
+ // Consumes the current token if it matches `op`.

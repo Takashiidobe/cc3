@@ -1,0 +1,73 @@
+subject: Add a do-nothing preprocessor
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 5b8c759..6f99ac4 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -72,11 +72,18 @@ void error_tok(Token *tok, char *fmt, ...);
+ bool equal(Token *tok, char *op);
+ Token *skip(Token *tok, char *op);
+ bool consume(Token **rest, Token *tok, char *str);
++void convert_keywords(Token *tok);
+ Token *tokenize_file(char *filename);
+ 
+ #define unreachable() \
+   error("internal error at %s:%d", __FILE__, __LINE__)
+ 
++//
++// preprocess.c
++//
++
++Token *preprocess(Token *tok);
++
+ //
+ // parse.c
+ //
+diff --git a/main.c b/main.c
+index 43c7df2..e3cc90e 100644
+--- a/main.c
++++ b/main.c
+@@ -168,6 +168,7 @@ static void run_cc1(int argc, char **argv, char *input, char *output) {
+ static void cc1(void) {
+   // Tokenize and parse.
+   Token *tok = tokenize_file(base_file);
++  tok = preprocess(tok);
+   Obj *prog = parse(tok);
+ 
+   // Traverse the AST to emit assembly.
+diff --git a/preprocess.c b/preprocess.c
+new file mode 100644
+index 0000000..e26e4d9
+--- /dev/null
++++ b/preprocess.c
+@@ -0,0 +1,7 @@
++#include "chibicc.h"
++
++// Entry point function of the preprocessor.
++Token *preprocess(Token *tok) {
++  convert_keywords(tok);
++  return tok;
++}
+diff --git a/tokenize.c b/tokenize.c
+index 76a5c27..59b7949 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -350,7 +350,7 @@ static Token *read_number(char *start) {
+   return tok;
+ }
+ 
+-static void convert_keywords(Token *tok) {
++void convert_keywords(Token *tok) {
+   for (Token *t = tok; t->kind != TK_EOF; t = t->next)
+     if (is_keyword(t))
+       t->kind = TK_KEYWORD;
+@@ -446,7 +446,6 @@ static Token *tokenize(char *filename, char *p) {
+ 
+   cur = cur->next = new_token(TK_EOF, p, p);
+   add_line_numbers(head.next);
+-  convert_keywords(head.next);
+   return head.next;
+ }
+ 

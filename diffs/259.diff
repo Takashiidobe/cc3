@@ -1,0 +1,142 @@
+subject: Handle inline functions as static functions
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 8107226..ff4a99d 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -140,6 +140,7 @@ struct Obj {
+   Relocation *rel;
+ 
+   // Function
++  bool is_inline;
+   Obj *params;
+   Node *body;
+   Obj *locals;
+diff --git a/parse.c b/parse.c
+index 34ebd88..53374e9 100644
+--- a/parse.c
++++ b/parse.c
+@@ -54,6 +54,7 @@ typedef struct {
+   bool is_typedef;
+   bool is_static;
+   bool is_extern;
++  bool is_inline;
+   int align;
+ } VarAttr;
+ 
+@@ -363,7 +364,7 @@ static void push_tag_scope(Token *tok, Type *ty) {
+ }
+ 
+ // declspec = ("void" | "_Bool" | "char" | "short" | "int" | "long"
+-//             | "typedef" | "static" | "extern"
++//             | "typedef" | "static" | "extern" | "inline"
+ //             | "signed" | "unsigned"
+ //             | struct-decl | union-decl | typedef-name
+ //             | enum-specifier | typeof-specifier
+@@ -405,7 +406,8 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+ 
+   while (is_typename(tok)) {
+     // Handle storage class specifiers.
+-    if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern")) {
++    if (equal(tok, "typedef") || equal(tok, "static") || equal(tok, "extern") ||
++        equal(tok, "inline")) {
+       if (!attr)
+         error_tok(tok, "storage class specifier is not allowed in this context");
+ 
+@@ -413,11 +415,13 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+         attr->is_typedef = true;
+       else if (equal(tok, "static"))
+         attr->is_static = true;
+-      else
++      else if (equal(tok, "extern"))
+         attr->is_extern = true;
++      else
++        attr->is_inline = true;
+ 
+-      if (attr->is_typedef && attr->is_static + attr->is_extern > 1)
+-        error_tok(tok, "typedef may not be used together with static or extern");
++      if (attr->is_typedef && attr->is_static + attr->is_extern + attr->is_inline > 1)
++        error_tok(tok, "typedef may not be used together with static, extern or inline");
+       tok = tok->next;
+       continue;
+     }
+@@ -1401,7 +1405,7 @@ static bool is_typename(Token *tok) {
+     "void", "_Bool", "char", "short", "int", "long", "struct", "union",
+     "typedef", "enum", "static", "extern", "_Alignas", "signed", "unsigned",
+     "const", "volatile", "auto", "register", "restrict", "__restrict",
+-    "__restrict__", "_Noreturn", "float", "double", "typeof",
++    "__restrict__", "_Noreturn", "float", "double", "typeof", "inline",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+@@ -2851,7 +2855,8 @@ static Token *function(Token *tok, Type *basety, VarAttr *attr) {
+   Obj *fn = new_gvar(get_ident(ty->name), ty);
+   fn->is_function = true;
+   fn->is_definition = !consume(&tok, tok, ";");
+-  fn->is_static = attr->is_static;
++  fn->is_static = attr->is_static || (attr->is_inline && !attr->is_extern);
++  fn->is_inline = attr->is_inline;
+ 
+   if (!fn->is_definition)
+     return tok;
+diff --git a/test/driver.sh b/test/driver.sh
+index d1423a4..9dadeec 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -113,4 +113,16 @@ check 'ignored options'
+ printf '\xef\xbb\xbfxyz\n' | $chibicc -E -o- - | grep -q '^xyz'
+ check 'BOM marker'
+ 
++# Inline functions
++echo 'inline void foo() {}' > $tmp/inline1.c
++echo 'inline void foo() {}' > $tmp/inline2.c
++echo 'int main() { return 0; }' > $tmp/inline3.c
++$chibicc -o /dev/null $tmp/inline1.c $tmp/inline2.c $tmp/inline3.c
++check inline
++
++echo 'extern inline void foo() {}' > $tmp/inline1.c
++echo 'int foo(); int main() { foo(); }' > $tmp/inline2.c
++$chibicc -o /dev/null $tmp/inline1.c $tmp/inline2.c
++check inline
++
+ echo OK
+diff --git a/test/extern.c b/test/extern.c
+index c1e8956..4a1dac9 100644
+--- a/test/extern.c
++++ b/test/extern.c
+@@ -3,6 +3,10 @@
+ extern int ext1;
+ extern int *ext2;
+ 
++inline int inline_fn(void) {
++  return 3;
++}
++
+ int main() {
+   ASSERT(5, ext1);
+   ASSERT(5, *ext2);
+diff --git a/test/function.c b/test/function.c
+index 0fff547..586f10c 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -197,6 +197,10 @@ Ty21 struct_test38(void) {
+   return (Ty21){1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20};
+ }
+ 
++inline int inline_fn(void) {
++  return 3;
++}
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -365,5 +369,7 @@ int main() {
+ 
+   ASSERT(5, (***add2)(2,3));
+ 
++  ASSERT(3, inline_fn());
++
+   printf("OK\n");
+ }

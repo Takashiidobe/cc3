@@ -1,0 +1,84 @@
+subject: Handle function argument type conversion
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 7123dbd..a3c4e1b 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -140,6 +140,7 @@ struct Node {
+ 
+   // Function call
+   char *funcname;
++  Type *func_ty;
+   Node *args;
+ 
+   Obj *var;      // Used if kind == ND_VAR
+diff --git a/parse.c b/parse.c
+index fb9a361..2a4e254 100644
+--- a/parse.c
++++ b/parse.c
+@@ -937,22 +937,35 @@ static Node *funcall(Token **rest, Token *tok) {
+   if (!sc->var || sc->var->ty->kind != TY_FUNC)
+     error_tok(start, "not a function");
+ 
+-  Type *ty = sc->var->ty->return_ty;
++  Type *ty = sc->var->ty;
++  Type *param_ty = ty->params;
++
+   Node head = {};
+   Node *cur = &head;
+ 
+   while (!equal(tok, ")")) {
+     if (cur != &head)
+       tok = skip(tok, ",");
+-    cur = cur->next = assign(&tok, tok);
+-    add_type(cur);
++
++    Node *arg = assign(&tok, tok);
++    add_type(arg);
++
++    if (param_ty) {
++      if (param_ty->kind == TY_STRUCT || param_ty->kind == TY_UNION)
++        error_tok(arg->tok, "passing struct or union is not supported yet");
++      arg = new_cast(arg, param_ty);
++      param_ty = param_ty->next;
++    }
++
++    cur = cur->next = arg;
+   }
+ 
+   *rest = skip(tok, ")");
+ 
+   Node *node = new_node(ND_FUNCALL, start);
+   node->funcname = strndup(start->loc, start->len);
+-  node->ty = ty;
++  node->func_ty = ty;
++  node->ty = ty->return_ty;
+   node->args = head.next;
+   return node;
+ }
+diff --git a/test/function.c b/test/function.c
+index f06301b..c0feb09 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -44,6 +44,10 @@ int g1;
+ int *g1_ptr() { return &g1; }
+ char int_to_char(int x) { return x; }
+ 
++int div_long(long a, long b) {
++  return a / b;
++}
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -65,6 +69,8 @@ int main() {
+ 
+   ASSERT(3, *g1_ptr());
+   ASSERT(5, int_to_char(261));
++  ASSERT(5, int_to_char(261));
++  ASSERT(-5, div_long(-10, 2));
+ 
+   printf("OK\n");
+   return 0;

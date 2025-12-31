@@ -1,0 +1,57 @@
+subject: Add va_copy()
+
+
+
+diff --git a/include/stdarg.h b/include/stdarg.h
+index 9c41e6e..29df41d 100644
+--- a/include/stdarg.h
++++ b/include/stdarg.h
+@@ -49,6 +49,8 @@ static void *__va_arg_fp(__va_elem *ap, int sz, int align) {
+             __va_arg_mem(ap, sizeof(ty), _Alignof(ty)));                \
+   })
+ 
++#define va_copy(dest, src) ((dest)[0] = (src)[0])
++
+ #define __GNUC_VA_LIST 1
+ typedef va_list __gnuc_va_list;
+ 
+diff --git a/test/test.h b/test/test.h
+index 30bd7cd..af27f72 100644
+--- a/test/test.h
++++ b/test/test.h
+@@ -8,3 +8,4 @@ int strcmp(char *p, char *q);
+ int strncmp(char *p, char *q, long n);
+ int memcmp(char *p, char *q, long n);
+ void exit(int n);
++int vsprintf();
+diff --git a/test/varargs.c b/test/varargs.c
+index 623a90f..2468fec 100644
+--- a/test/varargs.c
++++ b/test/varargs.c
+@@ -28,12 +28,14 @@ int sum2(int x, ...) {
+   }
+ }
+ 
+-char *fmt(char *buf, char *fmt, ...) {
++void fmt(char *buf, char *fmt, ...) {
+   va_list ap;
+   va_start(ap, fmt);
+-  vsprintf(buf, fmt, ap);
+-  va_end(ap);
+-  return buf;
++
++  va_list ap2;
++  va_copy(ap2, ap);
++  vsprintf(buf, fmt, ap2);
++  va_end(buf);
+ }
+ 
+ int main() {
+@@ -42,6 +44,7 @@ int main() {
+   ASSERT(21, sum2(1, 2.0, 3, 4.0, 5, 6.0, 0));
+   ASSERT(21, sum2(1, 2.0, 3, 4.0, 5, 6.0, 0));
+   ASSERT(210, sum2(1, 2.0, 3, 4.0, 5, 6.0, 7, 8.0, 9, 10.0, 11, 12.0, 13, 14.0, 15, 16.0, 17, 18.0, 19, 20.0, 0));
++  ASSERT(0, ({ char buf[100]; fmt(buf, "%d %d", 2, 3); strcmp(buf, "2 3"); }));
+ 
+   printf("OK\n");
+   return 0;

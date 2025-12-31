@@ -1,0 +1,76 @@
+subject: Add -shared option
+
+
+
+diff --git a/main.c b/main.c
+index 694c11a..414a08f 100644
+--- a/main.c
++++ b/main.c
+@@ -20,6 +20,7 @@ static bool opt_c;
+ static bool opt_cc1;
+ static bool opt_hash_hash_hash;
+ static bool opt_static;
++static bool opt_shared;
+ static char *opt_MF;
+ static char *opt_MT;
+ static char *opt_o;
+@@ -284,6 +285,12 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-shared")) {
++      opt_shared = true;
++      strarray_push(&ld_extra_args, "-shared");
++      continue;
++    }
++
+     if (!strcmp(argv[i], "-hashmap-test")) {
+       hashmap_test();
+       exit(0);
+@@ -598,9 +605,15 @@ static void run_linker(StringArray *inputs, char *output) {
+   char *libpath = find_libpath();
+   char *gcc_libpath = find_gcc_libpath();
+ 
+-  strarray_push(&arr, format("%s/crt1.o", libpath));
+-  strarray_push(&arr, format("%s/crti.o", libpath));
+-  strarray_push(&arr, format("%s/crtbegin.o", gcc_libpath));
++  if (opt_shared) {
++    strarray_push(&arr, format("%s/crti.o", libpath));
++    strarray_push(&arr, format("%s/crtbeginS.o", gcc_libpath));
++  } else {
++    strarray_push(&arr, format("%s/crt1.o", libpath));
++    strarray_push(&arr, format("%s/crti.o", libpath));
++    strarray_push(&arr, format("%s/crtbegin.o", gcc_libpath));
++  }
++
+   strarray_push(&arr, format("-L%s", gcc_libpath));
+   strarray_push(&arr, "-L/usr/lib/x86_64-linux-gnu");
+   strarray_push(&arr, "-L/usr/lib64");
+@@ -636,7 +649,11 @@ static void run_linker(StringArray *inputs, char *output) {
+     strarray_push(&arr, "--no-as-needed");
+   }
+ 
+-  strarray_push(&arr, format("%s/crtend.o", gcc_libpath));
++  if (opt_shared)
++    strarray_push(&arr, format("%s/crtendS.o", gcc_libpath));
++  else
++    strarray_push(&arr, format("%s/crtend.o", gcc_libpath));
++
+   strarray_push(&arr, format("%s/crtn.o", libpath));
+   strarray_push(&arr, NULL);
+ 
+diff --git a/test/driver.sh b/test/driver.sh
+index e6d5bf9..37c295b 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -282,4 +282,10 @@ check -static
+ file $tmp/foo | grep -q 'statically linked'
+ check -static
+ 
++# -shared
++echo 'extern int bar; int foo() { return bar; }' > $tmp/foo.c
++echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/bar.c
++$chibicc -fPIC -shared -o $tmp/foo.so $tmp/foo.c $tmp/bar.c
++check -shared
++
+ echo OK

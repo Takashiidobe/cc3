@@ -1,0 +1,77 @@
+subject: Handle unsigned types in the constant expression
+
+
+
+diff --git a/parse.c b/parse.c
+index 88945b6..ad37ba9 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1392,10 +1392,14 @@ static int64_t eval2(Node *node, char **label) {
+   case ND_MUL:
+     return eval(node->lhs) * eval(node->rhs);
+   case ND_DIV:
++    if (node->ty->is_unsigned)
++      return (uint64_t)eval(node->lhs) / eval(node->rhs);
+     return eval(node->lhs) / eval(node->rhs);
+   case ND_NEG:
+     return -eval(node->lhs);
+   case ND_MOD:
++    if (node->ty->is_unsigned)
++      return (uint64_t)eval(node->lhs) % eval(node->rhs);
+     return eval(node->lhs) % eval(node->rhs);
+   case ND_BITAND:
+     return eval(node->lhs) & eval(node->rhs);
+@@ -1406,14 +1410,20 @@ static int64_t eval2(Node *node, char **label) {
+   case ND_SHL:
+     return eval(node->lhs) << eval(node->rhs);
+   case ND_SHR:
++    if (node->ty->is_unsigned && node->ty->size == 8)
++      return (uint64_t)eval(node->lhs) >> eval(node->rhs);
+     return eval(node->lhs) >> eval(node->rhs);
+   case ND_EQ:
+     return eval(node->lhs) == eval(node->rhs);
+   case ND_NE:
+     return eval(node->lhs) != eval(node->rhs);
+   case ND_LT:
++    if (node->lhs->ty->is_unsigned)
++      return (uint64_t)eval(node->lhs) < eval(node->rhs);
+     return eval(node->lhs) < eval(node->rhs);
+   case ND_LE:
++    if (node->lhs->ty->is_unsigned)
++      return (uint64_t)eval(node->lhs) <= eval(node->rhs);
+     return eval(node->lhs) <= eval(node->rhs);
+   case ND_COND:
+     return eval(node->cond) ? eval2(node->then, label) : eval2(node->els, label);
+@@ -1431,9 +1441,9 @@ static int64_t eval2(Node *node, char **label) {
+     int64_t val = eval2(node->lhs, label);
+     if (is_integer(node->ty)) {
+       switch (node->ty->size) {
+-      case 1: return (uint8_t)val;
+-      case 2: return (uint16_t)val;
+-      case 4: return (uint32_t)val;
++      case 1: return node->ty->is_unsigned ? (uint8_t)val : (int8_t)val;
++      case 2: return node->ty->is_unsigned ? (uint16_t)val : (int16_t)val;
++      case 4: return node->ty->is_unsigned ? (uint32_t)val : (int32_t)val;
+       }
+     }
+     return val;
+diff --git a/test/constexpr.c b/test/constexpr.c
+index d2ba2df..e32f197 100644
+--- a/test/constexpr.c
++++ b/test/constexpr.c
+@@ -35,6 +35,15 @@ int main() {
+   ASSERT(12, ({ char x[(int*)16-1]; sizeof(x); }));
+   ASSERT(3, ({ char x[(int*)16-(int*)4]; sizeof(x); }));
+ 
++  ASSERT(4, ({ char x[(-1>>31)+5]; sizeof(x); }));
++  ASSERT(255, ({ char x[(unsigned char)0xffffffff]; sizeof(x); }));
++  ASSERT(0x800f, ({ char x[(unsigned short)0xffff800f]; sizeof(x); }));
++  ASSERT(1, ({ char x[(unsigned int)0xfffffffffff>>31]; sizeof(x); }));
++  ASSERT(1, ({ char x[(long)-1/((long)1<<62)+1]; sizeof(x); }));
++  ASSERT(4, ({ char x[(unsigned long)-1/((long)1<<62)+1]; sizeof(x); }));
++  ASSERT(1, ({ char x[(unsigned)1<-1]; sizeof(x); }));
++  ASSERT(1, ({ char x[(unsigned)1<=-1]; sizeof(x); }));
++
+   printf("OK\n");
+   return 0;
+ }

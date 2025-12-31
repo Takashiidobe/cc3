@@ -1,0 +1,76 @@
+subject: Add -fcommon and -fno-common flags
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 0f133b7..cb85f36 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -397,4 +397,5 @@ int display_width(char *p, int len);
+ bool file_exists(char *path);
+ 
+ extern StringArray include_paths;
++extern bool opt_fcommon;
+ extern char *base_file;
+diff --git a/codegen.c b/codegen.c
+index 2066802..f488d8d 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -1136,7 +1136,7 @@ static void emit_data(Obj *prog) {
+       ? MAX(16, var->align) : var->align;
+     println("  .align %d", align);
+ 
+-    if (var->is_tentative) {
++    if (opt_fcommon && var->is_tentative) {
+       println("  .comm %s, %d, %d", var->name, var->ty->size, align);
+       continue;
+     }
+diff --git a/main.c b/main.c
+index afaf338..b2637a8 100644
+--- a/main.c
++++ b/main.c
+@@ -1,6 +1,7 @@
+ #include "chibicc.h"
+ 
+ StringArray include_paths;
++bool opt_fcommon = true;
+ 
+ static bool opt_E;
+ static bool opt_S;
+@@ -87,6 +88,16 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-fcommon")) {
++      opt_fcommon = true;
++      continue;
++    }
++
++    if (!strcmp(argv[i], "-fno-common")) {
++      opt_fcommon = false;
++      continue;
++    }
++
+     if (!strcmp(argv[i], "-c")) {
+       opt_c = true;
+       continue;
+diff --git a/test/driver.sh b/test/driver.sh
+index dd11c7f..a223dc5 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -170,4 +170,15 @@ check -idirafter
+ echo "#include \"idirafter\"" | $chibicc -idirafter $tmp/dir1 -I$tmp/dir2 -E - | grep -q bar
+ check -idirafter
+ 
++# -fcommon
++echo 'int foo;' | $chibicc -S -o- - | grep -q '\.comm foo'
++check '-fcommon (default)'
++
++echo 'int foo;' | $chibicc -fcommon -S -o- - | grep -q '\.comm foo'
++check '-fcommon'
++
++# -fno-common
++echo 'int foo;' | $chibicc -fno-common -S -o- - | grep -q '^foo:'
++check '-fno-common'
++
+ echo OK

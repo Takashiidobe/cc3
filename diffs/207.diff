@@ -1,0 +1,108 @@
+subject: Add -D option
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index ba35441..34784ea 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -99,6 +99,8 @@ Token *tokenize_file(char *filename);
+ // preprocess.c
+ //
+ 
++void init_macros(void);
++void define_macro(char *name, char *buf);
+ Token *preprocess(Token *tok);
+ 
+ //
+diff --git a/main.c b/main.c
+index 8fcc1a3..2f920e4 100644
+--- a/main.c
++++ b/main.c
+@@ -40,6 +40,14 @@ static void add_default_include_paths(char *argv0) {
+   strarray_push(&include_paths, "/usr/include");
+ }
+ 
++static void define(char *str) {
++  char *eq = strchr(str, '=');
++  if (eq)
++    define_macro(strndup(str, eq - str), eq + 1);
++  else
++    define_macro(str, "1");
++}
++
+ static void parse_args(int argc, char **argv) {
+   // Make sure that all command line options that take an argument
+   // have an argument.
+@@ -92,6 +100,16 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-D")) {
++      define(argv[++i]);
++      continue;
++    }
++
++    if (!strncmp(argv[i], "-D", 2)) {
++      define(argv[i] + 2);
++      continue;
++    }
++
+     if (!strcmp(argv[i], "-cc1-input")) {
+       base_file = argv[++i];
+       continue;
+@@ -321,6 +339,7 @@ static void run_linker(StringArray *inputs, char *output) {
+ 
+ int main(int argc, char **argv) {
+   atexit(cleanup);
++  init_macros();
+   parse_args(argc, argv);
+ 
+   if (opt_cc1) {
+diff --git a/preprocess.c b/preprocess.c
+index 39d8478..d1fcba3 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -831,7 +831,7 @@ static Token *preprocess2(Token *tok) {
+   return head.next;
+ }
+ 
+-static void define_macro(char *name, char *buf) {
++void define_macro(char *name, char *buf) {
+   Token *tok = tokenize(new_file("<built-in>", 1, buf));
+   add_macro(name, true, tok);
+ }
+@@ -854,7 +854,7 @@ static Token *line_macro(Token *tmpl) {
+   return new_num_token(tmpl->line_no, tmpl);
+ }
+ 
+-static void init_macros(void) {
++void init_macros(void) {
+   // Define predefined macros
+   define_macro("_LP64", "1");
+   define_macro("__C99_MACRO_WITH_VA_ARGS", "1");
+@@ -937,7 +937,6 @@ static void join_adjacent_string_literals(Token *tok1) {
+ 
+ // Entry point function of the preprocessor.
+ Token *preprocess(Token *tok) {
+-  init_macros();
+   tok = preprocess2(tok);
+   if (cond_incl)
+     error_tok(cond_incl->tok, "unterminated conditional directive");
+diff --git a/test/driver.sh b/test/driver.sh
+index 80bc0db..fc5f71f 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -91,4 +91,12 @@ echo foo > $tmp/dir/i-option-test
+ echo "#include \"i-option-test\"" | $chibicc -I$tmp/dir -E - | grep -q foo
+ check -I
+ 
++# -D
++echo foo | $chibicc -Dfoo -E - | grep -q 1
++check -D
++
++# -D
++echo foo | $chibicc -Dfoo=bar -E - | grep -q bar
++check -D
++
+ echo OK

@@ -1,0 +1,40 @@
+subject: Add offsetof
+
+
+
+diff --git a/include/stddef.h b/include/stddef.h
+index 2f525d7..ccd3857 100644
+--- a/include/stddef.h
++++ b/include/stddef.h
+@@ -8,4 +8,6 @@ typedef long ptrdiff_t;
+ typedef unsigned int wchar_t;
+ typedef long max_align_t;
+ 
++#define offsetof(type, member) ((size_t)&(((type *)0)->member))
++
+ #endif
+diff --git a/test/offsetof.c b/test/offsetof.c
+new file mode 100644
+index 0000000..7f16ec9
+--- /dev/null
++++ b/test/offsetof.c
+@@ -0,0 +1,19 @@
++#include "test.h"
++#include <stddef.h>
++
++typedef struct {
++  int a;
++  char b;
++  int c;
++  double d;
++} T;
++
++int main() {
++  ASSERT(0, offsetof(T, a));
++  ASSERT(4, offsetof(T, b));
++  ASSERT(8, offsetof(T, c));
++  ASSERT(16, offsetof(T, d));
++
++  printf("OK\n");
++  return 0;
++}

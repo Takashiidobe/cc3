@@ -1,0 +1,56 @@
+subject: Add __VA_OPT__
+
+
+
+diff --git a/preprocess.c b/preprocess.c
+index dbe74e4..d0cf4d3 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -503,6 +503,13 @@ static Token *paste(Token *lhs, Token *rhs) {
+   return tok;
+ }
+ 
++static bool has_varargs(MacroArg *args) {
++  for (MacroArg *ap = args; ap; ap = ap->next)
++    if (!strcmp(ap->name, "__VA_ARGS__"))
++      return ap->tok->kind != TK_EOF;
++  return false;
++}
++
+ // Replace func-like macro parameters with given arguments.
+ static Token *subst(Token *tok, MacroArg *args) {
+   Token head = {};
+@@ -565,6 +572,17 @@ static Token *subst(Token *tok, MacroArg *args) {
+       continue;
+     }
+ 
++    // If __VA_ARG__ is empty, __VA_OPT__(x) is expanded to the
++    // empty token list. Otherwise, __VA_OPT__(x) is expanded to x.
++    if (equal(tok, "__VA_OPT__") && equal(tok->next, "(")) {
++      MacroArg *arg = read_macro_arg_one(&tok, tok->next->next, true);
++      if (has_varargs(args))
++        for (Token *t = arg->tok; t->kind != TK_EOF; t = t->next)
++          cur = cur->next = t;
++      tok = skip(tok, ")");
++      continue;
++    }
++
+     // Handle a macro token. Macro arguments are completely macro-expanded
+     // before they are substituted into a macro body.
+     if (arg) {
+diff --git a/test/macro.c b/test/macro.c
+index be6fe71..a088984 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -377,6 +377,11 @@ int main() {
+ 
+   ASSERT(0, strcmp(__BASE_FILE__, "test/macro.c"));
+ 
++#define M30(buf, fmt, ...) sprintf(buf, fmt __VA_OPT__(,) __VA_ARGS__)
++  ASSERT(0, ({ char buf[100]; M30(buf, "foo"); strcmp(buf, "foo"); }));
++  ASSERT(0, ({ char buf[100]; M30(buf, "foo%d", 3); strcmp(buf, "foo3"); }));
++  ASSERT(0, ({ char buf[100]; M30(buf, "foo%d%d", 3, 5); strcmp(buf, "foo35"); }));
++
+   printf("OK\n");
+   return 0;
+ }

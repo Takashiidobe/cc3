@@ -1,0 +1,38 @@
+subject: Write to an in-memory buffer before writing to an actual output file
+
+We don't want to leave a partial assembly output if the compiler
+fails during compilation.
+
+Technically speaking, there's still a risk of leaving a partially-
+written output file if the compiler dies during file copy. To fix
+that, we have to write to a temporary file in the same filesystem as
+the final output file and rename the temporary file to atomically
+replace the output file. We don't do that in this patch for the sake
+of succinctness, though.
+
+
+diff --git a/main.c b/main.c
+index 240c7fa..1be91cf 100644
+--- a/main.c
++++ b/main.c
+@@ -254,9 +254,19 @@ static void cc1(void) {
+ 
+   Obj *prog = parse(tok);
+ 
++  // Open a temporary output buffer.
++  char *buf;
++  size_t buflen;
++  FILE *output_buf = open_memstream(&buf, &buflen);
++
+   // Traverse the AST to emit assembly.
++  codegen(prog, output_buf);
++  fclose(output_buf);
++
++  // Write the asembly text to a file.
+   FILE *out = open_file(output_file);
+-  codegen(prog, out);
++  fwrite(buf, buflen, 1, out);
++  fclose(out);
+ }
+ 
+ static void assemble(char *input, char *output) {

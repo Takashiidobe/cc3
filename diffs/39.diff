@@ -1,0 +1,157 @@
+subject: Read code from a file instead of argv[1]
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 9405ffb..0aed332 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -1,6 +1,7 @@
+ #define _POSIX_C_SOURCE 200809L
+ #include <assert.h>
+ #include <ctype.h>
++#include <errno.h>
+ #include <stdarg.h>
+ #include <stdbool.h>
+ #include <stdio.h>
+@@ -48,7 +49,7 @@ void error_tok(Token *tok, char *fmt, ...);
+ bool equal(Token *tok, char *op);
+ Token *skip(Token *tok, char *op);
+ bool consume(Token **rest, Token *tok, char *str);
+-Token *tokenize(char *input);
++Token *tokenize_file(char *filename);
+ 
+ //
+ // parse.c
+diff --git a/main.c b/main.c
+index f0e7518..42ae748 100644
+--- a/main.c
++++ b/main.c
+@@ -5,7 +5,7 @@ int main(int argc, char **argv) {
+     error("%s: invalid number of arguments", argv[0]);
+ 
+   // Tokenize and parse.
+-  Token *tok = tokenize(argv[1]);
++  Token *tok = tokenize_file(argv[1]);
+   Obj *prog = parse(tok);
+ 
+   // Traverse the AST to emit assembly.
+diff --git a/test.sh b/test.sh
+index f24792c..3c65703 100755
+--- a/test.sh
++++ b/test.sh
+@@ -14,7 +14,7 @@ assert() {
+   expected="$1"
+   input="$2"
+ 
+-  ./chibicc "$input" > tmp.s || exit
++  echo "$input" | ./chibicc - > tmp.s || exit
+   gcc -static -o tmp tmp.s tmp2.o
+   ./tmp
+   actual="$?"
+diff --git a/tokenize.c b/tokenize.c
+index 2b1accb..b6b3b22 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -1,5 +1,8 @@
+ #include "chibicc.h"
+ 
++// Input filename
++static char *current_filename;
++
+ // Input string
+ static char *current_input;
+ 
+@@ -12,10 +15,33 @@ void error(char *fmt, ...) {
+   exit(1);
+ }
+ 
+-// Reports an error location and exit.
++// Reports an error message in the following format and exit.
++//
++// foo.c:10: x = y + 1;
++//               ^ <error message here>
+ static void verror_at(char *loc, char *fmt, va_list ap) {
+-  int pos = loc - current_input;
+-  fprintf(stderr, "%s\n", current_input);
++  // Find a line containing `loc`.
++  char *line = loc;
++  while (current_input < line && line[-1] != '\n')
++    line--;
++
++  char *end = loc;
++  while (*end != '\n')
++    end++;
++
++  // Get a line number.
++  int line_no = 1;
++  for (char *p = current_input; p < line; p++)
++    if (*p == '\n')
++      line_no++;
++
++  // Print out the line.
++  int indent = fprintf(stderr, "%s:%d: ", current_filename, line_no);
++  fprintf(stderr, "%.*s\n", (int)(end - line), line);
++
++  // Show the error message.
++  int pos = loc - line + indent;
++
+   fprintf(stderr, "%*s", pos, ""); // print pos spaces.
+   fprintf(stderr, "^ ");
+   vfprintf(stderr, fmt, ap);
+@@ -197,7 +223,8 @@ static void convert_keywords(Token *tok) {
+ }
+ 
+ // Tokenize a given string and returns new tokens.
+-Token *tokenize(char *p) {
++static Token *tokenize(char *filename, char *p) {
++  current_filename = filename;
+   current_input = p;
+   Token head = {};
+   Token *cur = &head;
+@@ -250,3 +277,45 @@ Token *tokenize(char *p) {
+   convert_keywords(head.next);
+   return head.next;
+ }
++
++// Returns the contents of a given file.
++static char *read_file(char *path) {
++  FILE *fp;
++
++  if (strcmp(path, "-") == 0) {
++    // By convention, read from stdin if a given filename is "-".
++    fp = stdin;
++  } else {
++    fp = fopen(path, "r");
++    if (!fp)
++      error("cannot open %s: %s", path, strerror(errno));
++  }
++
++  char *buf;
++  size_t buflen;
++  FILE *out = open_memstream(&buf, &buflen);
++
++  // Read the entire file.
++  for (;;) {
++    char buf2[4096];
++    int n = fread(buf2, 1, sizeof(buf2), fp);
++    if (n == 0)
++      break;
++    fwrite(buf2, 1, n, out);
++  }
++
++  if (fp != stdin)
++    fclose(fp);
++
++  // Make sure that the last line is properly terminated with '\n'.
++  fflush(out);
++  if (buflen == 0 || buf[buflen - 1] != '\n')
++    fputc('\n', out);
++  fputc('\0', out);
++  fclose(out);
++  return buf;
++}
++
++Token *tokenize_file(char *path) {
++  return tokenize(path, read_file(path));
++}

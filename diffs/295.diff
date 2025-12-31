@@ -1,0 +1,80 @@
+subject: Add -fpic and -fPIC options
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 69f9485..43ecc54 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -440,5 +440,6 @@ void hashmap_test(void);
+ bool file_exists(char *path);
+ 
+ extern StringArray include_paths;
++extern bool opt_fpic;
+ extern bool opt_fcommon;
+ extern char *base_file;
+diff --git a/codegen.c b/codegen.c
+index 8424c4c..85e15a3 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -73,6 +73,21 @@ static void gen_addr(Node *node) {
+       return;
+     }
+ 
++    if (opt_fpic) {
++      // Thread-local variable
++      if (node->var->is_tls) {
++        println("  data16 lea %s@tlsgd(%%rip), %%rdi", node->var->name);
++        println("  .value 0x6666");
++        println("  rex64");
++        println("  call __tls_get_addr@PLT");
++        return;
++      }
++
++      // Function or global variable
++      println("  mov %s@GOTPCREL(%%rip), %%rax", node->var->name);
++      return;
++    }
++
+     // Thread-local variable
+     if (node->var->is_tls) {
+       println("  mov %%fs:0, %%rax");
+diff --git a/main.c b/main.c
+index 690b0d3..b76640e 100644
+--- a/main.c
++++ b/main.c
+@@ -6,6 +6,7 @@ typedef enum {
+ 
+ StringArray include_paths;
+ bool opt_fcommon = true;
++bool opt_fpic;
+ 
+ static FileType opt_x;
+ static StringArray opt_include;
+@@ -256,6 +257,11 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-fpic") || !strcmp(argv[i], "-fPIC")) {
++      opt_fpic = true;
++      continue;
++    }
++
+     if (!strcmp(argv[i], "-cc1-input")) {
+       base_file = argv[++i];
+       continue;
+diff --git a/test/driver.sh b/test/driver.sh
+index 3b783cc..f6ed8f0 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -259,4 +259,10 @@ $chibicc -c -MD -MF $tmp/md-mf.d -I. $tmp/md2.c
+ grep -q -z '^md2.o:.*md2\.c .*/out2\.h' $tmp/md-mf.d
+ check -MD
+ 
++echo 'extern int bar; int foo() { return bar; }' | $chibicc -fPIC -xc -c -o $tmp/foo.o -
++cc -shared -o $tmp/foo.so $tmp/foo.o
++echo 'int foo(); int bar=3; int main() { foo(); }' > $tmp/main.c
++$chibicc -o $tmp/foo $tmp/main.c $tmp/foo.so
++check -fPIC
++
+ echo OK

@@ -1,0 +1,39 @@
+subject: Add -s option
+
+
+
+diff --git a/main.c b/main.c
+index a1763c4..1fcaed6 100644
+--- a/main.c
++++ b/main.c
+@@ -14,6 +14,8 @@ static bool opt_cc1;
+ static bool opt_hash_hash_hash;
+ static char *opt_o;
+ 
++static StringArray ld_extra_args;
++
+ char *base_file;
+ static char *output_file;
+ 
+@@ -167,6 +169,11 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-s")) {
++      strarray_push(&ld_extra_args, "-s");
++      continue;
++    }
++
+     if (!strcmp(argv[i], "-cc1-input")) {
+       base_file = argv[++i];
+       continue;
+@@ -451,6 +458,9 @@ static void run_linker(StringArray *inputs, char *output) {
+   strarray_push(&arr, "-L/usr/lib");
+   strarray_push(&arr, "-L/lib");
+ 
++  for (int i = 0; i < ld_extra_args.len; i++)
++    strarray_push(&arr, ld_extra_args.data[i]);
++
+   for (int i = 0; i < inputs->len; i++)
+     strarray_push(&arr, inputs->data[i]);
+ 

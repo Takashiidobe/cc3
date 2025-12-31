@@ -1,0 +1,149 @@
+subject: Add short type
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 9ec8887..219df30 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -152,6 +152,7 @@ Obj *parse(Token *tok);
+ 
+ typedef enum {
+   TY_CHAR,
++  TY_SHORT,
+   TY_INT,
+   TY_LONG,
+   TY_PTR,
+@@ -200,6 +201,7 @@ struct Member {
+ };
+ 
+ extern Type *ty_char;
++extern Type *ty_short;
+ extern Type *ty_int;
+ extern Type *ty_long;
+ 
+diff --git a/codegen.c b/codegen.c
+index d77dfda..cd3051d 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -3,6 +3,7 @@
+ static FILE *output_file;
+ static int depth;
+ static char *argreg8[] = {"%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"};
++static char *argreg16[] = {"%di", "%si", "%dx", "%cx", "%r8w", "%r9w"};
+ static char *argreg32[] = {"%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"};
+ static char *argreg64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+ static Obj *current_fn;
+@@ -82,6 +83,8 @@ static void load(Type *ty) {
+ 
+   if (ty->size == 1)
+     println("  movsbq (%%rax), %%rax");
++  else if (ty->size == 2)
++    println("  movswq (%%rax), %%rax");
+   else if (ty->size == 4)
+     println("  movsxd (%%rax), %%rax");
+   else
+@@ -102,6 +105,8 @@ static void store(Type *ty) {
+ 
+   if (ty->size == 1)
+     println("  mov %%al, (%%rdi)");
++  else if (ty->size == 2)
++    println("  mov %%ax, (%%rdi)");
+   else if (ty->size == 4)
+     println("  mov %%eax, (%%rdi)");
+   else
+@@ -293,6 +298,9 @@ static void store_gp(int r, int offset, int sz) {
+   case 1:
+     println("  mov %s, %d(%%rbp)", argreg8[r], offset);
+     return;
++  case 2:
++    println("  mov %s, %d(%%rbp)", argreg16[r], offset);
++    return;
+   case 4:
+     println("  mov %s, %d(%%rbp)", argreg32[r], offset);
+     return;
+diff --git a/parse.c b/parse.c
+index bfe5f4d..73b105f 100644
+--- a/parse.c
++++ b/parse.c
+@@ -205,6 +205,11 @@ static Type *declspec(Token **rest, Token *tok) {
+     return ty_char;
+   }
+ 
++  if (equal(tok, "short")) {
++    *rest = tok->next;
++    return ty_short;
++  }
++
+   if (equal(tok, "int")) {
+     *rest = tok->next;
+     return ty_int;
+diff --git a/test/function.c b/test/function.c
+index 951a281..ece913a 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -35,6 +35,10 @@ int sub_long(long a, long b, long c) {
+   return a - b - c;
+ }
+ 
++int sub_short(short a, short b, short c) {
++  return a - b - c;
++}
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -50,6 +54,7 @@ int main() {
+   ASSERT(1, ({ sub_char(7, 3, 3); }));
+ 
+   ASSERT(1, sub_long(7, 3, 3));
++  ASSERT(1, sub_short(7, 3, 3));
+ 
+   printf("OK\n");
+   return 0;
+diff --git a/test/struct.c b/test/struct.c
+index 7ca0374..cbd4343 100644
+--- a/test/struct.c
++++ b/test/struct.c
+@@ -50,6 +50,7 @@ int main() {
+   ASSERT(8, ({ struct t {int a; int b;}; struct t y; sizeof(y); }));
+ 
+   ASSERT(16, ({ struct {char a; long b;} x; sizeof(x); }));
++  ASSERT(4, ({ struct {char a; short b;} x; sizeof(x); }));
+ 
+   printf("OK\n");
+   return 0;
+diff --git a/test/variable.c b/test/variable.c
+index a329a9a..98ef696 100644
+--- a/test/variable.c
++++ b/test/variable.c
+@@ -51,6 +51,7 @@ int main() {
+   ASSERT(1, ({ int x; char y; int z; char *a=&y; char *b=&z; b-a; }));
+ 
+   ASSERT(8, ({ long x; sizeof(x); }));
++  ASSERT(2, ({ short x; sizeof(x); }));
+ 
+   printf("OK\n");
+   return 0;
+diff --git a/type.c b/type.c
+index 18c6e9d..847b543 100644
+--- a/type.c
++++ b/type.c
+@@ -1,6 +1,7 @@
+ #include "chibicc.h"
+ 
+ Type *ty_char = &(Type){TY_CHAR, 1, 1};
++Type *ty_short = &(Type){TY_SHORT, 2, 2};
+ Type *ty_int = &(Type){TY_INT, 4, 4};
+ Type *ty_long = &(Type){TY_LONG, 8, 8};
+ 
+@@ -14,7 +15,8 @@ static Type *new_type(TypeKind kind, int size, int align) {
+ 
+ bool is_integer(Type *ty) {
+   TypeKind k = ty->kind;
+-  return k == TY_CHAR || k == TY_INT || k == TY_LONG;
++  return k == TY_CHAR || k == TY_SHORT || k == TY_INT ||
++         k == TY_LONG;
+ }
+ 
+ Type *copy_type(Type *ty) {

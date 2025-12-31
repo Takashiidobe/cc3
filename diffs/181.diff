@@ -1,0 +1,62 @@
+subject: Preserve newline and space during macro expansion
+
+
+
+diff --git a/preprocess.c b/preprocess.c
+index 8417577..63bd73b 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -532,6 +532,8 @@ static Token *subst(Token *tok, MacroArg *args) {
+     // before they are substituted into a macro body.
+     if (arg) {
+       Token *t = preprocess2(arg->tok);
++      t->at_bol = tok->at_bol;
++      t->has_space = tok->has_space;
+       for (; t->kind != TK_EOF; t = t->next)
+         cur = cur->next = copy_token(t);
+       tok = tok->next;
+@@ -563,6 +565,8 @@ static bool expand_macro(Token **rest, Token *tok) {
+     Hideset *hs = hideset_union(tok->hideset, new_hideset(m->name));
+     Token *body = add_hideset(m->body, hs);
+     *rest = append(body, tok->next);
++    (*rest)->at_bol = tok->at_bol;
++    (*rest)->has_space = tok->has_space;
+     return true;
+   }
+ 
+@@ -587,6 +591,8 @@ static bool expand_macro(Token **rest, Token *tok) {
+   Token *body = subst(m->body, args);
+   body = add_hideset(body, hs);
+   *rest = append(body, tok->next);
++  (*rest)->at_bol = macro_token->at_bol;
++  (*rest)->has_space = macro_token->has_space;
+   return true;
+ }
+ 
+diff --git a/test/macro.c b/test/macro.c
+index 6803de5..1360954 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -290,6 +290,22 @@ int main() {
+ #endif
+   ASSERT(5, m);
+ 
++#define STR(x) #x
++#define M12(x) STR(x)
++#define M13(x) M12(foo.x)
++  ASSERT(0, strcmp(M13(bar), "foo.bar"));
++
++#define M13(x) M12(foo. x)
++  ASSERT(0, strcmp(M13(bar), "foo. bar"));
++
++#define M12 foo
++#define M13(x) STR(x)
++#define M14(x) M13(x.M12)
++  ASSERT(0, strcmp(M14(bar), "bar.foo"));
++
++#define M14(x) M13(x. M12)
++  ASSERT(0, strcmp(M14(bar), "bar. foo"));
++
+   printf("OK\n");
+   return 0;
+ }

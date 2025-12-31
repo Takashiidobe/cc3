@@ -1,0 +1,73 @@
+subject: Recognize .a and .so files
+
+
+
+diff --git a/main.c b/main.c
+index 1fcaed6..be7862d 100644
+--- a/main.c
++++ b/main.c
+@@ -1,6 +1,8 @@
+ #include "chibicc.h"
+ 
+-typedef enum { FILE_NONE, FILE_C, FILE_ASM, FILE_OBJ } FileType;
++typedef enum {
++  FILE_NONE, FILE_C, FILE_ASM, FILE_OBJ, FILE_AR, FILE_DSO,
++} FileType;
+ 
+ StringArray include_paths;
+ bool opt_fcommon = true;
+@@ -477,12 +479,15 @@ static void run_linker(StringArray *inputs, char *output) {
+ }
+ 
+ static FileType get_file_type(char *filename) {
+-  if (endswith(filename, ".o"))
+-    return FILE_OBJ;
+-
+   if (opt_x != FILE_NONE)
+     return opt_x;
+ 
++  if (endswith(filename, ".a"))
++    return FILE_AR;
++  if (endswith(filename, ".so"))
++    return FILE_DSO;
++  if (endswith(filename, ".o"))
++    return FILE_OBJ;
+   if (endswith(filename, ".c"))
+     return FILE_C;
+   if (endswith(filename, ".s"))
+@@ -525,8 +530,8 @@ int main(int argc, char **argv) {
+ 
+     FileType type = get_file_type(input);
+ 
+-    // Handle .o
+-    if (type == FILE_OBJ) {
++    // Handle .o or .a
++    if (type == FILE_OBJ || type == FILE_AR || type == FILE_DSO) {
+       strarray_push(&ld_args, input);
+       continue;
+     }
+diff --git a/test/driver.sh b/test/driver.sh
+index 9b7f25f..37e55ee 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -202,4 +202,20 @@ check '-x none'
+ echo foo | $chibicc -E - | grep -q foo
+ check -E
+ 
++# .a file
++echo 'void foo() {}' | $chibicc -c -xc -o $tmp/foo.o -
++echo 'void bar() {}' | $chibicc -c -xc -o $tmp/bar.o -
++ar rcs $tmp/foo.a $tmp/foo.o $tmp/bar.o
++echo 'void foo(); void bar(); int main() { foo(); bar(); }' > $tmp/main.c
++$chibicc -o $tmp/foo $tmp/main.c $tmp/foo.a
++check '.a'
++
++# .so file
++echo 'void foo() {}' | cc -fPIC -c -xc -o $tmp/foo.o -
++echo 'void bar() {}' | cc -fPIC -c -xc -o $tmp/bar.o -
++cc -shared -o $tmp/foo.so $tmp/foo.o $tmp/bar.o
++echo 'void foo(); void bar(); int main() { foo(); bar(); }' > $tmp/main.c
++$chibicc -o $tmp/foo $tmp/main.c $tmp/foo.so
++check '.so'
++
+ echo OK

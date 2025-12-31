@@ -1,0 +1,46 @@
+subject: Allow for-loops to define local variables
+
+
+
+diff --git a/parse.c b/parse.c
+index 83eacea..3cc1179 100644
+--- a/parse.c
++++ b/parse.c
+@@ -577,7 +577,14 @@ static Node *stmt(Token **rest, Token *tok) {
+     Node *node = new_node(ND_FOR, tok);
+     tok = skip(tok->next, "(");
+ 
+-    node->init = expr_stmt(&tok, tok);
++    enter_scope();
++
++    if (is_typename(tok)) {
++      Type *basety = declspec(&tok, tok, NULL);
++      node->init = declaration(&tok, tok, basety);
++    } else {
++      node->init = expr_stmt(&tok, tok);
++    }
+ 
+     if (!equal(tok, ";"))
+       node->cond = expr(&tok, tok);
+@@ -588,6 +595,7 @@ static Node *stmt(Token **rest, Token *tok) {
+     tok = skip(tok, ")");
+ 
+     node->then = stmt(rest, tok);
++    leave_scope();
+     return node;
+   }
+ 
+diff --git a/test/control.c b/test/control.c
+index d7221e2..f27059a 100644
+--- a/test/control.c
++++ b/test/control.c
+@@ -24,6 +24,9 @@ int main() {
+   ASSERT(5, ({ int i=2, j=3; (i=5,j)=6; i; }));
+   ASSERT(6, ({ int i=2, j=3; (i=5,j)=6; j; }));
+ 
++  ASSERT(55, ({ int j=0; for (int i=0; i<=10; i=i+1) j=j+i; j; }));
++  ASSERT(3, ({ int i=3; int j=0; for (int i=0; i<=10; i=i+1) j=j+i; i; }));
++
+   printf("OK\n");
+   return 0;
+ }

@@ -1,0 +1,50 @@
+subject: Add + and - operators
+
+
+
+diff --git a/main.c b/main.c
+index c99ceac..358a4b1 100644
+--- a/main.c
++++ b/main.c
+@@ -7,9 +7,29 @@ int main(int argc, char **argv) {
+     return 1;
+   }
+ 
++  char *p = argv[1];
++
+   printf("  .globl main\n");
+   printf("main:\n");
+-  printf("  mov $%d, %%rax\n", atoi(argv[1]));
++  printf("  mov $%ld, %%rax\n", strtol(p, &p, 10));
++
++  while (*p) {
++    if (*p == '+') {
++      p++;
++      printf("  add $%ld, %%rax\n", strtol(p, &p, 10));
++      continue;
++    }
++
++    if (*p == '-') {
++      p++;
++      printf("  sub $%ld, %%rax\n", strtol(p, &p, 10));
++      continue;
++    }
++
++    fprintf(stderr, "unexpected character: '%c'\n", *p);
++    return 1;
++  }
++
+   printf("  ret\n");
+   return 0;
+ }
+diff --git a/test.sh b/test.sh
+index 4e766a9..9550bbc 100755
+--- a/test.sh
++++ b/test.sh
+@@ -18,5 +18,6 @@ assert() {
+ 
+ assert 0 0
+ assert 42 42
++assert 21 '5+20-4'
+ 
+ echo OK

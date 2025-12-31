@@ -1,0 +1,32 @@
+subject: Make -E to imply -xc
+
+
+
+diff --git a/main.c b/main.c
+index 398108b..319071d 100644
+--- a/main.c
++++ b/main.c
+@@ -203,6 +203,10 @@ static void parse_args(int argc, char **argv) {
+ 
+   if (input_paths.len == 0)
+     error("no input files");
++
++  // -E implies that the input is the C macro language.
++  if (opt_E)
++    opt_x = FILE_C;
+ }
+ 
+ static FILE *open_file(char *path) {
+diff --git a/test/driver.sh b/test/driver.sh
+index 3f31b4f..9b7f25f 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -198,4 +198,8 @@ echo 'int x;' > $tmp/foo.c
+ $chibicc -c -x assembler -x none -o $tmp/foo.o $tmp/foo.c
+ check '-x none'
+ 
++# -E
++echo foo | $chibicc -E - | grep -q foo
++check -E
++
+ echo OK

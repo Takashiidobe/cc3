@@ -1,0 +1,85 @@
+subject: Support global struct bitfield initializer
+
+
+
+diff --git a/parse.c b/parse.c
+index 558811a..9b26c16 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1078,6 +1078,18 @@ static Node *lvar_initializer(Token **rest, Token *tok, Obj *var) {
+   return new_binary(ND_COMMA, lhs, rhs, tok);
+ }
+ 
++static uint64_t read_buf(char *buf, int sz) {
++  if (sz == 1)
++    return *buf;
++  if (sz == 2)
++    return *(uint16_t *)buf;
++  if (sz == 4)
++    return *(uint32_t *)buf;
++  if (sz == 8)
++    return *(uint64_t *)buf;
++  unreachable();
++}
++
+ static void write_buf(char *buf, uint64_t val, int sz) {
+   if (sz == 1)
+     *buf = val;
+@@ -1101,9 +1113,23 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
+   }
+ 
+   if (ty->kind == TY_STRUCT) {
+-    for (Member *mem = ty->members; mem; mem = mem->next)
+-      cur = write_gvar_data(cur, init->children[mem->idx], mem->ty, buf,
+-                            offset + mem->offset);
++    for (Member *mem = ty->members; mem; mem = mem->next) {
++      if (mem->is_bitfield) {
++        Node *expr = init->children[mem->idx]->expr;
++        if (!expr)
++          break;
++
++        char *loc = buf + offset + mem->offset;
++        uint64_t oldval = read_buf(loc, mem->ty->size);
++        uint64_t newval = eval(expr);
++        uint64_t mask = (1L << mem->bit_width) - 1;
++        uint64_t combined = oldval | ((newval & mask) << mem->bit_offset);
++        write_buf(loc, combined, mem->ty->size);
++      } else {
++        cur = write_gvar_data(cur, init->children[mem->idx], mem->ty, buf,
++                              offset + mem->offset);
++      }
++    }
+     return cur;
+   }
+ 
+diff --git a/test/bitfield.c b/test/bitfield.c
+index 9a63acc..501a03f 100644
+--- a/test/bitfield.c
++++ b/test/bitfield.c
+@@ -1,5 +1,11 @@
+ #include "test.h"
+ 
++struct {
++  char a;
++  int b : 5;
++  int c : 10;
++} g45 = {1, 2, 3}, g46={};
++
+ int main() {
+   ASSERT(4, sizeof(struct {int x:1; }));
+   ASSERT(8, sizeof(struct {long x:1; }));
+@@ -20,6 +26,14 @@ int main() {
+   ASSERT(-4, ({ struct bit1 x={1,2,3,4,5}; x.d; }));
+   ASSERT(-3, ({ struct bit1 x={1,2,3,4,5}; x.e; }));
+ 
++  ASSERT(1, g45.a);
++  ASSERT(2, g45.b);
++  ASSERT(3, g45.c);
++
++  ASSERT(0, g46.a);
++  ASSERT(0, g46.b);
++  ASSERT(0, g46.c);
++
+   printf("OK\n");
+   return 0;
+ }

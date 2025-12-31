@@ -1,0 +1,45 @@
+subject: Add line and block comments
+
+
+
+diff --git a/test.sh b/test.sh
+index 0eda6e0..1575ed9 100755
+--- a/test.sh
++++ b/test.sh
+@@ -213,4 +213,8 @@ assert 1 'int main() { ({ 0; return 1; 2; }); return 3; }'
+ assert 6 'int main() { return ({ 1; }) + ({ 2; }) + ({ 3; }); }'
+ assert 3 'int main() { return ({ int x=3; x; }); }'
+ 
++assert 2 'int main() { /* return 1; */ return 2; }'
++assert 2 'int main() { // return 1;
++return 2; }'
++
+ echo OK
+diff --git a/tokenize.c b/tokenize.c
+index b6b3b22..e0806ee 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -230,6 +230,23 @@ static Token *tokenize(char *filename, char *p) {
+   Token *cur = &head;
+ 
+   while (*p) {
++    // Skip line comments.
++    if (startswith(p, "//")) {
++      p += 2;
++      while (*p != '\n')
++        p++;
++      continue;
++    }
++
++    // Skip block comments.
++    if (startswith(p, "/*")) {
++      char *q = strstr(p + 2, "*/");
++      if (!q)
++        error_at(p, "unclosed block comment");
++      p = q + 2;
++      continue;
++    }
++
+     // Skip whitespace characters.
+     if (isspace(*p)) {
+       p++;

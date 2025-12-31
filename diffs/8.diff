@@ -1,0 +1,191 @@
+subject: Accept multiple statements separated by semicolons
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 56763b3..b22223b 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -38,22 +38,24 @@ Token *tokenize(char *input);
+ //
+ 
+ typedef enum {
+-  ND_ADD, // +
+-  ND_SUB, // -
+-  ND_MUL, // *
+-  ND_DIV, // /
+-  ND_NEG, // unary -
+-  ND_EQ,  // ==
+-  ND_NE,  // !=
+-  ND_LT,  // <
+-  ND_LE,  // <=
+-  ND_NUM, // Integer
++  ND_ADD,       // +
++  ND_SUB,       // -
++  ND_MUL,       // *
++  ND_DIV,       // /
++  ND_NEG,       // unary -
++  ND_EQ,        // ==
++  ND_NE,        // !=
++  ND_LT,        // <
++  ND_LE,        // <=
++  ND_EXPR_STMT, // Expression statement
++  ND_NUM,       // Integer
+ } NodeKind;
+ 
+ // AST node type
+ typedef struct Node Node;
+ struct Node {
+   NodeKind kind; // Node kind
++  Node *next;    // Next node
+   Node *lhs;     // Left-hand side
+   Node *rhs;     // Right-hand side
+   int val;       // Used if kind == ND_NUM
+diff --git a/codegen.c b/codegen.c
+index e7f792b..1fd9542 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -64,12 +64,23 @@ static void gen_expr(Node *node) {
+   error("invalid expression");
+ }
+ 
++static void gen_stmt(Node *node) {
++  if (node->kind == ND_EXPR_STMT) {
++    gen_expr(node->lhs);
++    return;
++  }
++
++  error("invalid statement");
++}
++
+ void codegen(Node *node) {
+   printf("  .globl main\n");
+   printf("main:\n");
+ 
+-  gen_expr(node);
+-  printf("  ret\n");
++  for (Node *n = node; n; n = n->next) {
++    gen_stmt(n);
++    assert(depth == 0);
++  }
+ 
+-  assert(depth == 0);
++  printf("  ret\n");
+ }
+diff --git a/parse.c b/parse.c
+index e855d9c..012f169 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1,6 +1,7 @@
+ #include "chibicc.h"
+ 
+ static Node *expr(Token **rest, Token *tok);
++static Node *expr_stmt(Token **rest, Token *tok);
+ static Node *equality(Token **rest, Token *tok);
+ static Node *relational(Token **rest, Token *tok);
+ static Node *add(Token **rest, Token *tok);
+@@ -33,6 +34,18 @@ static Node *new_num(int val) {
+   return node;
+ }
+ 
++// stmt = expr-stmt
++static Node *stmt(Token **rest, Token *tok) {
++  return expr_stmt(rest, tok);
++}
++
++// expr-stmt = expr ";"
++static Node *expr_stmt(Token **rest, Token *tok) {
++  Node *node = new_unary(ND_EXPR_STMT, expr(&tok, tok));
++  *rest = skip(tok, ";");
++  return node;
++}
++
+ // expr = equality
+ static Node *expr(Token **rest, Token *tok) {
+   return equality(rest, tok);
+@@ -157,9 +170,11 @@ static Node *primary(Token **rest, Token *tok) {
+   error_tok(tok, "expected an expression");
+ }
+ 
++// program = stmt*
+ Node *parse(Token *tok) {
+-  Node *node = expr(&tok, tok);
+-  if (tok->kind != TK_EOF)
+-    error_tok(tok, "extra token");
+-  return node;
++  Node head = {};
++  Node *cur = &head;
++  while (tok->kind != TK_EOF)
++    cur = cur->next = stmt(&tok, tok);
++  return head.next;
+ }
+diff --git a/test.sh b/test.sh
+index d15a4b9..a15edd3 100755
+--- a/test.sh
++++ b/test.sh
+@@ -16,34 +16,36 @@ assert() {
+   fi
+ }
+ 
+-assert 0 0
+-assert 42 42
+-assert 21 '5+20-4'
+-assert 41 ' 12 + 34 - 5 '
+-assert 47 '5+6*7'
+-assert 15 '5*(9-6)'
+-assert 4 '(3+5)/2'
+-assert 10 '-10+20'
+-assert 10 '- -10'
+-assert 10 '- - +10'
+-
+-assert 0 '0==1'
+-assert 1 '42==42'
+-assert 1 '0!=1'
+-assert 0 '42!=42'
+-
+-assert 1 '0<1'
+-assert 0 '1<1'
+-assert 0 '2<1'
+-assert 1 '0<=1'
+-assert 1 '1<=1'
+-assert 0 '2<=1'
+-
+-assert 1 '1>0'
+-assert 0 '1>1'
+-assert 0 '1>2'
+-assert 1 '1>=0'
+-assert 1 '1>=1'
+-assert 0 '1>=2'
++assert 0 '0;'
++assert 42 '42;'
++assert 21 '5+20-4;'
++assert 41 ' 12 + 34 - 5 ;'
++assert 47 '5+6*7;'
++assert 15 '5*(9-6);'
++assert 4 '(3+5)/2;'
++assert 10 '-10+20;'
++assert 10 '- -10;'
++assert 10 '- - +10;'
++
++assert 0 '0==1;'
++assert 1 '42==42;'
++assert 1 '0!=1;'
++assert 0 '42!=42;'
++
++assert 1 '0<1;'
++assert 0 '1<1;'
++assert 0 '2<1;'
++assert 1 '0<=1;'
++assert 1 '1<=1;'
++assert 0 '2<=1;'
++
++assert 1 '1>0;'
++assert 0 '1>1;'
++assert 0 '1>2;'
++assert 1 '1>=0;'
++assert 1 '1>=1;'
++assert 0 '1>=2;'
++
++assert 3 '1; 2; 3;'
+ 
+ echo OK

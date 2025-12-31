@@ -1,0 +1,50 @@
+subject: [GNU] Handle ,##__VA_ARG__
+
+
+
+diff --git a/preprocess.c b/preprocess.c
+index d0cf4d3..049e6a4 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -526,6 +526,22 @@ static Token *subst(Token *tok, MacroArg *args) {
+       continue;
+     }
+ 
++    // [GNU] If __VA_ARG__ is empty, `,##__VA_ARGS__` is expanded
++    // to the empty token list. Otherwise, its expaned to `,` and
++    // __VA_ARGS__.
++    if (equal(tok, ",") && equal(tok->next, "##")) {
++      MacroArg *arg = find_arg(args, tok->next->next);
++      if (arg && !strcmp(arg->name, "__VA_ARGS__")) {
++        if (arg->tok->kind == TK_EOF) {
++          tok = tok->next->next->next;
++        } else {
++          cur = cur->next = copy_token(tok);
++          tok = tok->next->next;
++        }
++        continue;
++      }
++    }
++
+     if (equal(tok, "##")) {
+       if (cur == &head)
+         error_tok(tok, "'##' cannot appear at start of macro expansion");
+diff --git a/test/macro.c b/test/macro.c
+index a088984..7f8b926 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -382,6 +382,14 @@ int main() {
+   ASSERT(0, ({ char buf[100]; M30(buf, "foo%d", 3); strcmp(buf, "foo3"); }));
+   ASSERT(0, ({ char buf[100]; M30(buf, "foo%d%d", 3, 5); strcmp(buf, "foo35"); }));
+ 
++#define M31(buf, fmt, ...) sprintf(buf, fmt, ## __VA_ARGS__)
++  ASSERT(0, ({ char buf[100]; M31(buf, "foo"); strcmp(buf, "foo"); }));
++  ASSERT(0, ({ char buf[100]; M31(buf, "foo%d", 3); strcmp(buf, "foo3"); }));
++  ASSERT(0, ({ char buf[100]; M31(buf, "foo%d%d", 3, 5); strcmp(buf, "foo35"); }));
++
++#define M31(x, y) (1, ##x y)
++  ASSERT(3, M31(, 3));
++
+   printf("OK\n");
+   return 0;
+ }

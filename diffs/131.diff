@@ -1,0 +1,206 @@
+subject: Add U, L and LL suffixes
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 4227eec..04a2959 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -46,7 +46,7 @@ struct Token {
+   int64_t val;    // If kind is TK_NUM, its value
+   char *loc;      // Token location
+   int len;        // Token length
+-  Type *ty;       // Used if TK_STR
++  Type *ty;       // Used if TK_NUM or TK_STR
+   char *str;      // String literal contents including terminating '\0'
+ 
+   int line_no;    // Line number
+diff --git a/parse.c b/parse.c
+index 35727df..37b2f64 100644
+--- a/parse.c
++++ b/parse.c
+@@ -2189,6 +2189,7 @@ static Node *primary(Token **rest, Token *tok) {
+ 
+   if (tok->kind == TK_NUM) {
+     Node *node = new_num(tok->val, tok);
++    node->ty = tok->ty;
+     *rest = tok->next;
+     return node;
+   }
+diff --git a/test/literal.c b/test/literal.c
+index 40d021f..4521c90 100644
+--- a/test/literal.c
++++ b/test/literal.c
+@@ -17,6 +17,67 @@ int main() {
+   ASSERT(47, 0b101111);
+   ASSERT(47, 0B101111);
+ 
++  ASSERT(4, sizeof(0));
++  ASSERT(8, sizeof(0L));
++  ASSERT(8, sizeof(0LU));
++  ASSERT(8, sizeof(0UL));
++  ASSERT(8, sizeof(0LL));
++  ASSERT(8, sizeof(0LLU));
++  ASSERT(8, sizeof(0Ull));
++  ASSERT(8, sizeof(0l));
++  ASSERT(8, sizeof(0ll));
++  ASSERT(8, sizeof(0x0L));
++  ASSERT(8, sizeof(0b0L));
++  ASSERT(4, sizeof(2147483647));
++  ASSERT(8, sizeof(2147483648));
++  ASSERT(-1, 0xffffffffffffffff);
++  ASSERT(8, sizeof(0xffffffffffffffff));
++  ASSERT(4, sizeof(4294967295U));
++  ASSERT(8, sizeof(4294967296U));
++
++  ASSERT(3, -1U>>30);
++  ASSERT(3, -1Ul>>62);
++  ASSERT(3, -1ull>>62);
++
++  ASSERT(1, 0xffffffffffffffffl>>63);
++  ASSERT(1, 0xffffffffffffffffll>>63);
++
++  ASSERT(-1, 18446744073709551615);
++  ASSERT(8, sizeof(18446744073709551615));
++  ASSERT(-1, 18446744073709551615>>63);
++
++  ASSERT(-1, 0xffffffffffffffff);
++  ASSERT(8, sizeof(0xffffffffffffffff));
++  ASSERT(1, 0xffffffffffffffff>>63);
++
++  ASSERT(-1, 01777777777777777777777);
++  ASSERT(8, sizeof(01777777777777777777777));
++  ASSERT(1, 01777777777777777777777>>63);
++
++  ASSERT(-1, 0b1111111111111111111111111111111111111111111111111111111111111111);
++  ASSERT(8, sizeof(0b1111111111111111111111111111111111111111111111111111111111111111));
++  ASSERT(1, 0b1111111111111111111111111111111111111111111111111111111111111111>>63);
++
++  ASSERT(8, sizeof(2147483648));
++  ASSERT(4, sizeof(2147483647));
++
++  ASSERT(8, sizeof(0x1ffffffff));
++  ASSERT(4, sizeof(0xffffffff));
++  ASSERT(1, 0xffffffff>>31);
++
++  ASSERT(8, sizeof(040000000000));
++  ASSERT(4, sizeof(037777777777));
++  ASSERT(1, 037777777777>>31);
++
++  ASSERT(8, sizeof(0b111111111111111111111111111111111));
++  ASSERT(4, sizeof(0b11111111111111111111111111111111));
++  ASSERT(1, 0b11111111111111111111111111111111>>31);
++
++  ASSERT(-1, 1 << 31 >> 31);
++  ASSERT(-1, 01 << 31 >> 31);
++  ASSERT(-1, 0x1 << 31 >> 31);
++  ASSERT(-1, 0b1 << 31 >> 31);
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 9ac7508..2d10682 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -243,17 +243,19 @@ static Token *read_char_literal(char *start) {
+ 
+   Token *tok = new_token(TK_NUM, start, end + 1);
+   tok->val = c;
++  tok->ty = ty_int;
+   return tok;
+ }
+ 
+ static Token *read_int_literal(char *start) {
+   char *p = start;
+ 
++  // Read a binary, octal, decimal or hexadecimal number.
+   int base = 10;
+-  if (!strncasecmp(p, "0x", 2) && isalnum(p[2])) {
++  if (!strncasecmp(p, "0x", 2) && isxdigit(p[2])) {
+     p += 2;
+     base = 16;
+-  } else if (!strncasecmp(p, "0b", 2) && isalnum(p[2])) {
++  } else if (!strncasecmp(p, "0b", 2) && (p[2] == '0' || p[2] == '1')) {
+     p += 2;
+     base = 2;
+   } else if (*p == '0') {
+@@ -261,11 +263,65 @@ static Token *read_int_literal(char *start) {
+   }
+ 
+   int64_t val = strtoul(p, &p, base);
++
++  // Read U, L or LL suffixes.
++  bool l = false;
++  bool u = false;
++
++  if (startswith(p, "LLU") || startswith(p, "LLu") ||
++      startswith(p, "llU") || startswith(p, "llu") ||
++      startswith(p, "ULL") || startswith(p, "Ull") ||
++      startswith(p, "uLL") || startswith(p, "ull")) {
++    p += 3;
++    l = u = true;
++  } else if (!strncasecmp(p, "lu", 2) || !strncasecmp(p, "ul", 2)) {
++    p += 2;
++    l = u = true;
++  } else if (startswith(p, "LL") || startswith(p, "ll")) {
++    p += 2;
++    l = true;
++  } else if (*p == 'L' || *p == 'l') {
++    p++;
++    l = true;
++  } else if (*p == 'U' || *p == 'u') {
++    p++;
++    u = true;
++  }
++
+   if (isalnum(*p))
+     error_at(p, "invalid digit");
+ 
++  // Infer a type.
++  Type *ty;
++  if (base == 10) {
++    if (l && u)
++      ty = ty_ulong;
++    else if (l)
++      ty = ty_long;
++    else if (u)
++      ty = (val >> 32) ? ty_ulong : ty_uint;
++    else
++      ty = (val >> 31) ? ty_long : ty_int;
++  } else {
++    if (l && u)
++      ty = ty_ulong;
++    else if (l)
++      ty = (val >> 63) ? ty_ulong : ty_long;
++    else if (u)
++      ty = (val >> 32) ? ty_ulong : ty_uint;
++    else if (val >> 63)
++      ty = ty_ulong;
++    else if (val >> 32)
++      ty = ty_long;
++    else if (val >> 31)
++      ty = ty_uint;
++    else
++      ty = ty_int;
++  }
++
+   Token *tok = new_token(TK_NUM, start, p);
+   tok->val = val;
++  tok->ty = ty;
+   return tok;
+ }
+ 
+diff --git a/type.c b/type.c
+index 866cce7..d688866 100644
+--- a/type.c
++++ b/type.c
+@@ -110,7 +110,7 @@ void add_type(Node *node) {
+ 
+   switch (node->kind) {
+   case ND_NUM:
+-    node->ty = (node->val == (int)node->val) ? ty_int : ty_long;
++    node->ty = ty_int;
+     return;
+   case ND_ADD:
+   case ND_SUB:

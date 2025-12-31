@@ -1,0 +1,101 @@
+subject: Support passed-on-stack parameters
+
+
+
+diff --git a/codegen.c b/codegen.c
+index 673f89a..e981582 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -781,13 +781,40 @@ static void assign_lvar_offsets(Obj *prog) {
+     if (!fn->is_function)
+       continue;
+ 
+-    int offset = 0;
++    // If a function has many parameters, some parameters are
++    // inevitably passed by stack rather than by register.
++    // The first passed-by-stack parameter resides at RBP+16.
++    int top = 16;
++    int bottom = 0;
++
++    int gp = 0, fp = 0;
++
++    // Assign offsets to pass-by-stack parameters.
++    for (Obj *var = fn->params; var; var = var->next) {
++      if (is_flonum(var->ty)) {
++        if (fp++ < FP_MAX)
++          continue;
++      } else {
++        if (gp++ < GP_MAX)
++          continue;
++      }
++
++      top = align_to(top, 8);
++      var->offset = top;
++      top += var->ty->size;
++    }
++
++    // Assign offsets to pass-by-register parameters and local variables.
+     for (Obj *var = fn->locals; var; var = var->next) {
+-      offset += var->ty->size;
+-      offset = align_to(offset, var->align);
+-      var->offset = -offset;
++      if (var->offset)
++        continue;
++
++      bottom += var->ty->size;
++      bottom = align_to(bottom, var->align);
++      var->offset = -bottom;
+     }
+-    fn->stack_size = align_to(offset, 16);
++
++    fn->stack_size = align_to(bottom, 16);
+   }
+ }
+ 
+@@ -914,6 +941,9 @@ static void emit_text(Obj *prog) {
+     // Save passed-by-register arguments to the stack
+     int gp = 0, fp = 0;
+     for (Obj *var = fn->params; var; var = var->next) {
++      if (var->offset > 0)
++        continue;
++
+       if (is_flonum(var->ty))
+         store_fp(fp++, var->offset, var->ty->size);
+       else
+diff --git a/test/function.c b/test/function.c
+index f9b9249..cc5ed82 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -126,6 +126,21 @@ int add10_int(int x1, int x2, int x3, int x4, int x5, int x6, int x7, int x8, in
+ float add10_float(float x1, float x2, float x3, float x4, float x5, float x6, float x7, float x8, float x9, float x10);
+ double add10_double(double x1, double x2, double x3, double x4, double x5, double x6, double x7, double x8, double x9, double x10);
+ 
++int many_args1(int a, int b, int c, int d, int e, int f, int g, int h) {
++  return g / h;
++}
++
++double many_args2(double a, double b, double c, double d, double e,
++                  double f, double g, double h, double i, double j) {
++  return i / j;
++}
++
++int many_args3(int a, double b, int c, int d, double e, int f,
++               double g, int h, double i, double j, double k,
++               double l, double m, int n, int o, double p) {
++  return o / p;
++}
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -216,6 +231,10 @@ int main() {
+ 
+   ASSERT(0, ({ char buf[200]; sprintf(buf, "%d %.1f %.1f %.1f %d %d %.1f %d %d %d %d %.1f %d %d %.1f %.1f %.1f %.1f %d", 1, 1.0, 1.0, 1.0, 1, 1, 1.0, 1, 1, 1, 1, 1.0, 1, 1, 1.0, 1.0, 1.0, 1.0, 1); strcmp("1 1.0 1.0 1.0 1 1 1.0 1 1 1 1 1.0 1 1 1.0 1.0 1.0 1.0 1", buf); }));
+ 
++  ASSERT(4, many_args1(1,2,3,4,5,6,40,10));
++  ASSERT(4, many_args2(1,2,3,4,5,6,7,8,40,10));
++  ASSERT(8, many_args3(1,2,3,4,5,6,7,8,9,10,11,12,13,14,80,10));
++
+   printf("OK\n");
+   return 0;
+ }

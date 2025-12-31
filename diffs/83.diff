@@ -1,0 +1,169 @@
+subject: Add &, |, ^, &=, |= and ^=
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index a8ae7ce..8c288a6 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -97,6 +97,9 @@ typedef enum {
+   ND_DIV,       // /
+   ND_NEG,       // unary -
+   ND_MOD,       // %
++  ND_BITAND,    // &
++  ND_BITOR,     // |
++  ND_BITXOR,    // ^
+   ND_EQ,        // ==
+   ND_NE,        // !=
+   ND_LT,        // <
+diff --git a/codegen.c b/codegen.c
+index 6953111..bf0785e 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -273,6 +273,15 @@ static void gen_expr(Node *node) {
+     if (node->kind == ND_MOD)
+       println("  mov %%rdx, %%rax");
+     return;
++  case ND_BITAND:
++    println("  and %%rdi, %%rax");
++    return;
++  case ND_BITOR:
++    println("  or %%rdi, %%rax");
++    return;
++  case ND_BITXOR:
++    println("  xor %%rdi, %%rax");
++    return;
+   case ND_EQ:
+   case ND_NE:
+   case ND_LT:
+diff --git a/parse.c b/parse.c
+index 76080df..9648507 100644
+--- a/parse.c
++++ b/parse.c
+@@ -77,6 +77,9 @@ static Node *stmt(Token **rest, Token *tok);
+ static Node *expr_stmt(Token **rest, Token *tok);
+ static Node *expr(Token **rest, Token *tok);
+ static Node *assign(Token **rest, Token *tok);
++static Node *bitor(Token **rest, Token *tok);
++static Node *bitxor(Token **rest, Token *tok);
++static Node *bitand(Token **rest, Token *tok);
+ static Node *equality(Token **rest, Token *tok);
+ static Node *relational(Token **rest, Token *tok);
+ static Node *add(Token **rest, Token *tok);
+@@ -696,10 +699,10 @@ static Node *to_assign(Node *binary) {
+   return new_binary(ND_COMMA, expr1, expr2, tok);
+ }
+ 
+-// assign    = equality (assign-op assign)?
+-// assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "%="
++// assign    = bitor (assign-op assign)?
++// assign-op = "=" | "+=" | "-=" | "*=" | "/=" | "%=" | "&=" | "|=" | "^="
+ static Node *assign(Token **rest, Token *tok) {
+-  Node *node = equality(&tok, tok);
++  Node *node = bitor(&tok, tok);
+ 
+   if (equal(tok, "="))
+     return new_binary(ND_ASSIGN, node, assign(rest, tok->next), tok);
+@@ -719,6 +722,48 @@ static Node *assign(Token **rest, Token *tok) {
+   if (equal(tok, "%="))
+     return to_assign(new_binary(ND_MOD, node, assign(rest, tok->next), tok));
+ 
++  if (equal(tok, "&="))
++    return to_assign(new_binary(ND_BITAND, node, assign(rest, tok->next), tok));
++
++  if (equal(tok, "|="))
++    return to_assign(new_binary(ND_BITOR, node, assign(rest, tok->next), tok));
++
++  if (equal(tok, "^="))
++    return to_assign(new_binary(ND_BITXOR, node, assign(rest, tok->next), tok));
++
++  *rest = tok;
++  return node;
++}
++
++// bitor = bitxor ("|" bitxor)*
++static Node *bitor(Token **rest, Token *tok) {
++  Node *node = bitxor(&tok, tok);
++  while (equal(tok, "|")) {
++    Token *start = tok;
++    node = new_binary(ND_BITOR, node, bitxor(&tok, tok->next), start);
++  }
++  *rest = tok;
++  return node;
++}
++
++// bitxor = bitand ("^" bitand)*
++static Node *bitxor(Token **rest, Token *tok) {
++  Node *node = bitand(&tok, tok);
++  while (equal(tok, "^")) {
++    Token *start = tok;
++    node = new_binary(ND_BITXOR, node, bitand(&tok, tok->next), start);
++  }
++  *rest = tok;
++  return node;
++}
++
++// bitand = equality ("&" equality)*
++static Node *bitand(Token **rest, Token *tok) {
++  Node *node = equality(&tok, tok);
++  while (equal(tok, "&")) {
++    Token *start = tok;
++    node = new_binary(ND_BITAND, node, equality(&tok, tok->next), start);
++  }
+   *rest = tok;
+   return node;
+ }
+diff --git a/test/arith.c b/test/arith.c
+index 6353813..164627a 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -79,6 +79,22 @@ int main() {
+   ASSERT(2, ({ int i=10; i%=4; i; }));
+   ASSERT(2, ({ long i=10; i%=4; i; }));
+ 
++  ASSERT(0, 0&1);
++  ASSERT(1, 3&1);
++  ASSERT(3, 7&3);
++  ASSERT(10, -1&10);
++
++  ASSERT(1, 0|1);
++  ASSERT(0b10011, 0b10000|0b00011);
++
++  ASSERT(0, 0^0);
++  ASSERT(0, 0b1111^0b1111);
++  ASSERT(0b110100, 0b111000^0b001100);
++
++  ASSERT(2, ({ int i=6; i&=3; i; }));
++  ASSERT(7, ({ int i=6; i|=3; i; }));
++  ASSERT(10, ({ int i=15; i^=5; i; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index a9c5eca..04be712 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -117,7 +117,7 @@ static int from_hex(char c) {
+ static int read_punct(char *p) {
+   static char *kw[] = {
+     "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=", "++", "--",
+-    "%=",
++    "%=", "&=", "|=", "^=",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+diff --git a/type.c b/type.c
+index c9c7807..eef2059 100644
+--- a/type.c
++++ b/type.c
+@@ -99,6 +99,9 @@ void add_type(Node *node) {
+   case ND_MUL:
+   case ND_DIV:
+   case ND_MOD:
++  case ND_BITAND:
++  case ND_BITOR:
++  case ND_BITXOR:
+     usual_arith_conv(&node->lhs, &node->rhs);
+     node->ty = node->lhs->ty;
+     return;

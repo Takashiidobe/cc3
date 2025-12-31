@@ -1,0 +1,18 @@
+subject: Allow empty macro arguments
+
+
+
+diff --git a/test/macro.c b/test/macro.c
+index c6508b1..d445ba5 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -213,6 +213,9 @@ int main() {
+ #define M8(x,y) (x)*(y)
+   assert(63, M8(3+4, 4+5), "M8(3+4, 4+5)");
+ 
++#define M8(x,y) x y
++  assert(9, M8(, 4+5), "M8(, 4+5)");
++
+   printf("OK\n");
+   return 0;
+ }

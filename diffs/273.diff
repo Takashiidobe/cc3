@@ -1,0 +1,40 @@
+subject: Support sizeof(typename) where typename is a VLA
+
+
+
+diff --git a/parse.c b/parse.c
+index ddec052..1aae37a 100644
+--- a/parse.c
++++ b/parse.c
+@@ -2841,8 +2841,16 @@ static Node *primary(Token **rest, Token *tok) {
+   if (equal(tok, "sizeof") && equal(tok->next, "(") && is_typename(tok->next->next)) {
+     Type *ty = typename(&tok, tok->next->next);
+     *rest = skip(tok, ")");
+-    if (ty->kind == TY_VLA)
+-      return new_var_node(ty->vla_size, tok);
++
++    if (ty->kind == TY_VLA) {
++      if (ty->vla_size)
++        return new_var_node(ty->vla_size, tok);
++
++      Node *lhs = compute_vla_size(ty, tok);
++      Node *rhs = new_var_node(ty->vla_size, tok);
++      return new_binary(ND_COMMA, lhs, rhs, tok);
++    }
++
+     return new_ulong(ty->size, start);
+   }
+ 
+diff --git a/test/vla.c b/test/vla.c
+index 60c6dfb..b0efd4a 100644
+--- a/test/vla.c
++++ b/test/vla.c
+@@ -19,6 +19,8 @@ int main() {
+   ASSERT(5, ({ int n=10; int x[n+1][n+6]; int *p=x; for (int i = 0; i<sizeof(x)/4; i++) p[i]=i; x[0][5]; }));
+   ASSERT(5*16+2, ({ int n=10; int x[n+1][n+6]; int *p=x; for (int i = 0; i<sizeof(x)/4; i++) p[i]=i; x[5][2]; }));
+ 
++  ASSERT(10, ({ int n=5; sizeof(char[2][n]); }));
++
+   printf("OK\n");
+   return 0;
+ }

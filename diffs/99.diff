@@ -1,0 +1,102 @@
+subject: Add string literal initializer
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index b997a56..d3be5b7 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -10,6 +10,9 @@
+ #include <string.h>
+ #include <strings.h>
+ 
++#define MAX(x, y) ((x) < (y) ? (y) : (x))
++#define MIN(x, y) ((x) < (y) ? (x) : (y))
++
+ typedef struct Type Type;
+ typedef struct Node Node;
+ typedef struct Member Member;
+diff --git a/parse.c b/parse.c
+index 05f3960..c95c7b7 100644
+--- a/parse.c
++++ b/parse.c
+@@ -111,6 +111,8 @@ static Type *enum_specifier(Token **rest, Token *tok);
+ static Type *type_suffix(Token **rest, Token *tok, Type *ty);
+ static Type *declarator(Token **rest, Token *tok, Type *ty);
+ static Node *declaration(Token **rest, Token *tok, Type *basety);
++static void initializer2(Token **rest, Token *tok, Initializer *init);
++static Initializer *initializer(Token **rest, Token *tok, Type *ty);
+ static Node *lvar_initializer(Token **rest, Token *tok, Obj *var);
+ static Node *compound_stmt(Token **rest, Token *tok);
+ static Node *stmt(Token **rest, Token *tok);
+@@ -613,21 +615,38 @@ static Token *skip_excess_element(Token *tok) {
+   return tok;
+ }
+ 
+-// initializer = "{" initializer ("," initializer)* "}"
+-//             | assign
+-static void initializer2(Token **rest, Token *tok, Initializer *init) {
+-  if (init->ty->kind == TY_ARRAY) {
+-    tok = skip(tok, "{");
++// string-initializer = string-literal
++static void string_initializer(Token **rest, Token *tok, Initializer *init) {
++  int len = MIN(init->ty->array_len, tok->ty->array_len);
++  for (int i = 0; i < len; i++)
++    init->children[i]->expr = new_num(tok->str[i], tok);
++  *rest = tok->next;
++}
+ 
+-    for (int i = 0; !consume(rest, tok, "}"); i++) {
+-      if (i > 0)
+-        tok = skip(tok, ",");
++// array-initializer = "{" initializer ("," initializer)* "}"
++static void array_initializer(Token **rest, Token *tok, Initializer *init) {
++  tok = skip(tok, "{");
+ 
+-      if (i < init->ty->array_len)
+-        initializer2(&tok, tok, init->children[i]);
+-      else
+-        tok = skip_excess_element(tok);
+-    }
++  for (int i = 0; !consume(rest, tok, "}"); i++) {
++    if (i > 0)
++      tok = skip(tok, ",");
++
++    if (i < init->ty->array_len)
++      initializer2(&tok, tok, init->children[i]);
++    else
++      tok = skip_excess_element(tok);
++  }
++}
++
++// initializer = string-initializer | array-initializer | assign
++static void initializer2(Token **rest, Token *tok, Initializer *init) {
++  if (init->ty->kind == TY_ARRAY && tok->kind == TK_STR) {
++    string_initializer(rest, tok, init);
++    return;
++  }
++
++  if (init->ty->kind == TY_ARRAY) {
++    array_initializer(rest, tok, init);
+     return;
+   }
+ 
+diff --git a/test/initializer.c b/test/initializer.c
+index b934a05..cbe7986 100644
+--- a/test/initializer.c
++++ b/test/initializer.c
+@@ -18,6 +18,14 @@ int main() {
+   ASSERT(0, ({ int x[2][3]={{1,2}}; x[1][0]; }));
+   ASSERT(0, ({ int x[2][3]={{1,2}}; x[1][2]; }));
+ 
++  ASSERT('a', ({ char x[4]="abc"; x[0]; }));
++  ASSERT('c', ({ char x[4]="abc"; x[2]; }));
++  ASSERT(0, ({ char x[4]="abc"; x[3]; }));
++  ASSERT('a', ({ char x[2][4]={"abc","def"}; x[0][0]; }));
++  ASSERT(0, ({ char x[2][4]={"abc","def"}; x[0][3]; }));
++  ASSERT('d', ({ char x[2][4]={"abc","def"}; x[1][0]; }));
++  ASSERT('f', ({ char x[2][4]={"abc","def"}; x[1][2]; }));
++
+   printf("OK\n");
+   return 0;
+ }

@@ -1,0 +1,167 @@
+subject: Add bitfield
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index b566ded..5f16ace 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -313,6 +313,11 @@ struct Member {
+   int idx;
+   int align;
+   int offset;
++
++  // Bitfield
++  bool is_bitfield;
++  int bit_offset;
++  int bit_width;
+ };
+ 
+ extern Type *ty_void;
+diff --git a/codegen.c b/codegen.c
+index 61fb3ca..8abd23c 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -599,10 +599,23 @@ static void gen_expr(Node *node) {
+     println("  neg %%rax");
+     return;
+   case ND_VAR:
+-  case ND_MEMBER:
+     gen_addr(node);
+     load(node->ty);
+     return;
++  case ND_MEMBER: {
++    gen_addr(node);
++    load(node->ty);
++
++    Member *mem = node->member;
++    if (mem->is_bitfield) {
++      println("  shl $%d, %%rax", 64 - mem->bit_width - mem->bit_offset);
++      if (mem->ty->is_unsigned)
++        println("  shr $%d, %%rax", 64 - mem->bit_width);
++      else
++        println("  sar $%d, %%rax", 64 - mem->bit_width);
++    }
++    return;
++  }
+   case ND_DEREF:
+     gen_expr(node->lhs);
+     load(node->ty);
+@@ -614,6 +627,24 @@ static void gen_expr(Node *node) {
+     gen_addr(node->lhs);
+     push();
+     gen_expr(node->rhs);
++
++    if (node->lhs->kind == ND_MEMBER && node->lhs->member->is_bitfield) {
++      // If the lhs is a bitfield, we need to read the current value
++      // from memory and merge it with a new value.
++      Member *mem = node->lhs->member;
++      println("  mov %%rax, %%rdi");
++      println("  and $%ld, %%rdi", (1L << mem->bit_width) - 1);
++      println("  shl $%d, %%rdi", mem->bit_offset);
++
++      println("  mov (%%rsp), %%rax");
++      load(mem->ty);
++
++      long mask = ((1L << mem->bit_width) - 1) << mem->bit_offset;
++      println("  mov $%ld, %%r9", ~mask);
++      println("  and %%r9, %%rax");
++      println("  or %%rdi, %%rax");
++    }
++
+     store(node->ty);
+     return;
+   case ND_STMT_EXPR:
+diff --git a/parse.c b/parse.c
+index 44f4b92..558811a 100644
+--- a/parse.c
++++ b/parse.c
+@@ -154,6 +154,10 @@ static bool is_function(Token *tok);
+ static Token *function(Token *tok, Type *basety, VarAttr *attr);
+ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr);
+ 
++static int align_down(int n, int align) {
++  return align_to(n - align + 1, align);
++}
++
+ static void enter_scope(void) {
+   Scope *sc = calloc(1, sizeof(Scope));
+   sc->next = scope;
+@@ -1997,6 +2001,12 @@ static void struct_members(Token **rest, Token *tok, Type *ty) {
+       mem->name = mem->ty->name;
+       mem->idx = idx++;
+       mem->align = attr.align ? attr.align : mem->ty->align;
++
++      if (consume(&tok, tok, ":")) {
++        mem->is_bitfield = true;
++        mem->bit_width = const_expr(&tok, tok);
++      }
++
+       cur = cur->next = mem;
+     }
+   }
+@@ -2066,16 +2076,28 @@ static Type *struct_decl(Token **rest, Token *tok) {
+     return ty;
+ 
+   // Assign offsets within the struct to members.
+-  int offset = 0;
++  int bits = 0;
++
+   for (Member *mem = ty->members; mem; mem = mem->next) {
+-    offset = align_to(offset, mem->align);
+-    mem->offset = offset;
+-    offset += mem->ty->size;
++    if (mem->is_bitfield) {
++      int sz = mem->ty->size;
++      if (bits / (sz * 8) != (bits + mem->bit_width - 1) / (sz * 8))
++        bits = align_to(bits, sz * 8);
++
++      mem->offset = align_down(bits / 8, sz);
++      mem->bit_offset = bits % (sz * 8);
++      bits += mem->bit_width;
++    } else {
++      bits = align_to(bits, mem->align * 8);
++      mem->offset = bits / 8;
++      bits += mem->ty->size * 8;
++    }
+ 
+     if (ty->align < mem->align)
+       ty->align = mem->align;
+   }
+-  ty->size = align_to(offset, ty->align);
++
++  ty->size = align_to(bits, ty->align * 8) / 8;
+   return ty;
+ }
+ 
+diff --git a/test/bitfield.c b/test/bitfield.c
+new file mode 100644
+index 0000000..9a63acc
+--- /dev/null
++++ b/test/bitfield.c
+@@ -0,0 +1,25 @@
++#include "test.h"
++
++int main() {
++  ASSERT(4, sizeof(struct {int x:1; }));
++  ASSERT(8, sizeof(struct {long x:1; }));
++
++  struct bit1 {
++    short a;
++    char b;
++    int c : 2;
++    int d : 3;
++    int e : 3;
++  };
++
++  ASSERT(4, sizeof(struct bit1));
++  ASSERT(1, ({ struct bit1 x; x.a=1; x.b=2; x.c=3; x.d=4; x.e=5; x.a; }));
++  ASSERT(1, ({ struct bit1 x={1,2,3,4,5}; x.a; }));
++  ASSERT(2, ({ struct bit1 x={1,2,3,4,5}; x.b; }));
++  ASSERT(-1, ({ struct bit1 x={1,2,3,4,5}; x.c; }));
++  ASSERT(-4, ({ struct bit1 x={1,2,3,4,5}; x.d; }));
++  ASSERT(-3, ({ struct bit1 x={1,2,3,4,5}; x.e; }));
++
++  printf("OK\n");
++  return 0;
++}

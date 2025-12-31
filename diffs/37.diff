@@ -1,0 +1,57 @@
+subject: Add \x<hexadecimal-sequence>
+
+
+
+diff --git a/test.sh b/test.sh
+index 67eb37e..e070ef9 100755
+--- a/test.sh
++++ b/test.sh
+@@ -202,5 +202,9 @@ assert 0 'int main() { return "\0"[0]; }'
+ assert 16 'int main() { return "\20"[0]; }'
+ assert 65 'int main() { return "\101"[0]; }'
+ assert 104 'int main() { return "\1500"[0]; }'
++assert 0 'int main() { return "\x00"[0]; }'
++assert 119 'int main() { return "\x77"[0]; }'
++assert 165 'int main() { return "\xA5"[0]; }'
++assert 255 'int main() { return "\x00ff"[0]; }'
+ 
+ echo OK
+diff --git a/tokenize.c b/tokenize.c
+index 403211f..2b1accb 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -79,6 +79,14 @@ static bool is_ident2(char c) {
+   return is_ident1(c) || ('0' <= c && c <= '9');
+ }
+ 
++static int from_hex(char c) {
++  if ('0' <= c && c <= '9')
++    return c - '0';
++  if ('a' <= c && c <= 'f')
++    return c - 'a' + 10;
++  return c - 'A' + 10;
++}
++
+ // Read a punctuator token from p and returns its length.
+ static int read_punct(char *p) {
+   if (startswith(p, "==") || startswith(p, "!=") ||
+@@ -112,6 +120,19 @@ static int read_escaped_char(char **new_pos, char *p) {
+     return c;
+   }
+ 
++  if (*p == 'x') {
++    // Read a hexadecimal number.
++    p++;
++    if (!isxdigit(*p))
++      error_at(p, "invalid hex escape sequence");
++
++    int c = 0;
++    for (; isxdigit(*p); p++)
++      c = (c << 4) + from_hex(*p);
++    *new_pos = p;
++    return c;
++  }
++
+   *new_pos = p + 1;
+ 
+   // Escape sequences are defined using themselves here. E.g.

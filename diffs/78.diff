@@ -1,0 +1,84 @@
+subject: Add post ++ and --
+
+
+
+diff --git a/parse.c b/parse.c
+index 851f456..018609a 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1023,7 +1023,15 @@ static Node *struct_ref(Node *lhs, Token *tok) {
+   return node;
+ }
+ 
+-// postfix = primary ("[" expr "]" | "." ident | "->" ident)*
++// Convert A++ to `(typeof A)((A += 1) - 1)`
++static Node *new_inc_dec(Node *node, Token *tok, int addend) {
++  add_type(node);
++  return new_cast(new_add(to_assign(new_add(node, new_num(addend, tok), tok)),
++                          new_num(-addend, tok), tok),
++                  node->ty);
++}
++
++// postfix = primary ("[" expr "]" | "." ident | "->" ident | "++" | "--")*
+ static Node *postfix(Token **rest, Token *tok) {
+   Node *node = primary(&tok, tok);
+ 
+@@ -1051,6 +1059,18 @@ static Node *postfix(Token **rest, Token *tok) {
+       continue;
+     }
+ 
++    if (equal(tok, "++")) {
++      node = new_inc_dec(node, tok, 1);
++      tok = tok->next;
++      continue;
++    }
++
++    if (equal(tok, "--")) {
++      node = new_inc_dec(node, tok, -1);
++      tok = tok->next;
++      continue;
++    }
++
+     *rest = tok;
+     return node;
+   }
+diff --git a/test/arith.c b/test/arith.c
+index 3e69993..6725ddf 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -46,6 +46,23 @@ int main() {
+   ASSERT(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; ++*p; }));
+   ASSERT(0, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; --*p; }));
+ 
++  ASSERT(2, ({ int i=2; i++; }));
++  ASSERT(2, ({ int i=2; i--; }));
++  ASSERT(3, ({ int i=2; i++; i; }));
++  ASSERT(1, ({ int i=2; i--; i; }));
++  ASSERT(1, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; *p++; }));
++  ASSERT(1, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; *p--; }));
++
++  ASSERT(0, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; a[0]; }));
++  ASSERT(0, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*(p--))--; a[1]; }));
++  ASSERT(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p)--; a[2]; }));
++  ASSERT(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p)--; p++; *p; }));
++
++  ASSERT(0, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; a[0]; }));
++  ASSERT(0, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; a[1]; }));
++  ASSERT(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; a[2]; }));
++  ASSERT(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; (*p++)--; *p; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/sizeof.c b/test/sizeof.c
+index 821d33b..5f26941 100644
+--- a/test/sizeof.c
++++ b/test/sizeof.c
+@@ -29,6 +29,7 @@ int main() {
+   ASSERT(8, sizeof((long)-10 / 5));
+ 
+   ASSERT(1, ({ char i; sizeof(++i); }));
++  ASSERT(1, ({ char i; sizeof(i++); }));
+ 
+   printf("OK\n");
+   return 0;

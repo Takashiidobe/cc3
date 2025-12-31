@@ -1,0 +1,34 @@
+subject: Add null statement
+
+
+
+diff --git a/parse.c b/parse.c
+index e869c96..f5c8498 100644
+--- a/parse.c
++++ b/parse.c
+@@ -91,8 +91,13 @@ static Node *compound_stmt(Token **rest, Token *tok) {
+   return node;
+ }
+ 
+-// expr-stmt = expr ";"
++// expr-stmt = expr? ";"
+ static Node *expr_stmt(Token **rest, Token *tok) {
++  if (equal(tok, ";")) {
++    *rest = tok->next;
++    return new_node(ND_BLOCK);
++  }
++
+   Node *node = new_unary(ND_EXPR_STMT, expr(&tok, tok));
+   *rest = skip(tok, ";");
+   return node;
+diff --git a/test.sh b/test.sh
+index c4c2e67..34ce00c 100755
+--- a/test.sh
++++ b/test.sh
+@@ -60,5 +60,6 @@ assert 2 '{ 1; return 2; 3; }'
+ assert 3 '{ 1; 2; return 3; }'
+ 
+ assert 3 '{ {1; {2;} return 3;} }'
++assert 5 '{ ;;; return 5; }'
+ 
+ echo OK

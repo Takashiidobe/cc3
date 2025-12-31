@@ -1,0 +1,79 @@
+subject: Add -U option
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 34784ea..b566ded 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -101,6 +101,7 @@ Token *tokenize_file(char *filename);
+ 
+ void init_macros(void);
+ void define_macro(char *name, char *buf);
++void undef_macro(char *name);
+ Token *preprocess(Token *tok);
+ 
+ //
+diff --git a/main.c b/main.c
+index 2f920e4..240c7fa 100644
+--- a/main.c
++++ b/main.c
+@@ -110,6 +110,16 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-U")) {
++      undef_macro(argv[++i]);
++      continue;
++    }
++
++    if (!strncmp(argv[i], "-U", 2)) {
++      undef_macro(argv[i] + 2);
++      continue;
++    }
++
+     if (!strcmp(argv[i], "-cc1-input")) {
+       base_file = argv[++i];
+       continue;
+diff --git a/preprocess.c b/preprocess.c
+index d1fcba3..ac2b264 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -752,11 +752,8 @@ static Token *preprocess2(Token *tok) {
+       tok = tok->next;
+       if (tok->kind != TK_IDENT)
+         error_tok(tok, "macro name must be an identifier");
+-      char *name = strndup(tok->loc, tok->len);
++      undef_macro(strndup(tok->loc, tok->len));
+       tok = skip_line(tok->next);
+-
+-      Macro *m = add_macro(name, true, NULL);
+-      m->deleted = true;
+       continue;
+     }
+ 
+@@ -836,6 +833,11 @@ void define_macro(char *name, char *buf) {
+   add_macro(name, true, tok);
+ }
+ 
++void undef_macro(char *name) {
++  Macro *m = add_macro(name, true, NULL);
++  m->deleted = true;
++}
++
+ static Macro *add_builtin(char *name, macro_handler_fn *fn) {
+   Macro *m = add_macro(name, true, NULL);
+   m->handler = fn;
+diff --git a/test/driver.sh b/test/driver.sh
+index fc5f71f..2309d3e 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -99,4 +99,8 @@ check -D
+ echo foo | $chibicc -Dfoo=bar -E - | grep -q bar
+ check -D
+ 
++# -U
++echo foo | $chibicc -Dfoo=bar -Ufoo -E - | grep -q foo
++check -U
++
+ echo OK

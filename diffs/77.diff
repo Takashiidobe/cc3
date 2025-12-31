@@ -1,0 +1,72 @@
+subject: Add pre ++ and --
+
+
+
+diff --git a/parse.c b/parse.c
+index 0dd71a2..851f456 100644
+--- a/parse.c
++++ b/parse.c
+@@ -889,6 +889,7 @@ static Node *cast(Token **rest, Token *tok) {
+ }
+ 
+ // unary = ("+" | "-" | "*" | "&") cast
++//       | ("++" | "--") unary
+ //       | postfix
+ static Node *unary(Token **rest, Token *tok) {
+   if (equal(tok, "+"))
+@@ -903,6 +904,14 @@ static Node *unary(Token **rest, Token *tok) {
+   if (equal(tok, "*"))
+     return new_unary(ND_DEREF, cast(rest, tok->next), tok);
+ 
++  // Read ++i as i+=1
++  if (equal(tok, "++"))
++    return to_assign(new_add(unary(rest, tok->next), new_num(1, tok), tok));
++
++  // Read --i as i-=1
++  if (equal(tok, "--"))
++    return to_assign(new_sub(unary(rest, tok->next), new_num(1, tok), tok));
++
+   return postfix(rest, tok);
+ }
+ 
+diff --git a/test/arith.c b/test/arith.c
+index 0f921c0..3e69993 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -42,6 +42,10 @@ int main() {
+   ASSERT(3, ({ int i=6; i/=2; i; }));
+   ASSERT(3, ({ int i=6; i/=2; }));
+ 
++  ASSERT(3, ({ int i=2; ++i; }));
++  ASSERT(2, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; ++*p; }));
++  ASSERT(0, ({ int a[3]; a[0]=0; a[1]=1; a[2]=2; int *p=a+1; --*p; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/sizeof.c b/test/sizeof.c
+index da43d89..821d33b 100644
+--- a/test/sizeof.c
++++ b/test/sizeof.c
+@@ -28,6 +28,8 @@ int main() {
+   ASSERT(8, sizeof((long)-10 * 5));
+   ASSERT(8, sizeof((long)-10 / 5));
+ 
++  ASSERT(1, ({ char i; sizeof(++i); }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index f900deb..be12ba3 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -116,7 +116,7 @@ static int from_hex(char c) {
+ // Read a punctuator token from p and returns its length.
+ static int read_punct(char *p) {
+   static char *kw[] = {
+-    "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=",
++    "==", "!=", "<=", ">=", "->", "+=", "-=", "*=", "/=", "++", "--",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

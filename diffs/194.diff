@@ -1,0 +1,190 @@
+subject: Add stdarg.h, stdbool.h, stddef.h, stdalign.h and float.h
+
+
+
+diff --git a/Makefile b/Makefile
+index 9993e00..a9bda5d 100644
+--- a/Makefile
++++ b/Makefile
+@@ -35,7 +35,7 @@ stage2/%.o: chibicc self.py %.c
+ 
+ stage2/test/%.exe: stage2/chibicc test/%.c
+ 	mkdir -p stage2/test
+-	./stage2/chibicc -Itest -c -o stage2/test/$*.o test/$*.c
++	./stage2/chibicc -Iinclude -Itest -c -o stage2/test/$*.o test/$*.c
+ 	$(CC) -o $@ stage2/test/$*.o -xc test/common
+ 
+ test-stage2: $(TESTS:test/%=stage2/test/%)
+diff --git a/include/float.h b/include/float.h
+new file mode 100644
+index 0000000..6c53cdc
+--- /dev/null
++++ b/include/float.h
+@@ -0,0 +1,42 @@
++#ifndef __STDFLOAT_H
++#define __STDFLOAT_H
++
++#define DECIMAL_DIG 21
++#define FLT_EVAL_METHOD 0 // C11 5.2.4.2.2p9
++#define FLT_RADIX 2
++#define FLT_ROUNDS 1      // C11 5.2.4.2.2p8: to nearest
++
++#define FLT_DIG 6
++#define FLT_EPSILON 0x1p-23
++#define FLT_MANT_DIG 24
++#define FLT_MAX 0x1.fffffep+127
++#define FLT_MAX_10_EXP 38
++#define FLT_MAX_EXP 128
++#define FLT_MIN 0x1p-126
++#define FLT_MIN_10_EXP -37
++#define FLT_MIN_EXP -125
++#define FLT_TRUE_MIN 0x1p-149
++
++#define DBL_DIG 15
++#define DBL_EPSILON 0x1p-52
++#define DBL_MANT_DIG 53
++#define DBL_MAX 0x1.fffffffffffffp+1023
++#define DBL_MAX_10_EXP 308
++#define DBL_MAX_EXP 1024
++#define DBL_MIN 0x1p-1022
++#define DBL_MIN_10_EXP -307
++#define DBL_MIN_EXP -1021
++#define DBL_TRUE_MIN 0x0.0000000000001p-1022
++
++#define LDBL_DIG 15
++#define LDBL_EPSILON 0x1p-52
++#define LDBL_MANT_DIG 53
++#define LDBL_MAX 0x1.fffffffffffffp+1023
++#define LDBL_MAX_10_EXP 308
++#define LDBL_MAX_EXP 1024
++#define LDBL_MIN 0x1p-1022
++#define LDBL_MIN_10_EXP -307
++#define LDBL_MIN_EXP -1021
++#define LDBL_TRUE_MIN 0x0.0000000000001p-1022
++
++#endif
+diff --git a/include/stdalign.h b/include/stdalign.h
+new file mode 100644
+index 0000000..d845e23
+--- /dev/null
++++ b/include/stdalign.h
+@@ -0,0 +1,9 @@
++#ifndef __STDALIGN_H
++#define __STDALIGN_H
++
++#define alignas _Alignas
++#define alignof _Alignof
++#define __alignas_is_defined 1
++#define __alignof_is_defined 1
++
++#endif
+diff --git a/include/stdarg.h b/include/stdarg.h
+new file mode 100644
+index 0000000..9143aea
+--- /dev/null
++++ b/include/stdarg.h
+@@ -0,0 +1,21 @@
++#ifndef __STDARG_H
++#define __STDARG_H
++
++typedef struct {
++  unsigned int gp_offset;
++  unsigned int fp_offset;
++  void *overflow_arg_area;
++  void *reg_save_area;
++} __va_elem;
++
++typedef __va_elem va_list[1];
++
++#define va_start(ap, last) \
++  do { *(ap) = *(__va_elem *)__va_area__; } while (0)
++
++#define va_end(ap)
++
++#define __GNUC_VA_LIST 1
++typedef va_list __gnuc_va_list;
++
++#endif
+diff --git a/include/stdbool.h b/include/stdbool.h
+new file mode 100644
+index 0000000..3827dc2
+--- /dev/null
++++ b/include/stdbool.h
+@@ -0,0 +1,9 @@
++#ifndef __STDBOOL_H
++#define __STDBOOL_H
++
++#define bool _Bool
++#define true 1
++#define false 0
++#define __bool_true_false_are_defined 1
++
++#endif
+diff --git a/include/stddef.h b/include/stddef.h
+new file mode 100644
+index 0000000..2f525d7
+--- /dev/null
++++ b/include/stddef.h
+@@ -0,0 +1,11 @@
++#ifndef __STDDEF_H
++#define __STDDEF_H
++
++#define NULL ((void *)0)
++
++typedef unsigned long size_t;
++typedef long ptrdiff_t;
++typedef unsigned int wchar_t;
++typedef long max_align_t;
++
++#endif
+diff --git a/include/stdnoreturn.h b/include/stdnoreturn.h
+new file mode 100644
+index 0000000..c5c3a2c
+--- /dev/null
++++ b/include/stdnoreturn.h
+@@ -0,0 +1,6 @@
++#ifndef __STDNORETURN_H
++#define __STDNORETURN_H
++
++#define noreturn _Noreturn
++
++#endif
+diff --git a/self.py b/self.py
+index 6dd9746..84e4c4a 100755
+--- a/self.py
++++ b/self.py
+@@ -98,6 +98,16 @@ char *strncpy(char *dest, char *src, long n);
+ int stat(char *pathname, struct stat *statbuf);
+ int stat(char *pathname, struct stat *statbuf);
+ char *dirname(char *path);
++char *basename(char *path);
++char *strrchr(char *s, int c);
++int unlink(char *pathname);
++int mkstemp(char *template);
++int close(int fd);
++int fork(void);
++int execvp(char *file, char **argv);
++void _exit(int code);
++int wait(int *wstatus);
++int atexit(void (*)(void));
+ """)
+ 
+ for path in sys.argv[1:]:
+diff --git a/test/stdhdr.c b/test/stdhdr.c
+new file mode 100644
+index 0000000..9c5e72b
+--- /dev/null
++++ b/test/stdhdr.c
+@@ -0,0 +1,12 @@
++#include "test.h"
++#include <float.h>
++#include <stdalign.h>
++#include <stdarg.h>
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdnoreturn.h>
++
++int main() {
++  printf("OK\n");
++  return 0;
++}

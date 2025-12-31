@@ -1,0 +1,82 @@
+subject: Add ~ operator
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 10252c3..04e4eab 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -106,6 +106,7 @@ typedef enum {
+   ND_ADDR,      // unary &
+   ND_DEREF,     // unary *
+   ND_NOT,       // !
++  ND_BITNOT,    // ~
+   ND_RETURN,    // "return"
+   ND_IF,        // "if"
+   ND_FOR,       // "for" or "while"
+diff --git a/codegen.c b/codegen.c
+index 3664364..1cedc99 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -216,6 +216,10 @@ static void gen_expr(Node *node) {
+     println("  sete %%al");
+     println("  movzx %%al, %%rax");
+     return;
++  case ND_BITNOT:
++    gen_expr(node->lhs);
++    println("  not %%rax");
++    return;
+   case ND_FUNCALL: {
+     int nargs = 0;
+     for (Node *arg = node->args; arg; arg = arg->next) {
+diff --git a/parse.c b/parse.c
+index 98769e1..e17b528 100644
+--- a/parse.c
++++ b/parse.c
+@@ -888,7 +888,7 @@ static Node *cast(Token **rest, Token *tok) {
+   return unary(rest, tok);
+ }
+ 
+-// unary = ("+" | "-" | "*" | "&" | "!") cast
++// unary = ("+" | "-" | "*" | "&" | "!" | "~") cast
+ //       | ("++" | "--") unary
+ //       | postfix
+ static Node *unary(Token **rest, Token *tok) {
+@@ -907,6 +907,9 @@ static Node *unary(Token **rest, Token *tok) {
+   if (equal(tok, "!"))
+     return new_unary(ND_NOT, cast(rest, tok->next), tok);
+ 
++  if (equal(tok, "~"))
++    return new_unary(ND_BITNOT, cast(rest, tok->next), tok);
++
+   // Read ++i as i+=1
+   if (equal(tok, "++"))
+     return to_assign(new_add(unary(rest, tok->next), new_num(1, tok), tok));
+diff --git a/test/arith.c b/test/arith.c
+index 6de47ba..4719240 100644
+--- a/test/arith.c
++++ b/test/arith.c
+@@ -71,6 +71,9 @@ int main() {
+   ASSERT(4, sizeof(!(char)0));
+   ASSERT(4, sizeof(!(long)0));
+ 
++  ASSERT(-1, ~0);
++  ASSERT(0, ~-1);
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/type.c b/type.c
+index 341545d..18f4bfe 100644
+--- a/type.c
++++ b/type.c
+@@ -127,6 +127,9 @@ void add_type(Node *node) {
+   case ND_NOT:
+     node->ty = ty_int;
+     return;
++  case ND_BITNOT:
++    node->ty = node->lhs->ty;
++    return;
+   case ND_VAR:
+     node->ty = node->var->ty;
+     return;

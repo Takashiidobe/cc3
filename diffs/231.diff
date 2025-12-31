@@ -1,0 +1,72 @@
+subject: Add UTF-16 string literal initializer
+
+
+
+diff --git a/parse.c b/parse.c
+index f9be522..a5fb66f 100644
+--- a/parse.c
++++ b/parse.c
+@@ -819,8 +819,24 @@ static void string_initializer(Token **rest, Token *tok, Initializer *init) {
+     *init = *new_initializer(array_of(init->ty->base, tok->ty->array_len), false);
+ 
+   int len = MIN(init->ty->array_len, tok->ty->array_len);
+-  for (int i = 0; i < len; i++)
+-    init->children[i]->expr = new_num(tok->str[i], tok);
++
++  switch (init->ty->base->size) {
++  case 1: {
++    char *str = tok->str;
++    for (int i = 0; i < len; i++)
++      init->children[i]->expr = new_num(str[i], tok);
++    break;
++  }
++  case 2: {
++    uint16_t *str = (uint16_t *)tok->str;
++    for (int i = 0; i < len; i++)
++      init->children[i]->expr = new_num(str[i], tok);
++    break;
++  }
++  default:
++    unreachable();
++  }
++
+   *rest = tok->next;
+ }
+ 
+diff --git a/test/unicode.c b/test/unicode.c
+index 235a6ba..72c4cf5 100644
+--- a/test/unicode.c
++++ b/test/unicode.c
+@@ -2,6 +2,8 @@
+ 
+ #define STR(x) #x
+ 
++typedef unsigned short char16_t;
++
+ int main() {
+   ASSERT(4, sizeof(L'\0'));
+   ASSERT(97, L'a');
+@@ -77,6 +79,10 @@ int main() {
+ 
+   ASSERT(0, strcmp(STR(L"a"), "L\"a\""));
+ 
++  ASSERT(u'α', ({ char16_t x[] = u"αβ"; x[0]; }));
++  ASSERT(u'β', ({ char16_t x[] = u"αβ"; x[1]; }));
++  ASSERT(6, ({ char16_t x[] = u"αβ"; sizeof(x); }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 8d6bc9d..d2823bc 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -577,7 +577,7 @@ Token *tokenize(File *file) {
+     // Wide character literal
+     if (startswith(p, "L'")) {
+       cur = cur->next = read_char_literal(p, p + 1, ty_int);
+-      p = cur->loc + cur->len;
++      p += cur->len;
+       continue;
+     }
+ 

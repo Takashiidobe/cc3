@@ -1,0 +1,112 @@
+subject: [GNU] Treat labels-as-values as compile-time constant
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 773c7ee..6aa1fc1 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -169,7 +169,7 @@ typedef struct Relocation Relocation;
+ struct Relocation {
+   Relocation *next;
+   int offset;
+-  char *label;
++  char **label;
+   long addend;
+ };
+ 
+diff --git a/codegen.c b/codegen.c
+index f4a93a0..8424c4c 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -1338,7 +1338,7 @@ static void emit_data(Obj *prog) {
+       int pos = 0;
+       while (pos < var->ty->size) {
+         if (rel && rel->offset == pos) {
+-          println("  .quad %s%+ld", rel->label, rel->addend);
++          println("  .quad %s%+ld", *rel->label, rel->addend);
+           rel = rel->next;
+           pos += 8;
+         } else {
+diff --git a/parse.c b/parse.c
+index f92a31d..25a9d48 100644
+--- a/parse.c
++++ b/parse.c
+@@ -136,8 +136,8 @@ static Node *stmt(Token **rest, Token *tok);
+ static Node *expr_stmt(Token **rest, Token *tok);
+ static Node *expr(Token **rest, Token *tok);
+ static int64_t eval(Node *node);
+-static int64_t eval2(Node *node, char **label);
+-static int64_t eval_rval(Node *node, char **label);
++static int64_t eval2(Node *node, char ***label);
++static int64_t eval_rval(Node *node, char ***label);
+ static bool is_const_expr(Node *node);
+ static Node *assign(Token **rest, Token *tok);
+ static Node *logor(Token **rest, Token *tok);
+@@ -1462,7 +1462,7 @@ write_gvar_data(Relocation *cur, Initializer *init, Type *ty, char *buf, int off
+     return cur;
+   }
+ 
+-  char *label = NULL;
++  char **label = NULL;
+   uint64_t val = eval2(init->expr, &label);
+ 
+   if (!label) {
+@@ -1830,7 +1830,7 @@ static int64_t eval(Node *node) {
+ // is a pointer to a global variable and n is a postiive/negative
+ // number. The latter form is accepted only as an initialization
+ // expression for a global variable.
+-static int64_t eval2(Node *node, char **label) {
++static int64_t eval2(Node *node, char ***label) {
+   add_type(node);
+ 
+   if (is_flonum(node->ty))
+@@ -1902,6 +1902,9 @@ static int64_t eval2(Node *node, char **label) {
+   }
+   case ND_ADDR:
+     return eval_rval(node->lhs, label);
++  case ND_LABEL_VAL:
++    *label = &node->unique_label;
++    return 0;
+   case ND_MEMBER:
+     if (!label)
+       error_tok(node->tok, "not a compile-time constant");
+@@ -1913,7 +1916,7 @@ static int64_t eval2(Node *node, char **label) {
+       error_tok(node->tok, "not a compile-time constant");
+     if (node->var->ty->kind != TY_ARRAY && node->var->ty->kind != TY_FUNC)
+       error_tok(node->tok, "invalid initializer");
+-    *label = node->var->name;
++    *label = &node->var->name;
+     return 0;
+   case ND_NUM:
+     return node->val;
+@@ -1922,12 +1925,12 @@ static int64_t eval2(Node *node, char **label) {
+   error_tok(node->tok, "not a compile-time constant");
+ }
+ 
+-static int64_t eval_rval(Node *node, char **label) {
++static int64_t eval_rval(Node *node, char ***label) {
+   switch (node->kind) {
+   case ND_VAR:
+     if (node->var->is_local)
+       error_tok(node->tok, "not a compile-time constant");
+-    *label = node->var->name;
++    *label = &node->var->name;
+     return 0;
+   case ND_DEREF:
+     return eval2(node->lhs, label);
+diff --git a/test/control.c b/test/control.c
+index 6ba918c..0a89e3d 100644
+--- a/test/control.c
++++ b/test/control.c
+@@ -91,6 +91,10 @@ int main() {
+   ASSERT(2, ({ void *p = &&v22; int i=0; goto *p; v21:i++; v22:i++; v23:i++; i; }));
+   ASSERT(1, ({ void *p = &&v33; int i=0; goto *p; v31:i++; v32:i++; v33:i++; i; }));
+ 
++  ASSERT(3, ({ static void *p[]={&&v41,&&v42,&&v43}; int i=0; goto *p[0]; v41:i++; v42:i++; v43:i++; i; }));
++  ASSERT(2, ({ static void *p[]={&&v52,&&v52,&&v53}; int i=0; goto *p[1]; v51:i++; v52:i++; v53:i++; i; }));
++  ASSERT(1, ({ static void *p[]={&&v62,&&v62,&&v63}; int i=0; goto *p[2]; v61:i++; v62:i++; v63:i++; i; }));
++
+   printf("OK\n");
+   return 0;
+ }

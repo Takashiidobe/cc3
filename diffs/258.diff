@@ -1,0 +1,127 @@
+subject: Add basic "asm" statement
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index fc6ca6d..8107226 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -202,6 +202,7 @@ typedef enum {
+   ND_NUM,       // Integer
+   ND_CAST,      // Type cast
+   ND_MEMZERO,   // Zero-clear a stack variable
++  ND_ASM,       // "asm"
+ } NodeKind;
+ 
+ // AST node type
+@@ -246,6 +247,9 @@ struct Node {
+   Node *case_next;
+   Node *default_case;
+ 
++  // "asm" string literal
++  char *asm_str;
++
+   // Variable
+   Obj *var;
+ 
+diff --git a/codegen.c b/codegen.c
+index b31087b..3486430 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -1046,6 +1046,9 @@ static void gen_stmt(Node *node) {
+   case ND_EXPR_STMT:
+     gen_expr(node->lhs);
+     return;
++  case ND_ASM:
++    println("  %s", node->asm_str);
++    return;
+   }
+ 
+   error_tok(node->tok, "invalid statement");
+diff --git a/parse.c b/parse.c
+index 7965d48..34ebd88 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1410,6 +1410,22 @@ static bool is_typename(Token *tok) {
+   return find_typedef(tok);
+ }
+ 
++// asm-stmt = "asm" ("volatile" | "inline")* "(" string-literal ")"
++static Node *asm_stmt(Token **rest, Token *tok) {
++  Node *node = new_node(ND_ASM, tok);
++  tok = tok->next;
++
++  while (equal(tok, "volatile") || equal(tok, "inline"))
++    tok = tok->next;
++
++  tok = skip(tok, "(");
++  if (tok->kind != TK_STR || tok->ty->base->kind != TY_CHAR)
++    error_tok(tok, "expected string literal");
++  node->asm_str = tok->str;
++  *rest = skip(tok->next, ")");
++  return node;
++}
++
+ // stmt = "return" expr? ";"
+ //      | "if" "(" expr ")" stmt ("else" stmt)?
+ //      | "switch" "(" expr ")" stmt
+@@ -1418,6 +1434,7 @@ static bool is_typename(Token *tok) {
+ //      | "for" "(" expr-stmt expr? ";" expr? ")" stmt
+ //      | "while" "(" expr ")" stmt
+ //      | "do" stmt "while" "(" expr ")" ";"
++//      | "asm" asm-stmt
+ //      | "goto" ident ";"
+ //      | "break" ";"
+ //      | "continue" ";"
+@@ -1573,6 +1590,9 @@ static Node *stmt(Token **rest, Token *tok) {
+     return node;
+   }
+ 
++  if (equal(tok, "asm"))
++    return asm_stmt(rest, tok);
++
+   if (equal(tok, "goto")) {
+     Node *node = new_node(ND_GOTO, tok);
+     node->label = get_ident(tok->next);
+diff --git a/test/asm.c b/test/asm.c
+new file mode 100644
+index 0000000..e066784
+--- /dev/null
++++ b/test/asm.c
+@@ -0,0 +1,23 @@
++#include "test.h"
++
++char *asm_fn1(void) {
++  asm("mov $50, %rax\n\t"
++      "mov %rbp, %rsp\n\t"
++      "pop %rbp\n\t"
++      "ret");
++}
++
++char *asm_fn2(void) {
++  asm inline volatile("mov $55, %rax\n\t"
++                      "mov %rbp, %rsp\n\t"
++                      "pop %rbp\n\t"
++                      "ret");
++}
++
++int main() {
++  ASSERT(50, asm_fn1());
++  ASSERT(55, asm_fn2());
++
++  printf("OK\n");
++  return 0;
++}
+diff --git a/tokenize.c b/tokenize.c
+index 6527e59..4b5c062 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -163,7 +163,7 @@ static bool is_keyword(Token *tok) {
+     "default", "extern", "_Alignof", "_Alignas", "do", "signed",
+     "unsigned", "const", "volatile", "auto", "register", "restrict",
+     "__restrict", "__restrict__", "_Noreturn", "float", "double",
+-    "typeof",
++    "typeof", "asm",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

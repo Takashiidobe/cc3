@@ -1,0 +1,97 @@
+subject: Add comma operator
+
+This patch allows writing a comma expression on the left-hand side
+of an assignment expression. This is called the "generalized lvalue"
+which is a deprecated GCC language extension. I'm implementing it
+anyway because it's useful to implement other features.
+
+
+diff --git a/chibicc.h b/chibicc.h
+index b3b6662..8c2d1c9 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -93,6 +93,7 @@ typedef enum {
+   ND_LT,        // <
+   ND_LE,        // <=
+   ND_ASSIGN,    // =
++  ND_COMMA,     // ,
+   ND_ADDR,      // unary &
+   ND_DEREF,     // unary *
+   ND_RETURN,    // "return"
+diff --git a/codegen.c b/codegen.c
+index e4306fc..0449a58 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -54,6 +54,10 @@ static void gen_addr(Node *node) {
+   case ND_DEREF:
+     gen_expr(node->lhs);
+     return;
++  case ND_COMMA:
++    gen_expr(node->lhs);
++    gen_addr(node->rhs);
++    return;
+   }
+ 
+   error_tok(node->tok, "not an lvalue");
+@@ -120,6 +124,10 @@ static void gen_expr(Node *node) {
+     for (Node *n = node->body; n; n = n->next)
+       gen_stmt(n);
+     return;
++  case ND_COMMA:
++    gen_expr(node->lhs);
++    gen_expr(node->rhs);
++    return;
+   case ND_FUNCALL: {
+     int nargs = 0;
+     for (Node *arg = node->args; arg; arg = arg->next) {
+diff --git a/parse.c b/parse.c
+index 1f099fc..231f0ca 100644
+--- a/parse.c
++++ b/parse.c
+@@ -357,9 +357,15 @@ static Node *expr_stmt(Token **rest, Token *tok) {
+   return node;
+ }
+ 
+-// expr = assign
++// expr = assign ("," expr)?
+ static Node *expr(Token **rest, Token *tok) {
+-  return assign(rest, tok);
++  Node *node = assign(&tok, tok);
++
++  if (equal(tok, ","))
++    return new_binary(ND_COMMA, node, expr(rest, tok->next), tok);
++
++  *rest = tok;
++  return node;
+ }
+ 
+ // assign = equality ("=" assign)?
+diff --git a/test/control.c b/test/control.c
+index 7e8a5d0..d7221e2 100644
+--- a/test/control.c
++++ b/test/control.c
+@@ -20,6 +20,10 @@ int main() {
+   ASSERT(10, ({ int i=0; while(i<10) i=i+1; i; }));
+   ASSERT(55, ({ int i=0; int j=0; while(i<=10) {j=i+j; i=i+1;} j; }));
+ 
++  ASSERT(3, (1,2,3));
++  ASSERT(5, ({ int i=2, j=3; (i=5,j)=6; i; }));
++  ASSERT(6, ({ int i=2, j=3; (i=5,j)=6; j; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/type.c b/type.c
+index bff3fed..353bf99 100644
+--- a/type.c
++++ b/type.c
+@@ -78,6 +78,9 @@ void add_type(Node *node) {
+   case ND_VAR:
+     node->ty = node->var->ty;
+     return;
++  case ND_COMMA:
++    node->ty = node->rhs->ty;
++    return;
+   case ND_ADDR:
+     if (node->lhs->ty->kind == TY_ARRAY)
+       node->ty = pointer_to(node->lhs->ty->base);

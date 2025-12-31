@@ -1,0 +1,83 @@
+subject: Concatenate adjacent string literals
+
+
+
+diff --git a/preprocess.c b/preprocess.c
+index aee31ca..a4d4d14 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -899,6 +899,39 @@ static void init_macros(void) {
+   add_builtin("__LINE__", line_macro);
+ }
+ 
++// Concatenate adjacent string literals into a single string literal
++// as per the C spec.
++static void join_adjacent_string_literals(Token *tok1) {
++  while (tok1->kind != TK_EOF) {
++    if (tok1->kind != TK_STR || tok1->next->kind != TK_STR) {
++      tok1 = tok1->next;
++      continue;
++    }
++
++    Token *tok2 = tok1->next;
++    while (tok2->kind == TK_STR)
++      tok2 = tok2->next;
++
++    int len = tok1->ty->array_len;
++    for (Token *t = tok1->next; t != tok2; t = t->next)
++      len = len + t->ty->array_len - 1;
++
++    char *buf = calloc(tok1->ty->base->size, len);
++
++    int i = 0;
++    for (Token *t = tok1; t != tok2; t = t->next) {
++      memcpy(buf + i, t->str, t->ty->size);
++      i = i + t->ty->size - t->ty->base->size;
++    }
++
++    *tok1 = *copy_token(tok1);
++    tok1->ty = array_of(tok1->ty->base, len);
++    tok1->str = buf;
++    tok1->next = tok2;
++    tok1 = tok2;
++  }
++}
++
+ // Entry point function of the preprocessor.
+ Token *preprocess(Token *tok) {
+   init_macros();
+@@ -906,5 +939,6 @@ Token *preprocess(Token *tok) {
+   if (cond_incl)
+     error_tok(cond_incl->tok, "unterminated conditional directive");
+   convert_keywords(tok);
++  join_adjacent_string_literals(tok);
+   return tok;
+ }
+diff --git a/test/string.c b/test/string.c
+index 303e72b..25f1988 100644
+--- a/test/string.c
++++ b/test/string.c
+@@ -35,6 +35,12 @@ int main() {
+   ASSERT(0, "\x00"[0]);
+   ASSERT(119, "\x77"[0]);
+ 
++  ASSERT(7, sizeof("abc" "def"));
++  ASSERT(9, sizeof("abc" "d" "efgh"));
++  ASSERT(0, strcmp("abc" "d" "\nefgh", "abcd\nefgh"));
++  ASSERT(0, !strcmp("abc" "d", "abcd\nefgh"));
++  ASSERT(0, strcmp("\x9" "0", "\t0"));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/test.h b/test/test.h
+index c1c82cd..c2cc8e2 100644
+--- a/test/test.h
++++ b/test/test.h
+@@ -4,5 +4,6 @@ void assert(int expected, int actual, char *code);
+ int printf(char *fmt, ...);
+ int sprintf(char *buf, char *fmt, ...);
+ int strcmp(char *p, char *q);
++int strncmp(char *p, char *q, long n);
+ int memcmp(char *p, char *q, long n);
+ void exit(int n);

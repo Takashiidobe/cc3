@@ -1,0 +1,40 @@
+subject: Emit .file and .loc assembler directives
+
+With these directives, gdb can print out an error location when
+a compiled program crashes.
+
+
+diff --git a/codegen.c b/codegen.c
+index c2c3ed3..e4306fc 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -89,6 +89,8 @@ static void store(Type *ty) {
+ 
+ // Generate code for a given node.
+ static void gen_expr(Node *node) {
++  println("  .loc 1 %d", node->tok->line_no);
++
+   switch (node->kind) {
+   case ND_NUM:
+     println("  mov $%d, %%rax", node->val);
+@@ -177,6 +179,8 @@ static void gen_expr(Node *node) {
+ }
+ 
+ static void gen_stmt(Node *node) {
++  println("  .loc 1 %d", node->tok->line_no);
++
+   switch (node->kind) {
+   case ND_IF: {
+     int c = count();
+diff --git a/main.c b/main.c
+index a8f95ab..d0eb21f 100644
+--- a/main.c
++++ b/main.c
+@@ -55,6 +55,7 @@ int main(int argc, char **argv) {
+ 
+   // Traverse the AST to emit assembly.
+   FILE *out = open_file(opt_o);
++  fprintf(out, ".file 1 \"%s\"\n", input_path);
+   codegen(prog, out);
+   return 0;
+ }

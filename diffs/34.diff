@@ -1,0 +1,57 @@
+subject: Refactoring: Add a utility function
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 9ccc49f..7320300 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -10,6 +10,12 @@
+ typedef struct Type Type;
+ typedef struct Node Node;
+ 
++//
++// strings.c
++//
++
++char *format(char *fmt, ...);
++
+ //
+ // tokenize.c
+ //
+diff --git a/parse.c b/parse.c
+index c6c1f37..5b3a187 100644
+--- a/parse.c
++++ b/parse.c
+@@ -108,9 +108,7 @@ static Obj *new_gvar(char *name, Type *ty) {
+ 
+ static char *new_unique_name(void) {
+   static int id = 0;
+-  char *buf = calloc(1, 20);
+-  sprintf(buf, ".L..%d", id++);
+-  return buf;
++  return format(".L..%d", id++);
+ }
+ 
+ static Obj *new_anon_gvar(Type *ty) {
+diff --git a/strings.c b/strings.c
+new file mode 100644
+index 0000000..485d033
+--- /dev/null
++++ b/strings.c
+@@ -0,0 +1,15 @@
++#include "chibicc.h"
++
++// Takes a printf-style format string and returns a formatted string.
++char *format(char *fmt, ...) {
++  char *buf;
++  size_t buflen;
++  FILE *out = open_memstream(&buf, &buflen);
++
++  va_list ap;
++  va_start(ap, fmt);
++  vfprintf(out, fmt, ap);
++  va_end(ap);
++  fclose(out);
++  return buf;
++}

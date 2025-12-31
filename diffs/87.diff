@@ -1,0 +1,118 @@
+subject: Add a notion of an incomplete struct type
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index ed035bc..86490fa 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -232,6 +232,7 @@ Type *pointer_to(Type *base);
+ Type *func_type(Type *return_ty);
+ Type *array_of(Type *base, int size);
+ Type *enum_type(void);
++Type *struct_type(void);
+ void add_type(Node *node);
+ 
+ //
+diff --git a/parse.c b/parse.c
+index 4162f61..99cdcab 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1054,22 +1054,37 @@ static Type *struct_union_decl(Token **rest, Token *tok) {
+   }
+ 
+   if (tag && !equal(tok, "{")) {
+-    Type *ty = find_tag(tag);
+-    if (!ty)
+-      error_tok(tag, "unknown struct type");
+     *rest = tok;
++
++    Type *ty = find_tag(tag);
++    if (ty)
++      return ty;
++
++    ty = struct_type();
++    ty->size = -1;
++    push_tag_scope(tag, ty);
+     return ty;
+   }
+ 
++  tok = skip(tok, "{");
++
+   // Construct a struct object.
+-  Type *ty = calloc(1, sizeof(Type));
+-  ty->kind = TY_STRUCT;
+-  struct_members(rest, tok->next, ty);
+-  ty->align = 1;
++  Type *ty = struct_type();
++  struct_members(rest, tok, ty);
++
++  if (tag) {
++    // If this is a redefinition, overwrite a previous type.
++    // Otherwise, register the struct type.
++    for (TagScope *sc = scope->tags; sc; sc = sc->next) {
++      if (equal(tag, sc->name)) {
++        *sc->ty = *ty;
++        return sc->ty;
++      }
++    }
+ 
+-  // Register the struct type if a name was given.
+-  if (tag)
+     push_tag_scope(tag, ty);
++  }
++
+   return ty;
+ }
+ 
+@@ -1078,6 +1093,9 @@ static Type *struct_decl(Token **rest, Token *tok) {
+   Type *ty = struct_union_decl(rest, tok);
+   ty->kind = TY_STRUCT;
+ 
++  if (ty->size < 0)
++    return ty;
++
+   // Assign offsets within the struct to members.
+   int offset = 0;
+   for (Member *mem = ty->members; mem; mem = mem->next) {
+@@ -1097,6 +1115,9 @@ static Type *union_decl(Token **rest, Token *tok) {
+   Type *ty = struct_union_decl(rest, tok);
+   ty->kind = TY_UNION;
+ 
++  if (ty->size < 0)
++    return ty;
++
+   // If union, we don't have to assign offsets because they
+   // are already initialized to zero. We need to compute the
+   // alignment and the size though.
+diff --git a/test/struct.c b/test/struct.c
+index cbd4343..64fb03f 100644
+--- a/test/struct.c
++++ b/test/struct.c
+@@ -52,6 +52,11 @@ int main() {
+   ASSERT(16, ({ struct {char a; long b;} x; sizeof(x); }));
+   ASSERT(4, ({ struct {char a; short b;} x; sizeof(x); }));
+ 
++  ASSERT(8, ({ struct foo *bar; sizeof(bar); }));
++  ASSERT(4, ({ struct T *foo; struct T {int x;}; sizeof(struct T); }));
++  ASSERT(1, ({ struct T { struct T *next; int x; } a; struct T b; b.x=1; a.next=&b; a.next->x; }));
++  ASSERT(4, ({ typedef struct T T; struct T { int x; }; sizeof(T); }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/type.c b/type.c
+index c07f26d..c482d15 100644
+--- a/type.c
++++ b/type.c
+@@ -52,6 +52,10 @@ Type *enum_type(void) {
+   return new_type(TY_ENUM, 4, 4);
+ }
+ 
++Type *struct_type(void) {
++  return new_type(TY_STRUCT, 0, 1);
++}
++
+ static Type *get_common_type(Type *ty1, Type *ty2) {
+   if (ty1->base)
+     return pointer_to(ty1->base);

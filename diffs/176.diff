@@ -1,0 +1,172 @@
+subject: Add macro stringizing operator (#)
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index a22728e..f476971 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -86,6 +86,8 @@ Token *skip(Token *tok, char *op);
+ bool consume(Token **rest, Token *tok, char *str);
+ void convert_keywords(Token *tok);
+ File **get_input_files(void);
++File *new_file(char *name, int file_no, char *contents);
++Token *tokenize(File *file);
+ Token *tokenize_file(char *filename);
+ 
+ #define unreachable() \
+diff --git a/preprocess.c b/preprocess.c
+index 2501cc4..82b8fcc 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -190,6 +190,33 @@ static Token *skip_cond_incl(Token *tok) {
+   return tok;
+ }
+ 
++// Double-quote a given string and returns it.
++static char *quote_string(char *str) {
++  int bufsize = 3;
++  for (int i = 0; str[i]; i++) {
++    if (str[i] == '\\' || str[i] == '"')
++      bufsize++;
++    bufsize++;
++  }
++
++  char *buf = calloc(1, bufsize);
++  char *p = buf;
++  *p++ = '"';
++  for (int i = 0; str[i]; i++) {
++    if (str[i] == '\\' || str[i] == '"')
++      *p++ = '\\';
++    *p++ = str[i];
++  }
++  *p++ = '"';
++  *p++ = '\0';
++  return buf;
++}
++
++static Token *new_str_token(char *str, Token *tmpl) {
++  char *buf = quote_string(str);
++  return tokenize(new_file(tmpl->file->name, tmpl->file->file_no, buf));
++}
++
+ // Copy all tokens until the next newline, terminate them with
+ // an EOF token and then returns them. This function is used to
+ // create a new list of tokens for `#if` arguments.
+@@ -342,16 +369,59 @@ static MacroArg *find_arg(MacroArg *args, Token *tok) {
+   return NULL;
+ }
+ 
++// Concatenates all tokens in `tok` and returns a new string.
++static char *join_tokens(Token *tok) {
++  // Compute the length of the resulting token.
++  int len = 1;
++  for (Token *t = tok; t && t->kind != TK_EOF; t = t->next) {
++    if (t != tok && t->has_space)
++      len++;
++    len += t->len;
++  }
++
++  char *buf = calloc(1, len);
++
++  // Copy token texts.
++  int pos = 0;
++  for (Token *t = tok; t && t->kind != TK_EOF; t = t->next) {
++    if (t != tok && t->has_space)
++      buf[pos++] = ' ';
++    strncpy(buf + pos, t->loc, t->len);
++    pos += t->len;
++  }
++  buf[pos] = '\0';
++  return buf;
++}
++
++// Concatenates all tokens in `arg` and returns a new string token.
++// This function is used for the stringizing operator (#).
++static Token *stringize(Token *hash, Token *arg) {
++  // Create a new string token. We need to set some value to its
++  // source location for error reporting function, so we use a macro
++  // name token as a template.
++  char *s = join_tokens(arg);
++  return new_str_token(s, hash);
++}
++
+ // Replace func-like macro parameters with given arguments.
+ static Token *subst(Token *tok, MacroArg *args) {
+   Token head = {};
+   Token *cur = &head;
+ 
+   while (tok->kind != TK_EOF) {
+-    MacroArg *arg = find_arg(args, tok);
++    // "#" followed by a parameter is replaced with stringized actuals.
++    if (equal(tok, "#")) {
++      MacroArg *arg = find_arg(args, tok->next);
++      if (!arg)
++        error_tok(tok->next, "'#' is not followed by a macro parameter");
++      cur = cur->next = stringize(tok, arg->tok);
++      tok = tok->next->next;
++      continue;
++    }
+ 
+     // Handle a macro token. Macro arguments are completely macro-expanded
+     // before they are substituted into a macro body.
++    MacroArg *arg = find_arg(args, tok);
+     if (arg) {
+       Token *t = preprocess2(arg->tok);
+       for (; t->kind != TK_EOF; t = t->next)
+diff --git a/self.py b/self.py
+index d53c5ab..fd6623e 100755
+--- a/self.py
++++ b/self.py
+@@ -93,6 +93,7 @@ int wait(int *wstatus);
+ int atexit(void (*)(void));
+ FILE *open_memstream(char **ptr, size_t *sizeloc);
+ char *dirname(char *path);
++char *strncpy(char *dest, char *src, long n);
+ """)
+ 
+ for path in sys.argv[1:]:
+diff --git a/test/macro.c b/test/macro.c
+index f24ba5b..59430d1 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -227,6 +227,17 @@ int main() {
+ #define M10(x) dbl(x) + 3
+   assert(10, dbl(2), "dbl(2)");
+ 
++#define M11(x) #x
++  assert('a', M11( a!b  `""c)[0], "M11( a!b  `\"\"c)[0]");
++  assert('!', M11( a!b  `""c)[1], "M11( a!b  `\"\"c)[1]");
++  assert('b', M11( a!b  `""c)[2], "M11( a!b  `\"\"c)[2]");
++  assert(' ', M11( a!b  `""c)[3], "M11( a!b  `\"\"c)[3]");
++  assert('`', M11( a!b  `""c)[4], "M11( a!b  `\"\"c)[4]");
++  assert('"', M11( a!b  `""c)[5], "M11( a!b  `\"\"c)[5]");
++  assert('"', M11( a!b  `""c)[6], "M11( a!b  `\"\"c)[6]");
++  assert('c', M11( a!b  `""c)[7], "M11( a!b  `\"\"c)[7]");
++  assert(0, M11( a!b  `""c)[8], "M11( a!b  `\"\"c)[8]");
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index ace7720..6f73208 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -391,7 +391,7 @@ static void add_line_numbers(Token *tok) {
+ }
+ 
+ // Tokenize a given string and returns new tokens.
+-static Token *tokenize(File *file) {
++Token *tokenize(File *file) {
+   current_file = file;
+ 
+   char *p = file->contents;
+@@ -525,7 +525,7 @@ File **get_input_files(void) {
+   return input_files;
+ }
+ 
+-static File *new_file(char *name, int file_no, char *contents) {
++File *new_file(char *name, int file_no, char *contents) {
+   File *file = calloc(1, sizeof(File));
+   file->name = name;
+   file->file_no = file_no;

@@ -1,0 +1,113 @@
+subject: Add va_arg()
+
+
+
+diff --git a/include/stdarg.h b/include/stdarg.h
+index 9143aea..d654ddb 100644
+--- a/include/stdarg.h
++++ b/include/stdarg.h
+@@ -15,6 +15,30 @@ typedef __va_elem va_list[1];
+ 
+ #define va_end(ap)
+ 
++static void *__va_arg_gp(__va_elem *ap) {
++  void *r = (char *)ap->reg_save_area + ap->gp_offset;
++  ap->gp_offset += 8;
++  return r;
++}
++
++static void *__va_arg_fp(__va_elem *ap) {
++  void *r = (char *)ap->reg_save_area + ap->fp_offset;
++  ap->fp_offset += 8;
++  return r;
++}
++
++static void *__va_arg_mem(__va_elem *ap) {
++  1 / 0; // not implemented
++}
++
++#define va_arg(ap, type)                        \
++  ({                                            \
++    int klass = __builtin_reg_class(type);      \
++    *(type *)(klass == 0 ? __va_arg_gp(ap) :    \
++              klass == 1 ? __va_arg_fp(ap) :    \
++              __va_arg_mem(ap));                \
++  })
++
+ #define __GNUC_VA_LIST 1
+ typedef va_list __gnuc_va_list;
+ 
+diff --git a/parse.c b/parse.c
+index 86c7d7a..f9dc7f3 100644
+--- a/parse.c
++++ b/parse.c
+@@ -2246,6 +2246,7 @@ static Node *funcall(Token **rest, Token *tok, Node *fn) {
+ //         | "sizeof" unary
+ //         | "_Alignof" "(" type-name ")"
+ //         | "_Alignof" unary
++//         | "__builtin_reg_class" "(" type-name ")"
+ //         | ident
+ //         | str
+ //         | num
+@@ -2290,6 +2291,18 @@ static Node *primary(Token **rest, Token *tok) {
+     return new_ulong(node->ty->align, tok);
+   }
+ 
++  if (equal(tok, "__builtin_reg_class")) {
++    tok = skip(tok->next, "(");
++    Type *ty = typename(&tok, tok);
++    *rest = skip(tok, ")");
++
++    if (is_integer(ty) || ty->kind == TY_PTR)
++      return new_num(0, start);
++    if (is_flonum(ty))
++      return new_num(1, start);
++    return new_num(2, start);
++  }
++
+   if (tok->kind == TK_IDENT) {
+     // Variable or enum constant
+     VarScope *sc = find_var(tok);
+diff --git a/test/varargs.c b/test/varargs.c
+new file mode 100644
+index 0000000..2f773d3
+--- /dev/null
++++ b/test/varargs.c
+@@ -0,0 +1,37 @@
++#include "test.h"
++#include <stdarg.h>
++
++int sum1(int x, ...) {
++  va_list ap;
++  va_start(ap, x);
++
++  for (;;) {
++    int y = va_arg(ap, int);
++    if (y == 0)
++      return x;
++    x += y;
++  }
++}
++
++int sum2(int x, ...) {
++  va_list ap;
++  va_start(ap, x);
++
++  for (;;) {
++    double y = va_arg(ap, double);
++    x += y;
++
++    int z = va_arg(ap, int);
++    if (z == 0)
++      return x;
++    x += z;
++  }
++}
++
++int main() {
++  ASSERT(6, sum1(1, 2, 3, 0));
++  ASSERT(21, sum2(1, 2.0, 3, 4.0, 5, 6.0, 0));
++
++  printf("OK\n");
++  return 0;
++}

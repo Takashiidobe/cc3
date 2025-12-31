@@ -1,0 +1,65 @@
+subject: Add character literal
+
+
+
+diff --git a/test/literal.c b/test/literal.c
+new file mode 100644
+index 0000000..fd3ccf9
+--- /dev/null
++++ b/test/literal.c
+@@ -0,0 +1,10 @@
++#include "test.h"
++
++int main() {
++  ASSERT(97, 'a');
++  ASSERT(10, '\n');
++  ASSERT(-128, '\x80');
++
++  printf("OK\n");
++  return 0;
++}
+diff --git a/tokenize.c b/tokenize.c
+index 08ffd68..7cb8b40 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -219,6 +219,26 @@ static Token *read_string_literal(char *start) {
+   return tok;
+ }
+ 
++static Token *read_char_literal(char *start) {
++  char *p = start + 1;
++  if (*p == '\0')
++    error_at(start, "unclosed char literal");
++
++  char c;
++  if (*p == '\\')
++    c = read_escaped_char(&p, p + 1);
++  else
++    c = *p++;
++
++  char *end = strchr(p, '\'');
++  if (!end)
++    error_at(p, "unclosed char literal");
++
++  Token *tok = new_token(TK_NUM, start, end + 1);
++  tok->val = c;
++  return tok;
++}
++
+ static void convert_keywords(Token *tok) {
+   for (Token *t = tok; t->kind != TK_EOF; t = t->next)
+     if (is_keyword(t))
+@@ -287,6 +307,13 @@ static Token *tokenize(char *filename, char *p) {
+       continue;
+     }
+ 
++    // Character literal
++    if (*p == '\'') {
++      cur = cur->next = read_char_literal(p);
++      p += cur->len;
++      continue;
++    }
++
+     // Identifier or keyword
+     if (is_ident1(*p)) {
+       char *start = p;

@@ -1,0 +1,112 @@
+subject: Allow to call a function that takes/returns flonums
+
+
+
+diff --git a/codegen.c b/codegen.c
+index feae976..9fc9bd9 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -40,8 +40,8 @@ static void pushf(void) {
+   depth++;
+ }
+ 
+-static void popf(char *arg) {
+-  println("  movsd (%%rsp), %s", arg);
++static void popf(int reg) {
++  println("  movsd (%%rsp), %%xmm%d", reg);
+   println("  add $8, %%rsp");
+   depth--;
+ }
+@@ -262,6 +262,18 @@ static void cast(Type *from, Type *to) {
+     println("  %s", cast_table[t1][t2]);
+ }
+ 
++static void push_args(Node *args) {
++  if (args) {
++    push_args(args->next);
++
++    gen_expr(args);
++    if (is_flonum(args->ty))
++      pushf();
++    else
++      push();
++  }
++}
++
+ // Generate code for a given node.
+ static void gen_expr(Node *node) {
+   println("  .loc 1 %d", node->tok->line_no);
+@@ -398,18 +410,16 @@ static void gen_expr(Node *node) {
+     return;
+   }
+   case ND_FUNCALL: {
+-    int nargs = 0;
++    push_args(node->args);
++
++    int gp = 0, fp = 0;
+     for (Node *arg = node->args; arg; arg = arg->next) {
+-      gen_expr(arg);
+-      push();
+-      nargs++;
++      if (is_flonum(arg->ty))
++        popf(fp++);
++      else
++        pop(argreg64[gp++]);
+     }
+ 
+-    for (int i = nargs - 1; i >= 0; i--)
+-      pop(argreg64[i]);
+-
+-    println("  mov $0, %%rax");
+-
+     if (depth % 2 == 0) {
+       println("  call %s", node->funcname);
+     } else {
+@@ -446,7 +456,7 @@ static void gen_expr(Node *node) {
+     gen_expr(node->rhs);
+     pushf();
+     gen_expr(node->lhs);
+-    popf("%xmm1");
++    popf(1);
+ 
+     char *sz = (node->lhs->ty->kind == TY_FLOAT) ? "ss" : "sd";
+ 
+diff --git a/test/common b/test/common
+index b33b9dd..8f30b46 100644
+--- a/test/common
++++ b/test/common
+@@ -38,3 +38,11 @@ int add_all(int n, ...) {
+     sum += va_arg(ap, int);
+   return sum;
+ }
++
++float add_float(float x, float y) {
++  return x + y;
++}
++
++double add_double(double x, double y) {
++  return x + y;
++}
+diff --git a/test/function.c b/test/function.c
+index 4e0e159..450531b 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -97,6 +97,9 @@ char *fmt(char *buf, char *fmt, ...) {
+   vsprintf(buf, fmt, ap);
+ }
+ 
++double add_double(double x, double y);
++float add_float(float x, float y);
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -157,6 +160,8 @@ int main() {
+   ASSERT(-5, schar_fn());
+   ASSERT(-8, sshort_fn());
+ 
++  ASSERT(6, add_float(2.3, 3.8));
++  ASSERT(6, add_double(2.3, 3.8));
+ 
+   printf("OK\n");
+   return 0;

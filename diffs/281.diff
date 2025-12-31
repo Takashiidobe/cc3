@@ -1,0 +1,86 @@
+subject: [GNU] Support array range designator
+
+
+
+diff --git a/parse.c b/parse.c
+index 77ea6bd..ed23730 100644
+--- a/parse.c
++++ b/parse.c
+@@ -975,13 +975,22 @@ static void string_initializer(Token **rest, Token *tok, Initializer *init) {
+ //   struct { int a, b, c; } x = { .c=5 };
+ //
+ // The above initializer sets x.c to 5.
+-static int array_designator(Token **rest, Token *tok, Type *ty) {
+-  Token *start = tok;
+-  int i = const_expr(&tok, tok->next);
+-  if (i >= ty->array_len)
+-    error_tok(start, "array designator index exceeds array bounds");
++static void array_designator(Token **rest, Token *tok, Type *ty, int *begin, int *end) {
++  *begin = const_expr(&tok, tok->next);
++  if (*begin >= ty->array_len)
++    error_tok(tok, "array designator index exceeds array bounds");
++
++  if (equal(tok, "...")) {
++    *end = const_expr(&tok, tok->next);
++    if (*end >= ty->array_len)
++      error_tok(tok, "array designator index exceeds array bounds");
++    if (*end < *begin)
++      error_tok(tok, "array designator range [%d, %d] is empty", *begin, *end);
++  } else {
++    *end = *begin;
++  }
++
+   *rest = skip(tok, "]");
+-  return i;
+ }
+ 
+ // struct-designator = "." ident
+@@ -1016,9 +1025,14 @@ static void designation(Token **rest, Token *tok, Initializer *init) {
+   if (equal(tok, "[")) {
+     if (init->ty->kind != TY_ARRAY)
+       error_tok(tok, "array index in non-array initializer");
+-    int i = array_designator(&tok, tok, init->ty);
+-    designation(&tok, tok, init->children[i]);
+-    array_initializer2(rest, tok, init, i + 1);
++
++    int begin, end;
++    array_designator(&tok, tok, init->ty, &begin, &end);
++
++    Token *tok2;
++    for (int i = begin; i <= end; i++)
++      designation(&tok2, tok, init->children[i]);
++    array_initializer2(rest, tok2, init, begin + 1);
+     return;
+   }
+ 
+@@ -1097,8 +1111,14 @@ static void array_initializer1(Token **rest, Token *tok, Initializer *init) {
+     first = false;
+ 
+     if (equal(tok, "[")) {
+-      i = array_designator(&tok, tok, init->ty);
+-      designation(&tok, tok, init->children[i]);
++      int begin, end;
++      array_designator(&tok, tok, init->ty, &begin, &end);
++
++      Token *tok2;
++      for (int j = begin; j <= end; j++)
++        designation(&tok2, tok, init->children[j]);
++      tok = tok2;
++      i = end;
+       continue;
+     }
+ 
+diff --git a/test/initializer.c b/test/initializer.c
+index 93aa7c7..9df2ccd 100644
+--- a/test/initializer.c
++++ b/test/initializer.c
+@@ -259,6 +259,9 @@ int main() {
+   ASSERT(4, ({ struct { struct { int a; struct { int b; }; }; int c; } x={1,2,3,.b=4,5}; x.b; }));
+   ASSERT(5, ({ struct { struct { int a; struct { int b; }; }; int c; } x={1,2,3,.b=4,5}; x.c; }));
+ 
++  ASSERT(16, ({ char x[]={[2 ... 10]='a', [7]='b', [15 ... 15]='c', [3 ... 5]='d'}; sizeof(x); }));
++  ASSERT(0, ({ char x[]={[2 ... 10]='a', [7]='b', [15 ... 15]='c', [3 ... 5]='d'}; memcmp(x, "\0\0adddabaaa\0\0\0\0c", 16); }));
++
+   printf("OK\n");
+   return 0;
+ }

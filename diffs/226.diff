@@ -1,0 +1,42 @@
+subject: Add UTF-32 character literal
+
+
+
+diff --git a/test/unicode.c b/test/unicode.c
+index 93635c8..c57c2a6 100644
+--- a/test/unicode.c
++++ b/test/unicode.c
+@@ -25,6 +25,15 @@ int main() {
+ 
+   ASSERT(0, strcmp(STR(u'a'), "u'a'"));
+ 
++  ASSERT(4, sizeof(U'\0'));
++  ASSERT(1, U'\xffffffff'>>31);
++  ASSERT(97, U'a');
++  ASSERT(946, U'β');
++  ASSERT(12354, U'あ');
++  ASSERT(127843, U'🍣');
++
++  ASSERT(0, strcmp(STR(U'a'), "U'a'"));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index ca577fd..933ee72 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -495,6 +495,13 @@ Token *tokenize(File *file) {
+       continue;
+     }
+ 
++    // UTF-32 character literal
++    if (startswith(p, "U'")) {
++      cur = cur->next = read_char_literal(p, p + 1, ty_uint);
++      p += cur->len;
++      continue;
++    }
++
+     // Identifier or keyword
+     if (is_ident1(*p)) {
+       char *start = p;

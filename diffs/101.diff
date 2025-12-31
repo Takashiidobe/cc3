@@ -1,0 +1,185 @@
+subject: Handle struct initializers for local variables
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index d3be5b7..bc782a3 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -243,6 +243,7 @@ struct Member {
+   Type *ty;
+   Token *tok; // for error message
+   Token *name;
++  int idx;
+   int offset;
+ };
+ 
+diff --git a/parse.c b/parse.c
+index 7a0245d..8f36169 100644
+--- a/parse.c
++++ b/parse.c
+@@ -79,6 +79,7 @@ typedef struct InitDesg InitDesg;
+ struct InitDesg {
+   InitDesg *next;
+   int idx;
++  Member *member;
+   Obj *var;
+ };
+ 
+@@ -240,6 +241,20 @@ static Initializer *new_initializer(Type *ty, bool is_flexible) {
+     init->children = calloc(ty->array_len, sizeof(Initializer *));
+     for (int i = 0; i < ty->array_len; i++)
+       init->children[i] = new_initializer(ty->base, false);
++    return init;
++  }
++
++  if (ty->kind == TY_STRUCT) {
++    // Count the number of struct members.
++    int len = 0;
++    for (Member *mem = ty->members; mem; mem = mem->next)
++      len++;
++
++    init->children = calloc(len, sizeof(Initializer *));
++
++    for (Member *mem = ty->members; mem; mem = mem->next)
++      init->children[mem->idx] = new_initializer(mem->ty, false);
++    return init;
+   }
+ 
+   return init;
+@@ -667,7 +682,27 @@ static void array_initializer(Token **rest, Token *tok, Initializer *init) {
+   }
+ }
+ 
+-// initializer = string-initializer | array-initializer | assign
++// struct-initializer = "{" initializer ("," initializer)* "}"
++static void struct_initializer(Token **rest, Token *tok, Initializer *init) {
++  tok = skip(tok, "{");
++
++  Member *mem = init->ty->members;
++
++  while (!consume(rest, tok, "}")) {
++    if (mem != init->ty->members)
++      tok = skip(tok, ",");
++
++    if (mem) {
++      initializer2(&tok, tok, init->children[mem->idx]);
++      mem = mem->next;
++    } else {
++      tok = skip_excess_element(tok);
++    }
++  }
++}
++
++// initializer = string-initializer | array-initializer
++//             | struct-initializer | assign
+ static void initializer2(Token **rest, Token *tok, Initializer *init) {
+   if (init->ty->kind == TY_ARRAY && tok->kind == TK_STR) {
+     string_initializer(rest, tok, init);
+@@ -679,6 +714,11 @@ static void initializer2(Token **rest, Token *tok, Initializer *init) {
+     return;
+   }
+ 
++  if (init->ty->kind == TY_STRUCT) {
++    struct_initializer(rest, tok, init);
++    return;
++  }
++
+   init->expr = assign(rest, tok);
+ }
+ 
+@@ -693,6 +733,12 @@ static Node *init_desg_expr(InitDesg *desg, Token *tok) {
+   if (desg->var)
+     return new_var_node(desg->var, tok);
+ 
++  if (desg->member) {
++    Node *node = new_unary(ND_MEMBER, init_desg_expr(desg->next, tok), tok);
++    node->member = desg->member;
++    return node;
++  }
++
+   Node *lhs = init_desg_expr(desg->next, tok);
+   Node *rhs = new_num(desg->idx, tok);
+   return new_unary(ND_DEREF, new_add(lhs, rhs, tok), tok);
+@@ -709,6 +755,17 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
+     return node;
+   }
+ 
++  if (ty->kind == TY_STRUCT) {
++    Node *node = new_node(ND_NULL_EXPR, tok);
++
++    for (Member *mem = ty->members; mem; mem = mem->next) {
++      InitDesg desg2 = {desg, 0, mem};
++      Node *rhs = create_lvar_init(init->children[mem->idx], mem->ty, &desg2, tok);
++      node = new_binary(ND_COMMA, node, rhs, tok);
++    }
++    return node;
++  }
++
+   if (!init->expr)
+     return new_node(ND_NULL_EXPR, tok);
+ 
+@@ -728,7 +785,7 @@ static Node *create_lvar_init(Initializer *init, Type *ty, InitDesg *desg, Token
+ //   x[1][1] = 9;
+ static Node *lvar_initializer(Token **rest, Token *tok, Obj *var) {
+   Initializer *init = initializer(rest, tok, var->ty, &var->ty);
+-  InitDesg desg = {NULL, 0, var};
++  InitDesg desg = {NULL, 0, NULL, var};
+ 
+   // If a partial initializer list is given, the standard requires
+   // that unspecified elements are set to 0. Here, we simply
+@@ -1426,18 +1483,21 @@ static Node *unary(Token **rest, Token *tok) {
+ static void struct_members(Token **rest, Token *tok, Type *ty) {
+   Member head = {};
+   Member *cur = &head;
++  int idx = 0;
+ 
+   while (!equal(tok, "}")) {
+     Type *basety = declspec(&tok, tok, NULL);
+-    int i = 0;
++    bool first = true;
+ 
+     while (!consume(&tok, tok, ";")) {
+-      if (i++)
++      if (!first)
+         tok = skip(tok, ",");
++      first = false;
+ 
+       Member *mem = calloc(1, sizeof(Member));
+       mem->ty = declarator(&tok, tok, basety);
+       mem->name = mem->ty->name;
++      mem->idx = idx++;
+       cur = cur->next = mem;
+     }
+   }
+diff --git a/test/initializer.c b/test/initializer.c
+index 591782a..a627847 100644
+--- a/test/initializer.c
++++ b/test/initializer.c
+@@ -35,6 +35,26 @@ int main() {
+   ASSERT(2, ({ typedef char T[]; T x="x"; T y="foo"; sizeof(x); }));
+   ASSERT(4, ({ typedef char T[]; T x="x"; T y="foo"; sizeof(y); }));
+ 
++  ASSERT(1, ({ struct {int a; int b; int c;} x={1,2,3}; x.a; }));
++  ASSERT(2, ({ struct {int a; int b; int c;} x={1,2,3}; x.b; }));
++  ASSERT(3, ({ struct {int a; int b; int c;} x={1,2,3}; x.c; }));
++  ASSERT(1, ({ struct {int a; int b; int c;} x={1}; x.a; }));
++  ASSERT(0, ({ struct {int a; int b; int c;} x={1}; x.b; }));
++  ASSERT(0, ({ struct {int a; int b; int c;} x={1}; x.c; }));
++
++  ASSERT(1, ({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[0].a; }));
++  ASSERT(2, ({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[0].b; }));
++  ASSERT(3, ({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[1].a; }));
++  ASSERT(4, ({ struct {int a; int b;} x[2]={{1,2},{3,4}}; x[1].b; }));
++
++  ASSERT(0, ({ struct {int a; int b;} x[2]={{1,2}}; x[1].b; }));
++
++  ASSERT(0, ({ struct {int a; int b;} x={}; x.a; }));
++  ASSERT(0, ({ struct {int a; int b;} x={}; x.b; }));
++
++  ASSERT(5, ({ typedef struct {int a,b,c,d,e,f;} T; T x={1,2,3,4,5,6}; T y; y=x; y.e; }));
++  ASSERT(2, ({ typedef struct {int a,b;} T; T x={1,2}; T y, z; z=y=x; z.b; }));
++
+   printf("OK\n");
+   return 0;
+ }

@@ -1,0 +1,142 @@
+subject: Add pointer arithmetic for VLA
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 41a2b97..30d07cb 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -214,6 +214,7 @@ typedef enum {
+   ND_EXPR_STMT, // Expression statement
+   ND_STMT_EXPR, // Statement expression
+   ND_VAR,       // Variable
++  ND_VLA_PTR,   // VLA designator
+   ND_NUM,       // Integer
+   ND_CAST,      // Type cast
+   ND_MEMZERO,   // Zero-clear a stack variable
+diff --git a/codegen.c b/codegen.c
+index 907c1aa..3b580b0 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -61,6 +61,12 @@ int align_to(int n, int align) {
+ static void gen_addr(Node *node) {
+   switch (node->kind) {
+   case ND_VAR:
++    // Variable-length array, which is always local.
++    if (node->var->ty->kind == TY_VLA) {
++      println("  mov %d(%%rbp), %%rax", node->var->offset);
++      return;
++    }
++
+     // Local variable
+     if (node->var->is_local) {
+       println("  lea %d(%%rbp), %%rax", node->var->offset);
+@@ -126,6 +132,9 @@ static void gen_addr(Node *node) {
+       return;
+     }
+     break;
++  case ND_VLA_PTR:
++    println("  lea %d(%%rbp), %%rax", node->var->offset);
++    return;
+   }
+ 
+   error_tok(node->tok, "not an lvalue");
+@@ -138,6 +147,7 @@ static void load(Type *ty) {
+   case TY_STRUCT:
+   case TY_UNION:
+   case TY_FUNC:
++  case TY_VLA:
+     // If it is an array, do not attempt to load a value to the
+     // register because in general we can't load an entire array to a
+     // register. As a result, the result of an evaluation of an array
+diff --git a/parse.c b/parse.c
+index 39818fb..ddec052 100644
+--- a/parse.c
++++ b/parse.c
+@@ -244,6 +244,12 @@ static Node *new_var_node(Obj *var, Token *tok) {
+   return node;
+ }
+ 
++static Node *new_vla_ptr(Obj *var, Token *tok) {
++  Node *node = new_node(ND_VLA_PTR, tok);
++  node->var = var;
++  return node;
++}
++
+ Node *new_cast(Node *expr, Type *ty) {
+   add_type(expr);
+ 
+@@ -870,7 +876,7 @@ static Node *declaration(Token **rest, Token *tok, Type *basety, VarAttr *attr)
+       // x = alloca(tmp)`.
+       Obj *var = new_lvar(get_ident(ty->name), ty);
+       Token *tok = ty->name;
+-      Node *expr = new_binary(ND_ASSIGN, new_var_node(var, tok),
++      Node *expr = new_binary(ND_ASSIGN, new_vla_ptr(var, tok),
+                               new_alloca(new_var_node(ty->vla_size, tok)),
+                               tok);
+ 
+@@ -2247,6 +2253,12 @@ static Node *new_add(Node *lhs, Node *rhs, Token *tok) {
+     rhs = tmp;
+   }
+ 
++  // VLA + num
++  if (lhs->ty->base->kind == TY_VLA) {
++    rhs = new_binary(ND_MUL, rhs, new_var_node(lhs->ty->base->vla_size, tok), tok);
++    return new_binary(ND_ADD, lhs, rhs, tok);
++  }
++
+   // ptr + num
+   rhs = new_binary(ND_MUL, rhs, new_long(lhs->ty->base->size, tok), tok);
+   return new_binary(ND_ADD, lhs, rhs, tok);
+@@ -2261,6 +2273,15 @@ static Node *new_sub(Node *lhs, Node *rhs, Token *tok) {
+   if (is_numeric(lhs->ty) && is_numeric(rhs->ty))
+     return new_binary(ND_SUB, lhs, rhs, tok);
+ 
++  // VLA + num
++  if (lhs->ty->base->kind == TY_VLA) {
++    rhs = new_binary(ND_MUL, rhs, new_var_node(lhs->ty->base->vla_size, tok), tok);
++    add_type(rhs);
++    Node *node = new_binary(ND_SUB, lhs, rhs, tok);
++    node->ty = lhs->ty;
++    return node;
++  }
++
+   // ptr - num
+   if (lhs->ty->base && is_integer(rhs->ty)) {
+     rhs = new_binary(ND_MUL, rhs, new_long(lhs->ty->base->size, tok), tok);
+diff --git a/test/test.h b/test/test.h
+index 1e640ae..61fe260 100644
+--- a/test/test.h
++++ b/test/test.h
+@@ -11,3 +11,4 @@ void exit(int n);
+ int vsprintf();
+ long strlen(char *s);
+ void *memcpy(void *dest, void *src, long n);
++void *memset(void *s, int c, long n);
+diff --git a/test/vla.c b/test/vla.c
+index edc3fb4..60c6dfb 100644
+--- a/test/vla.c
++++ b/test/vla.c
+@@ -15,6 +15,10 @@ int main() {
+   ASSERT(60, ({ char n=3; int x[n][5]; sizeof(x); }));
+   ASSERT(20, ({ char n=3; int x[n][5]; sizeof(*x); }));
+ 
++  ASSERT(0, ({ int n=10; int x[n+1][n+6]; int *p=x; for (int i = 0; i<sizeof(x)/4; i++) p[i]=i; x[0][0]; }));
++  ASSERT(5, ({ int n=10; int x[n+1][n+6]; int *p=x; for (int i = 0; i<sizeof(x)/4; i++) p[i]=i; x[0][5]; }));
++  ASSERT(5*16+2, ({ int n=10; int x[n+1][n+6]; int *p=x; for (int i = 0; i<sizeof(x)/4; i++) p[i]=i; x[5][2]; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/type.c b/type.c
+index 6f4166b..781ac48 100644
+--- a/type.c
++++ b/type.c
+@@ -234,6 +234,7 @@ void add_type(Node *node) {
+     node->ty = node->lhs->ty;
+     return;
+   case ND_VAR:
++  case ND_VLA_PTR:
+     node->ty = node->var->ty;
+     return;
+   case ND_COND:

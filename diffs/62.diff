@@ -1,0 +1,30 @@
+subject: Add `long long` as an alias for `long`
+
+
+
+diff --git a/parse.c b/parse.c
+index bb494b5..9627a99 100644
+--- a/parse.c
++++ b/parse.c
+@@ -271,6 +271,8 @@ static Type *declspec(Token **rest, Token *tok) {
+       break;
+     case LONG:
+     case LONG + INT:
++    case LONG + LONG:
++    case LONG + LONG + INT:
+       ty = ty_long;
+       break;
+     default:
+diff --git a/test/decl.c b/test/decl.c
+index 14dc267..8536ca9 100644
+--- a/test/decl.c
++++ b/test/decl.c
+@@ -8,6 +8,8 @@ int main() {
+   ASSERT(8, ({ long int x; sizeof(x); }));
+   ASSERT(8, ({ int long x; sizeof(x); }));
+ 
++  ASSERT(8, ({ long long x; sizeof(x); }));
++
+   printf("OK\n");
+   return 0;
+ }

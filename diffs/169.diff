@@ -1,0 +1,175 @@
+subject: Do not expand a token more than once for the same objlike macro
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 51aefe6..d3a0cd2 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -23,6 +23,7 @@ typedef struct Type Type;
+ typedef struct Node Node;
+ typedef struct Member Member;
+ typedef struct Relocation Relocation;
++typedef struct Hideset Hideset;
+ 
+ //
+ // strings.c
+@@ -60,18 +61,19 @@ typedef struct {
+ // Token type
+ typedef struct Token Token;
+ struct Token {
+-  TokenKind kind; // Token kind
+-  Token *next;    // Next token
+-  int64_t val;    // If kind is TK_NUM, its value
+-  double fval;    // If kind is TK_NUM, its value
+-  char *loc;      // Token location
+-  int len;        // Token length
+-  Type *ty;       // Used if TK_NUM or TK_STR
+-  char *str;      // String literal contents including terminating '\0'
+-
+-  File *file;     // Source location
+-  int line_no;    // Line number
+-  bool at_bol;    // True if this token is at beginning of line
++  TokenKind kind;   // Token kind
++  Token *next;      // Next token
++  int64_t val;      // If kind is TK_NUM, its value
++  double fval;      // If kind is TK_NUM, its value
++  char *loc;        // Token location
++  int len;          // Token length
++  Type *ty;         // Used if TK_NUM or TK_STR
++  char *str;        // String literal contents including terminating '\0'
++
++  File *file;       // Source location
++  int line_no;      // Line number
++  bool at_bol;      // True if this token is at beginning of line
++  Hideset *hideset; // For macro expansion
+ };
+ 
+ void error(char *fmt, ...);
+diff --git a/preprocess.c b/preprocess.c
+index e67f324..e96d20d 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -1,3 +1,26 @@
++// This file implements the C preprocessor.
++//
++// The preprocessor takes a list of tokens as an input and returns a
++// new list of tokens as an output.
++//
++// The preprocessing language is designed in such a way that that's
++// guaranteed to stop even if there is a recursive macro.
++// Informally speaking, a macro is applied only once for each token.
++// That is, if a macro token T appears in a result of direct or
++// indirect macro expansion of T, T won't be expanded any further.
++// For example, if T is defined as U, and U is defined as T, then
++// token T is expanded to U and then to T and the macro expansion
++// stops at that point.
++//
++// To achieve the above behavior, we attach for each token a set of
++// macro names from which the token is expanded. The set is called
++// "hideset". Hideset is initially empty, and every time we expand a
++// macro, the macro name is added to the resulting tokens' hidesets.
++//
++// The above macro expansion algorithm is explained in this document,
++// which is used as a basis for the standard's wording:
++// https://github.com/rui314/chibicc/wiki/cpp.algo.pdf
++
+ #include "chibicc.h"
+ 
+ typedef struct Macro Macro;
+@@ -17,6 +40,12 @@ struct CondIncl {
+   bool included;
+ };
+ 
++typedef struct Hideset Hideset;
++struct Hideset {
++  Hideset *next;
++  char *name;
++};
++
+ static Macro *macros;
+ static CondIncl *cond_incl;
+ 
+@@ -51,6 +80,41 @@ static Token *new_eof(Token *tok) {
+   return t;
+ }
+ 
++static Hideset *new_hideset(char *name) {
++  Hideset *hs = calloc(1, sizeof(Hideset));
++  hs->name = name;
++  return hs;
++}
++
++static Hideset *hideset_union(Hideset *hs1, Hideset *hs2) {
++  Hideset head = {};
++  Hideset *cur = &head;
++
++  for (; hs1; hs1 = hs1->next)
++    cur = cur->next = new_hideset(hs1->name);
++  cur->next = hs2;
++  return head.next;
++}
++
++static bool hideset_contains(Hideset *hs, char *s, int len) {
++  for (; hs; hs = hs->next)
++    if (strlen(hs->name) == len && !strncmp(hs->name, s, len))
++      return true;
++  return false;
++}
++
++static Token *add_hideset(Token *tok, Hideset *hs) {
++  Token head = {};
++  Token *cur = &head;
++
++  for (; tok; tok = tok->next) {
++    Token *t = copy_token(tok);
++    t->hideset = hideset_union(t->hideset, hs);
++    cur = cur->next = t;
++  }
++  return head.next;
++}
++
+ // Append tok2 to the end of tok1.
+ static Token *append(Token *tok1, Token *tok2) {
+   if (tok1->kind == TK_EOF)
+@@ -159,10 +223,16 @@ static Macro *add_macro(char *name, Token *body) {
+ // If tok is a macro, expand it and return true.
+ // Otherwise, do nothing and return false.
+ static bool expand_macro(Token **rest, Token *tok) {
++  if (hideset_contains(tok->hideset, tok->loc, tok->len))
++    return false;
++
+   Macro *m = find_macro(tok);
+   if (!m)
+     return false;
+-  *rest = append(m->body, tok->next);
++
++  Hideset *hs = hideset_union(tok->hideset, new_hideset(m->name));
++  Token *body = add_hideset(m->body, hs);
++  *rest = append(body, tok->next);
+   return true;
+ }
+ 
+diff --git a/test/macro.c b/test/macro.c
+index 61447f6..787cbf3 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -144,6 +144,18 @@ int main() {
+ #endif
+   assert(5, m, "m");
+ 
++  int M2 = 6;
++#define M2 M2 + 3
++  assert(9, M2, "M2");
++
++#define M3 M2 + 3
++  assert(12, M3, "M3");
++
++  int M4 = 3;
++#define M4 M5 * 5
++#define M5 M4 + 2
++  assert(13, M4, "M4");
++
+   printf("OK\n");
+   return 0;
+ }

@@ -1,0 +1,35 @@
+subject: Skip UTF-8 BOM markers
+
+
+
+diff --git a/test/driver.sh b/test/driver.sh
+index 86120e8..d1423a4 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -109,4 +109,8 @@ $chibicc -c -O -Wall -g -std=c11 -ffreestanding -fno-builtin \
+          -m64 -mno-red-zone -w -o /dev/null $tmp/empty.c
+ check 'ignored options'
+ 
++# BOM marker
++printf '\xef\xbb\xbfxyz\n' | $chibicc -E -o- - | grep -q '^xyz'
++check 'BOM marker'
++
+ echo OK
+diff --git a/tokenize.c b/tokenize.c
+index 39be6bd..2ce0f7c 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -772,6 +772,13 @@ Token *tokenize_file(char *path) {
+   if (!p)
+     return NULL;
+ 
++  // UTF-8 texts may start with a 3-byte "BOM" marker sequence.
++  // If exists, just skip them because they are useless bytes.
++  // (It is actually not recommended to add BOM markers to UTF-8
++  // texts, but it's not uncommon particularly on Windows.)
++  if (!memcmp(p, "\xef\xbb\xbf", 3))
++    p += 3;
++
+   canonicalize_newline(p);
+   remove_backslash_newline(p);
+   convert_universal_chars(p);

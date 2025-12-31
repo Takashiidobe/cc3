@@ -1,0 +1,181 @@
+subject: Add char type
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 9a96816..7448754 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -125,6 +125,7 @@ Obj *parse(Token *tok);
+ //
+ 
+ typedef enum {
++  TY_CHAR,
+   TY_INT,
+   TY_PTR,
+   TY_FUNC,
+@@ -157,6 +158,7 @@ struct Type {
+   Type *next;
+ };
+ 
++extern Type *ty_char;
+ extern Type *ty_int;
+ 
+ bool is_integer(Type *ty);
+diff --git a/codegen.c b/codegen.c
+index 4f873f5..b6eab83 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -1,7 +1,8 @@
+ #include "chibicc.h"
+ 
+ static int depth;
+-static char *argreg[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
++static char *argreg8[] = {"%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"};
++static char *argreg64[] = {"%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"};
+ static Obj *current_fn;
+ 
+ static void gen_expr(Node *node);
+@@ -60,13 +61,20 @@ static void load(Type *ty) {
+     return;
+   }
+ 
+-  printf("  mov (%%rax), %%rax\n");
++  if (ty->size == 1)
++    printf("  movsbq (%%rax), %%rax\n");
++  else
++    printf("  mov (%%rax), %%rax\n");
+ }
+ 
+ // Store %rax to an address that the stack top is pointing to.
+-static void store(void) {
++static void store(Type *ty) {
+   pop("%rdi");
+-  printf("  mov %%rax, (%%rdi)\n");
++
++  if (ty->size == 1)
++    printf("  mov %%al, (%%rdi)\n");
++  else
++    printf("  mov %%rax, (%%rdi)\n");
+ }
+ 
+ // Generate code for a given node.
+@@ -94,7 +102,7 @@ static void gen_expr(Node *node) {
+     gen_addr(node->lhs);
+     push();
+     gen_expr(node->rhs);
+-    store();
++    store(node->ty);
+     return;
+   case ND_FUNCALL: {
+     int nargs = 0;
+@@ -105,7 +113,7 @@ static void gen_expr(Node *node) {
+     }
+ 
+     for (int i = nargs - 1; i >= 0; i--)
+-      pop(argreg[i]);
++      pop(argreg64[i]);
+ 
+     printf("  mov $0, %%rax\n");
+     printf("  call %s\n", node->funcname);
+@@ -246,8 +254,12 @@ static void emit_text(Obj *prog) {
+ 
+     // Save passed-by-register arguments to the stack
+     int i = 0;
+-    for (Obj *var = fn->params; var; var = var->next)
+-      printf("  mov %s, %d(%%rbp)\n", argreg[i++], var->offset);
++    for (Obj *var = fn->params; var; var = var->next) {
++      if (var->ty->size == 1)
++        printf("  mov %s, %d(%%rbp)\n", argreg8[i++], var->offset);
++      else
++        printf("  mov %s, %d(%%rbp)\n", argreg64[i++], var->offset);
++    }
+ 
+     // Emit code
+     gen_stmt(fn->body);
+diff --git a/parse.c b/parse.c
+index ecf7b0a..33eeab6 100644
+--- a/parse.c
++++ b/parse.c
+@@ -118,8 +118,13 @@ static int get_number(Token *tok) {
+   return tok->val;
+ }
+ 
+-// declspec = "int"
++// declspec = "char" | "int"
+ static Type *declspec(Token **rest, Token *tok) {
++  if (equal(tok, "char")) {
++    *rest = tok->next;
++    return ty_char;
++  }
++
+   *rest = skip(tok, "int");
+   return ty_int;
+ }
+@@ -204,6 +209,11 @@ static Node *declaration(Token **rest, Token *tok) {
+   return node;
+ }
+ 
++// Returns true if a given token represents a type.
++static bool is_typename(Token *tok) {
++  return equal(tok, "char") || equal(tok, "int");
++}
++
+ // stmt = "return" expr ";"
+ //      | "if" "(" expr ")" stmt ("else" stmt)?
+ //      | "for" "(" expr-stmt expr? ";" expr? ")" stmt
+@@ -270,7 +280,7 @@ static Node *compound_stmt(Token **rest, Token *tok) {
+   Node head = {};
+   Node *cur = &head;
+   while (!equal(tok, "}")) {
+-    if (equal(tok, "int"))
++    if (is_typename(tok))
+       cur = cur->next = declaration(&tok, tok);
+     else
+       cur = cur->next = stmt(&tok, tok);
+diff --git a/test.sh b/test.sh
+index 29f30da..51d235d 100755
+--- a/test.sh
++++ b/test.sh
+@@ -163,4 +163,12 @@ assert 3 'int x[4]; int main() { x[0]=0; x[1]=1; x[2]=2; x[3]=3; return x[3]; }'
+ assert 8 'int x; int main() { return sizeof(x); }'
+ assert 32 'int x[4]; int main() { return sizeof(x); }'
+ 
++assert 1 'int main() { char x=1; return x; }'
++assert 1 'int main() { char x=1; char y=2; return x; }'
++assert 2 'int main() { char x=1; char y=2; return y; }'
++
++assert 1 'int main() { char x; return sizeof(x); }'
++assert 10 'int main() { char x[10]; return sizeof(x); }'
++assert 1 'int main() { return sub_char(7, 3, 3); } int sub_char(char a, char b, char c) { return a-b-c; }'
++
+ echo OK
+diff --git a/tokenize.c b/tokenize.c
+index 701a018..7aa19ba 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -90,7 +90,7 @@ static int read_punct(char *p) {
+ 
+ static bool is_keyword(Token *tok) {
+   static char *kw[] = {
+-    "return", "if", "else", "for", "while", "int", "sizeof",
++    "return", "if", "else", "for", "while", "int", "sizeof", "char",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
+diff --git a/type.c b/type.c
+index c4e9f24..9603faf 100644
+--- a/type.c
++++ b/type.c
+@@ -1,9 +1,10 @@
+ #include "chibicc.h"
+ 
++Type *ty_char = &(Type){TY_CHAR, 1};
+ Type *ty_int = &(Type){TY_INT, 8};
+ 
+ bool is_integer(Type *ty) {
+-  return ty->kind == TY_INT;
++  return ty->kind == TY_CHAR || ty->kind == TY_INT;
+ }
+ 
+ Type *copy_type(Type *ty) {

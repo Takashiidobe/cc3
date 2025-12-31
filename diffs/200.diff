@@ -1,0 +1,133 @@
+subject: Allow struct argument
+
+
+
+diff --git a/codegen.c b/codegen.c
+index 392bf0f..d0684a4 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -897,10 +897,27 @@ static void assign_lvar_offsets(Obj *prog) {
+ 
+     // Assign offsets to pass-by-stack parameters.
+     for (Obj *var = fn->params; var; var = var->next) {
+-      if (is_flonum(var->ty)) {
++      Type *ty = var->ty;
++
++      switch (ty->kind) {
++      case TY_STRUCT:
++      case TY_UNION:
++        if (ty->size <= 16) {
++          bool fp1 = has_flonum(ty, 0, 8, 0);
++          bool fp2 = has_flonum(ty, 8, 16, 8);
++          if (fp + fp1 + fp2 < FP_MAX && gp + !fp1 + !fp2 < GP_MAX) {
++            fp = fp + fp1 + fp2;
++            gp = gp + !fp1 + !fp2;
++            continue;
++          }
++        }
++        break;
++      case TY_FLOAT:
++      case TY_DOUBLE:
+         if (fp++ < FP_MAX)
+           continue;
+-      } else {
++        break;
++      default:
+         if (gp++ < GP_MAX)
+           continue;
+       }
+@@ -986,8 +1003,13 @@ static void store_gp(int r, int offset, int sz) {
+   case 8:
+     println("  mov %s, %d(%%rbp)", argreg64[r], offset);
+     return;
++  default:
++    for (int i = 0; i < sz; i++) {
++      println("  mov %s, %d(%%rbp)", argreg8[r], offset + i);
++      println("  shr $8, %s", argreg64[r]);
++    }
++    return;
+   }
+-  unreachable();
+ }
+ 
+ static void emit_text(Obj *prog) {
+@@ -1050,10 +1072,31 @@ static void emit_text(Obj *prog) {
+       if (var->offset > 0)
+         continue;
+ 
+-      if (is_flonum(var->ty))
+-        store_fp(fp++, var->offset, var->ty->size);
+-      else
+-        store_gp(gp++, var->offset, var->ty->size);
++      Type *ty = var->ty;
++
++      switch (ty->kind) {
++      case TY_STRUCT:
++      case TY_UNION:
++        assert(ty->size <= 16);
++        if (has_flonum(ty, 0, 8, 0))
++          store_fp(fp++, var->offset, MIN(8, ty->size));
++        else
++          store_gp(gp++, var->offset, MIN(8, ty->size));
++
++        if (ty->size > 8) {
++          if (has_flonum(ty, 8, 16, 0))
++            store_fp(fp++, var->offset + 8, ty->size - 8);
++          else
++            store_gp(gp++, var->offset + 8, ty->size - 8);
++        }
++        break;
++      case TY_FLOAT:
++      case TY_DOUBLE:
++        store_fp(fp++, var->offset, ty->size);
++        break;
++      default:
++        store_gp(gp++, var->offset, ty->size);
++      }
+     }
+ 
+     // Emit code
+diff --git a/test/function.c b/test/function.c
+index abb0c96..150ddfc 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -151,6 +151,23 @@ int struct_test4(Ty4 x, int n);
+ int struct_test6(Ty6 x, int n);
+ int struct_test7(Ty7 x, int n);
+ 
++int struct_test14(Ty4 x, int n) {
++  switch (n) {
++  case 0: return x.a;
++  case 1: return x.b;
++  case 2: return x.c;
++  default: return x.d;
++  }
++}
++
++int struct_test15(Ty5 x, int n) {
++  switch (n) {
++  case 0: return x.a;
++  case 1: return x.b;
++  default: return x.c;
++  }
++}
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -262,6 +279,15 @@ int main() {
+   ASSERT(20, ({ Ty7 x={10,20,30}; struct_test7(x, 1); }));
+   ASSERT(30, ({ Ty7 x={10,20,30}; struct_test7(x, 2); }));
+ 
++  ASSERT(10, ({ Ty4 x={10,20,30,40}; struct_test14(x, 0); }));
++  ASSERT(20, ({ Ty4 x={10,20,30,40}; struct_test14(x, 1); }));
++  ASSERT(30, ({ Ty4 x={10,20,30,40}; struct_test14(x, 2); }));
++  ASSERT(40, ({ Ty4 x={10,20,30,40}; struct_test14(x, 3); }));
++
++  ASSERT(10, ({ Ty5 x={10,20,30}; struct_test15(x, 0); }));
++  ASSERT(20, ({ Ty5 x={10,20,30}; struct_test15(x, 1); }));
++  ASSERT(30, ({ Ty5 x={10,20,30}; struct_test15(x, 2); }));
++
+   printf("OK\n");
+   return 0;
+ }

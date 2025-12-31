@@ -1,0 +1,88 @@
+subject: Add UTF-16 string literal
+
+
+
+diff --git a/test/unicode.c b/test/unicode.c
+index 688a0a4..145e01c 100644
+--- a/test/unicode.c
++++ b/test/unicode.c
+@@ -39,6 +39,18 @@ int main() {
+ 
+   ASSERT(0, strcmp(STR(u8"a"), "u8\"a\""));
+ 
++  ASSERT(2, sizeof(u""));
++  ASSERT(10, sizeof(u"\xffzzz"));
++  ASSERT(0, memcmp(u"", "\0\0", 2));
++  ASSERT(0, memcmp(u"abc", "a\0b\0c\0\0\0", 8));
++  ASSERT(0, memcmp(u"日本語", "\345e,g\236\212\0\0", 8));
++  ASSERT(0, memcmp(u"🍣", "<\330c\337\0\0", 6));
++  ASSERT(u'β', u"βb"[0]);
++  ASSERT(u'b', u"βb"[1]);
++  ASSERT(0, u"βb"[2]);
++
++  ASSERT(0, strcmp(STR(u"a"), "u\"a\""));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 925621f..804b0cd 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -246,6 +246,42 @@ static Token *read_string_literal(char *start, char *quote) {
+   return tok;
+ }
+ 
++// Read a UTF-8-encoded string literal and transcode it in UTF-16.
++//
++// UTF-16 is yet another variable-width encoding for Unicode. Code
++// points smaller than U+10000 are encoded in 2 bytes. Code points
++// equal to or larger than that are encoded in 4 bytes. Each 2 bytes
++// in the 4 byte sequence is called "surrogate", and a 4 byte sequence
++// is called a "surrogate pair".
++static Token *read_utf16_string_literal(char *start, char *quote) {
++  char *end = string_literal_end(quote + 1);
++  uint16_t *buf = calloc(2, end - start);
++  int len = 0;
++
++  for (char *p = quote + 1; p < end;) {
++    if (*p == '\\') {
++      buf[len++] = read_escaped_char(&p, p + 1);
++      continue;
++    }
++
++    uint32_t c = decode_utf8(&p, p);
++    if (c < 0x10000) {
++      // Encode a code point in 2 bytes.
++      buf[len++] = c;
++    } else {
++      // Encode a code point in 4 bytes.
++      c -= 0x10000;
++      buf[len++] = 0xd800 + ((c >> 10) & 0x3ff);
++      buf[len++] = 0xdc00 + (c & 0x3ff);
++    }
++  }
++
++  Token *tok = new_token(TK_STR, start, end + 1);
++  tok->ty = array_of(ty_ushort, len + 1);
++  tok->str = (char *)buf;
++  return tok;
++}
++
+ static Token *read_char_literal(char *start, char *quote, Type *ty) {
+   char *p = quote + 1;
+   if (*p == '\0')
+@@ -479,6 +515,13 @@ Token *tokenize(File *file) {
+       continue;
+     }
+ 
++    // UTF-16 string literal
++    if (startswith(p, "u\"")) {
++      cur = cur->next = read_utf16_string_literal(p, p + 1);
++      p += cur->len;
++      continue;
++    }
++
+     // Character literal
+     if (*p == '\'') {
+       cur = cur->next = read_char_literal(p, p, ty_int);

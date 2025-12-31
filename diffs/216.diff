@@ -1,0 +1,39 @@
+subject: Turn on -Wall compiler flag and fix compiler warnings
+
+
+
+diff --git a/Makefile b/Makefile
+index 89778a3..d8d062d 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,4 +1,4 @@
+-CFLAGS=-std=c11 -g -fno-common
++CFLAGS=-std=c11 -g -fno-common -Wall -Wno-switch
+ 
+ SRCS=$(wildcard *.c)
+ OBJS=$(SRCS:.c=.o)
+diff --git a/chibicc.h b/chibicc.h
+index 5f16ace..ac2348c 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -9,6 +9,7 @@
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#include <stdnoreturn.h>
+ #include <string.h>
+ #include <strings.h>
+ #include <sys/stat.h>
+@@ -79,9 +80,9 @@ struct Token {
+   Token *origin;    // If this is expanded from a macro, the original token
+ };
+ 
+-void error(char *fmt, ...);
+-void error_at(char *loc, char *fmt, ...);
+-void error_tok(Token *tok, char *fmt, ...);
++noreturn void error(char *fmt, ...);
++noreturn void error_at(char *loc, char *fmt, ...);
++noreturn void error_tok(Token *tok, char *fmt, ...);
+ void warn_tok(Token *tok, char *fmt, ...);
+ bool equal(Token *tok, char *op);
+ Token *skip(Token *tok, char *op);

@@ -1,0 +1,67 @@
+subject: Add struct assignment
+
+
+
+diff --git a/codegen.c b/codegen.c
+index 42e9e29..ee522d4 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -69,7 +69,7 @@ static void gen_addr(Node *node) {
+ 
+ // Load a value from where %rax is pointing to.
+ static void load(Type *ty) {
+-  if (ty->kind == TY_ARRAY) {
++  if (ty->kind == TY_ARRAY || ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
+     // If it is an array, do not attempt to load a value to the
+     // register because in general we can't load an entire array to a
+     // register. As a result, the result of an evaluation of an array
+@@ -89,6 +89,14 @@ static void load(Type *ty) {
+ static void store(Type *ty) {
+   pop("%rdi");
+ 
++  if (ty->kind == TY_STRUCT || ty->kind == TY_UNION) {
++    for (int i = 0; i < ty->size; i++) {
++      println("  mov %d(%%rax), %%r8b", i);
++      println("  mov %%r8b, %d(%%rdi)", i);
++    }
++    return;
++  }
++
+   if (ty->size == 1)
+     println("  mov %%al, (%%rdi)");
+   else
+diff --git a/test/struct.c b/test/struct.c
+index 46d51ec..2e76b68 100644
+--- a/test/struct.c
++++ b/test/struct.c
+@@ -36,6 +36,16 @@ int main() {
+   ASSERT(3, ({ struct t {char a;} x; struct t *y = &x; x.a=3; y->a; }));
+   ASSERT(3, ({ struct t {char a;} x; struct t *y = &x; y->a=3; x.a; }));
+ 
++  ASSERT(3, ({ struct {int a,b;} x,y; x.a=3; y=x; y.a; }));
++  ASSERT(7, ({ struct t {int a,b;}; struct t x; x.a=7; struct t y; struct t *z=&y; *z=x; y.a; }));
++  ASSERT(7, ({ struct t {int a,b;}; struct t x; x.a=7; struct t y, *p=&x, *q=&y; *q=*p; y.a; }));
++  ASSERT(5, ({ struct t {char a, b;} x, y; x.a=5; y=x; y.a; }));
++
++  ASSERT(3, ({ struct {int a,b;} x,y; x.a=3; y=x; y.a; }));
++  ASSERT(7, ({ struct t {int a,b;}; struct t x; x.a=7; struct t y; struct t *z=&y; *z=x; y.a; }));
++  ASSERT(7, ({ struct t {int a,b;}; struct t x; x.a=7; struct t y, *p=&x, *q=&y; *q=*p; y.a; }));
++  ASSERT(5, ({ struct t {char a, b;} x, y; x.a=5; y=x; y.a; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/union.c b/test/union.c
+index f891e8c..c25a621 100644
+--- a/test/union.c
++++ b/test/union.c
+@@ -7,6 +7,9 @@ int main() {
+   ASSERT(0, ({ union { int a; char b[4]; } x; x.a = 515; x.b[2]; }));
+   ASSERT(0, ({ union { int a; char b[4]; } x; x.a = 515; x.b[3]; }));
+ 
++  ASSERT(3, ({ union {int a,b;} x,y; x.a=3; y.a=5; y=x; y.a; }));
++  ASSERT(3, ({ union {struct {int a,b;} c;} x,y; x.c.b=3; y.c.b=5; y=x; y.c.b; }));
++
+   printf("OK\n");
+   return 0;
+ }

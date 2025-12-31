@@ -1,0 +1,52 @@
+subject: Decay a function to a pointer in the func param context
+
+
+
+diff --git a/parse.c b/parse.c
+index 203ad44..9482cca 100644
+--- a/parse.c
++++ b/parse.c
+@@ -569,12 +569,18 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
+     Type *ty2 = declspec(&tok, tok, NULL);
+     ty2 = declarator(&tok, tok, ty2);
+ 
+-    // "array of T" is converted to "pointer to T" only in the parameter
+-    // context. For example, *argv[] is converted to **argv by this.
++    Token *name = ty2->name;
++
+     if (ty2->kind == TY_ARRAY) {
+-      Token *name = ty2->name;
++      // "array of T" is converted to "pointer to T" only in the parameter
++      // context. For example, *argv[] is converted to **argv by this.
+       ty2 = pointer_to(ty2->base);
+       ty2->name = name;
++    } else if (ty2->kind == TY_FUNC) {
++      // Likewise, a function is converted to a pointer to a function
++      // only in the parameter context.
++      ty2 = pointer_to(ty2);
++      ty2->name = name;
+     }
+ 
+     cur = cur->next = copy_type(ty2);
+diff --git a/test/function.c b/test/function.c
+index 94038bc..64de04c 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -112,6 +112,8 @@ int (*fnptr(int (*fn)(int n, ...)))(int, ...) {
+   return fn;
+ }
+ 
++int param_decay2(int x()) { return x(); }
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -187,6 +189,8 @@ int main() {
+   ASSERT(7, ({ int (*fn)(int,int) = add2; fn(2,5); }));
+   ASSERT(6, fnptr(add_all)(3, 1, 2, 3));
+ 
++  ASSERT(3, param_decay2(ret3));
++
+   printf("OK\n");
+   return 0;
+ }

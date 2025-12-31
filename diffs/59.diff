@@ -1,0 +1,52 @@
+subject: Add function declaration
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 219df30..6849c23 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -75,6 +75,7 @@ struct Obj {
+ 
+   // Global variable or function
+   bool is_function;
++  bool is_definition;
+ 
+   // Global variable
+   char *init_data;
+diff --git a/codegen.c b/codegen.c
+index cd3051d..8f8ca1f 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -313,7 +313,7 @@ static void store_gp(int r, int offset, int sz) {
+ 
+ static void emit_text(Obj *prog) {
+   for (Obj *fn = prog; fn; fn = fn->next) {
+-    if (!fn->is_function)
++    if (!fn->is_function || !fn->is_definition)
+       continue;
+ 
+     println("  .globl %s", fn->name);
+diff --git a/parse.c b/parse.c
+index 4696d86..6d6e1a9 100644
+--- a/parse.c
++++ b/parse.c
+@@ -843,6 +843,10 @@ static Token *function(Token *tok, Type *basety) {
+ 
+   Obj *fn = new_gvar(get_ident(ty->name), ty);
+   fn->is_function = true;
++  fn->is_definition = !consume(&tok, tok, ";");
++
++  if (!fn->is_definition)
++    return tok;
+ 
+   locals = NULL;
+   enter_scope();
+diff --git a/test/test.h b/test/test.h
+index bdbd474..0e7b236 100644
+--- a/test/test.h
++++ b/test/test.h
+@@ -1 +1,3 @@
+ #define ASSERT(x, y) assert(x, y, #y)
++
++int printf();

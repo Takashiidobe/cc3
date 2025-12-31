@@ -1,0 +1,93 @@
+subject: Do not expand a token more than once for the same funclike macro
+
+
+
+diff --git a/preprocess.c b/preprocess.c
+index c2ef940..2501cc4 100644
+--- a/preprocess.c
++++ b/preprocess.c
+@@ -17,8 +17,9 @@
+ // "hideset". Hideset is initially empty, and every time we expand a
+ // macro, the macro name is added to the resulting tokens' hidesets.
+ //
+-// The above macro expansion algorithm is explained in this document,
+-// which is used as a basis for the standard's wording:
++// The above macro expansion algorithm is explained in this document
++// written by Dave Prossor, which is used as a basis for the
++// standard's wording:
+ // https://github.com/rui314/chibicc/wiki/cpp.algo.pdf
+ 
+ #include "chibicc.h"
+@@ -118,6 +119,16 @@ static bool hideset_contains(Hideset *hs, char *s, int len) {
+   return false;
+ }
+ 
++static Hideset *hideset_intersection(Hideset *hs1, Hideset *hs2) {
++  Hideset head = {};
++  Hideset *cur = &head;
++
++  for (; hs1; hs1 = hs1->next)
++    if (hideset_contains(hs2, hs1->name, strlen(hs1->name)))
++      cur = cur->next = new_hideset(hs1->name);
++  return head.next;
++}
++
+ static Token *add_hideset(Token *tok, Hideset *hs) {
+   Token head = {};
+   Token *cur = &head;
+@@ -319,7 +330,8 @@ static MacroArg *read_macro_args(Token **rest, Token *tok, MacroParam *params) {
+ 
+   if (pp)
+     error_tok(start, "too many arguments");
+-  *rest = skip(tok, ")");
++  skip(tok, ")");
++  *rest = tok;
+   return head.next;
+ }
+ 
+@@ -382,8 +394,21 @@ static bool expand_macro(Token **rest, Token *tok) {
+     return false;
+ 
+   // Function-like macro application
++  Token *macro_token = tok;
+   MacroArg *args = read_macro_args(&tok, tok, m->params);
+-  *rest = append(subst(m->body, args), tok);
++  Token *rparen = tok;
++
++  // Tokens that consist a func-like macro invocation may have different
++  // hidesets, and if that's the case, it's not clear what the hideset
++  // for the new tokens should be. We take the interesection of the
++  // macro token and the closing parenthesis and use it as a new hideset
++  // as explained in the Dave Prossor's algorithm.
++  Hideset *hs = hideset_intersection(macro_token->hideset, rparen->hideset);
++  hs = hideset_union(hs, new_hideset(m->name));
++
++  Token *body = subst(m->body, args);
++  body = add_hideset(body, hs);
++  *rest = append(body, tok->next);
+   return true;
+ }
+ 
+diff --git a/test/macro.c b/test/macro.c
+index d092e19..f24ba5b 100644
+--- a/test/macro.c
++++ b/test/macro.c
+@@ -11,6 +11,7 @@ int memcmp(char *p, char *q, long n);
+ /* */ #
+ 
+ int ret3(void) { return 3; }
++int dbl(int x) { return x*x; }
+ 
+ int main() {
+   assert(5, include1, "include1");
+@@ -222,6 +223,10 @@ int main() {
+ #define M8(x,y) x*y
+   assert(12, M8((2,3), 4), "M8((2,3), 4)");
+ 
++#define dbl(x) M10(x) * x
++#define M10(x) dbl(x) + 3
++  assert(10, dbl(2), "dbl(2)");
++
+   printf("OK\n");
+   return 0;
+ }

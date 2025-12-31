@@ -1,0 +1,105 @@
+subject: Add do ... while
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 7a5939b..22bcae1 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -137,6 +137,7 @@ typedef enum {
+   ND_RETURN,    // "return"
+   ND_IF,        // "if"
+   ND_FOR,       // "for" or "while"
++  ND_DO,        // "do"
+   ND_SWITCH,    // "switch"
+   ND_CASE,      // "case"
+   ND_BLOCK,     // { ... }
+diff --git a/codegen.c b/codegen.c
+index c77c0f0..e29302a 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -401,6 +401,17 @@ static void gen_stmt(Node *node) {
+     println("%s:", node->brk_label);
+     return;
+   }
++  case ND_DO: {
++    int c = count();
++    println(".L.begin.%d:", c);
++    gen_stmt(node->then);
++    println("%s:", node->cont_label);
++    gen_expr(node->cond);
++    println("  cmp $0, %%rax");
++    println("  jne .L.begin.%d", c);
++    println("%s:", node->brk_label);
++    return;
++  }
+   case ND_SWITCH:
+     gen_expr(node->cond);
+ 
+diff --git a/parse.c b/parse.c
+index d7d15eb..0b76e52 100644
+--- a/parse.c
++++ b/parse.c
+@@ -1058,6 +1058,7 @@ static bool is_typename(Token *tok) {
+ //      | "default" ":" stmt
+ //      | "for" "(" expr-stmt expr? ";" expr? ")" stmt
+ //      | "while" "(" expr ")" stmt
++//      | "do" stmt "while" "(" expr ")" ";"
+ //      | "goto" ident ";"
+ //      | "break" ";"
+ //      | "continue" ";"
+@@ -1188,6 +1189,27 @@ static Node *stmt(Token **rest, Token *tok) {
+     return node;
+   }
+ 
++  if (equal(tok, "do")) {
++    Node *node = new_node(ND_DO, tok);
++
++    char *brk = brk_label;
++    char *cont = cont_label;
++    brk_label = node->brk_label = new_unique_name();
++    cont_label = node->cont_label = new_unique_name();
++
++    node->then = stmt(&tok, tok->next);
++
++    brk_label = brk;
++    cont_label = cont;
++
++    tok = skip(tok, "while");
++    tok = skip(tok, "(");
++    node->cond = expr(&tok, tok);
++    tok = skip(tok, ")");
++    *rest = skip(tok, ";");
++    return node;
++  }
++
+   if (equal(tok, "goto")) {
+     Node *node = new_node(ND_GOTO, tok);
+     node->label = get_ident(tok->next);
+diff --git a/test/control.c b/test/control.c
+index 93d06cf..d700352 100644
+--- a/test/control.c
++++ b/test/control.c
+@@ -65,6 +65,9 @@ int main() {
+ 
+   ASSERT(3, ({ int i=0; switch(-1) { case 0xffffffff: i=3; break; } i; }));
+ 
++  ASSERT(7, ({ int i=0; int j=0; do { j++; } while (i++ < 6); j; }));
++  ASSERT(4, ({ int i=0; int j=0; int k=0; do { if (++j > 3) break; continue; k++; } while (1); j; }));
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/tokenize.c b/tokenize.c
+index 202bcca..8292893 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -133,7 +133,7 @@ static bool is_keyword(Token *tok) {
+     "return", "if", "else", "for", "while", "int", "sizeof", "char",
+     "struct", "union", "short", "long", "void", "typedef", "_Bool",
+     "enum", "static", "goto", "break", "continue", "switch", "case",
+-    "default", "extern", "_Alignof", "_Alignas",
++    "default", "extern", "_Alignof", "_Alignas", "do",
+   };
+ 
+   for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

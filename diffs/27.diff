@@ -1,0 +1,43 @@
+subject: Add arrays of arrays
+
+
+
+diff --git a/parse.c b/parse.c
+index 0a380c5..b8aacfb 100644
+--- a/parse.c
++++ b/parse.c
+@@ -125,7 +125,7 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
+ }
+ 
+ // type-suffix = "(" func-params
+-//             | "[" num "]"
++//             | "[" num "]" type-suffix
+ //             | ε
+ static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
+   if (equal(tok, "("))
+@@ -133,7 +133,8 @@ static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
+ 
+   if (equal(tok, "[")) {
+     int sz = get_number(tok->next);
+-    *rest = skip(tok->next->next, "]");
++    tok = skip(tok->next->next, "]");
++    ty = type_suffix(rest, tok, ty);
+     return array_of(ty, sz);
+   }
+ 
+diff --git a/test.sh b/test.sh
+index 9377a4c..bdd2dc1 100755
+--- a/test.sh
++++ b/test.sh
+@@ -118,4 +118,11 @@ assert 3 'int main() { int x[3]; *x=3; *(x+1)=4; *(x+2)=5; return *x; }'
+ assert 4 'int main() { int x[3]; *x=3; *(x+1)=4; *(x+2)=5; return *(x+1); }'
+ assert 5 'int main() { int x[3]; *x=3; *(x+1)=4; *(x+2)=5; return *(x+2); }'
+ 
++assert 0 'int main() { int x[2][3]; int *y=x; *y=0; return **x; }'
++assert 1 'int main() { int x[2][3]; int *y=x; *(y+1)=1; return *(*x+1); }'
++assert 2 'int main() { int x[2][3]; int *y=x; *(y+2)=2; return *(*x+2); }'
++assert 3 'int main() { int x[2][3]; int *y=x; *(y+3)=3; return **(x+1); }'
++assert 4 'int main() { int x[2][3]; int *y=x; *(y+4)=4; return *(*(x+1)+1); }'
++assert 5 'int main() { int x[2][3]; int *y=x; *(y+5)=5; return *(*(x+1)+2); }'
++
+ echo OK

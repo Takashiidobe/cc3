@@ -1,0 +1,98 @@
+subject: Add a notion of an incomplete array type
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 72bbcc6..ed035bc 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -181,8 +181,8 @@ typedef enum {
+ 
+ struct Type {
+   TypeKind kind;
+-  int size;      // sizeof() value
+-  int align;     // alignment
++  int size;           // sizeof() value
++  int align;          // alignment
+ 
+   // Pointer-to or array-of type. We intentionally use the same member
+   // to represent pointer/array duality in C.
+@@ -213,6 +213,7 @@ struct Type {
+ struct Member {
+   Member *next;
+   Type *ty;
++  Token *tok; // for error message
+   Token *name;
+   int offset;
+ };
+diff --git a/parse.c b/parse.c
+index ea2fc50..fa9d75c 100644
+--- a/parse.c
++++ b/parse.c
+@@ -70,6 +70,7 @@ static Obj *current_fn;
+ static bool is_typename(Token *tok);
+ static Type *declspec(Token **rest, Token *tok, VarAttr *attr);
+ static Type *enum_specifier(Token **rest, Token *tok);
++static Type *type_suffix(Token **rest, Token *tok, Type *ty);
+ static Type *declarator(Token **rest, Token *tok, Type *ty);
+ static Node *declaration(Token **rest, Token *tok, Type *basety);
+ static Node *compound_stmt(Token **rest, Token *tok);
+@@ -390,19 +391,28 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
+   return ty;
+ }
+ 
++// array-dimensions = num? "]" type-suffix
++static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
++  if (equal(tok, "]")) {
++    ty = type_suffix(rest, tok->next, ty);
++    return array_of(ty, -1);
++  }
++
++  int sz = get_number(tok);
++  tok = skip(tok->next, "]");
++  ty = type_suffix(rest, tok, ty);
++  return array_of(ty, sz);
++}
++
+ // type-suffix = "(" func-params
+-//             | "[" num "]" type-suffix
++//             | "[" array-dimensions
+ //             | ε
+ static Type *type_suffix(Token **rest, Token *tok, Type *ty) {
+   if (equal(tok, "("))
+     return func_params(rest, tok->next, ty);
+ 
+-  if (equal(tok, "[")) {
+-    int sz = get_number(tok->next);
+-    tok = skip(tok->next->next, "]");
+-    ty = type_suffix(rest, tok, ty);
+-    return array_of(ty, sz);
+-  }
++  if (equal(tok, "["))
++    return array_dimensions(rest, tok->next, ty);
+ 
+   *rest = tok;
+   return ty;
+@@ -518,6 +528,8 @@ static Node *declaration(Token **rest, Token *tok, Type *basety) {
+       tok = skip(tok, ",");
+ 
+     Type *ty = declarator(&tok, tok, basety);
++    if (ty->size < 0)
++      error_tok(tok, "variable has incomplete type");
+     if (ty->kind == TY_VOID)
+       error_tok(tok, "variable declared void");
+ 
+diff --git a/test/sizeof.c b/test/sizeof.c
+index 5f26941..1d9f3e4 100644
+--- a/test/sizeof.c
++++ b/test/sizeof.c
+@@ -31,6 +31,9 @@ int main() {
+   ASSERT(1, ({ char i; sizeof(++i); }));
+   ASSERT(1, ({ char i; sizeof(i++); }));
+ 
++  ASSERT(8, sizeof(int(*)[10]));
++  ASSERT(8, sizeof(int(*)[][10]));
++
+   printf("OK\n");
+   return 0;
+ }

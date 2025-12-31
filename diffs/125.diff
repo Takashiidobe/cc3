@@ -1,0 +1,105 @@
+subject: Handle a function returning bool, char or short
+
+x86-64 psABI says that only the least significant 8 bits are
+significant if RAX has a return value of a function returning bool.
+Likewise, it looks like only the least significant 1 or 2 bytes
+are guaranteed to have a correct value for char and short return
+values, respectively.
+
+
+diff --git a/codegen.c b/codegen.c
+index 819c10a..1371fa8 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -291,6 +291,21 @@ static void gen_expr(Node *node) {
+       println("  call %s", node->funcname);
+       println("  add $8, %%rsp");
+     }
++
++    // It looks like the most significant 48 or 56 bits in RAX may
++    // contain garbage if a function return type is short or bool/char,
++    // respectively. We clear the upper bits here.
++    switch (node->ty->kind) {
++    case TY_BOOL:
++      println("  movzx %%al, %%eax");
++      return;
++    case TY_CHAR:
++      println("  movsbl %%al, %%eax");
++      return;
++    case TY_SHORT:
++      println("  movswl %%ax, %%eax");
++      return;
++    }
+     return;
+   }
+   }
+diff --git a/parse.c b/parse.c
+index 0b76e52..0074f4f 100644
+--- a/parse.c
++++ b/parse.c
+@@ -479,7 +479,7 @@ static Type *declspec(Token **rest, Token *tok, VarAttr *attr) {
+   return ty;
+ }
+ 
+-// func-params = ("void" | param ("," param)*)? ")"
++// func-params = ("void" | param ("," param)*?)? ")"
+ // param       = declspec declarator
+ static Type *func_params(Token **rest, Token *tok, Type *ty) {
+   if (equal(tok, "void") && equal(tok->next, ")")) {
+diff --git a/test/common b/test/common
+index 890d0ec..92ebd40 100644
+--- a/test/common
++++ b/test/common
+@@ -1,3 +1,4 @@
++#include <stdarg.h>
+ #include <stdio.h>
+ #include <stdlib.h>
+ 
+@@ -16,3 +17,8 @@ int *ext2 = &ext1;
+ int ext3 = 7;
+ int ext_fn1(int x) { return x; }
+ int ext_fn2(int x) { return x; }
++
++int false_fn() { return 512; }
++int true_fn() { return 513; }
++int char_fn() { return (2<<8)+3; }
++int short_fn() { return (2<<16)+5; }
+diff --git a/test/function.c b/test/function.c
+index ac04431..df09ddd 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -65,6 +65,11 @@ void ret_none() {
+   return;
+ }
+ 
++_Bool true_fn();
++_Bool false_fn();
++char char_fn();
++short short_fn();
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -106,6 +111,11 @@ int main() {
+ 
+   ret_none();
+ 
++  ASSERT(1, true_fn());
++  ASSERT(0, false_fn());
++  ASSERT(3, char_fn());
++  ASSERT(5, short_fn());
++
+   printf("OK\n");
+   return 0;
+ }
+diff --git a/test/test.h b/test/test.h
+index 3587c20..cada980 100644
+--- a/test/test.h
++++ b/test/test.h
+@@ -2,5 +2,6 @@
+ 
+ void assert(int expected, int actual, char *code);
+ int printf();
++int sprintf();
+ int strcmp(char *p, char *q);
+ int memcmp(char *p, char *q, long n);

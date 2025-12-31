@@ -1,0 +1,194 @@
+subject: Support passed-on-stack arguments
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index 9a16d39..e72e8df 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -221,6 +221,7 @@ struct Node {
+   // Function call
+   Type *func_ty;
+   Node *args;
++  bool pass_by_stack;
+ 
+   // Goto or labeled statement
+   char *label;
+diff --git a/codegen.c b/codegen.c
+index ad23ff5..673f89a 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -1,5 +1,8 @@
+ #include "chibicc.h"
+ 
++#define GP_MAX 6
++#define FP_MAX 8
++
+ static FILE *output_file;
+ static int depth;
+ static char *argreg8[] = {"%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"};
+@@ -296,16 +299,68 @@ static void cast(Type *from, Type *to) {
+     println("  %s", cast_table[t1][t2]);
+ }
+ 
+-static void push_args(Node *args) {
+-  if (args) {
+-    push_args(args->next);
++static void push_args2(Node *args, bool first_pass) {
++  if (!args)
++    return;
++
++  push_args2(args->next, first_pass);
+ 
+-    gen_expr(args);
+-    if (is_flonum(args->ty))
+-      pushf();
+-    else
+-      push();
++  if ((first_pass && !args->pass_by_stack) || (!first_pass && args->pass_by_stack))
++    return;
++
++  gen_expr(args);
++
++  if (is_flonum(args->ty))
++    pushf();
++  else
++    push();
++}
++
++// Load function call arguments. Arguments are already evaluated and
++// stored to the stack as local variables. What we need to do in this
++// function is to load them to registers or push them to the stack as
++// specified by the x86-64 psABI. Here is what the spec says:
++//
++// - Up to 6 arguments of integral type are passed using RDI, RSI,
++//   RDX, RCX, R8 and R9.
++//
++// - Up to 8 arguments of floating-point type are passed using XMM0 to
++//   XMM7.
++//
++// - If all registers of an appropriate type are already used, push an
++//   argument to the stack in the right-to-left order.
++//
++// - Each argument passed on the stack takes 8 bytes, and the end of
++//   the argument area must be aligned to a 16 byte boundary.
++//
++// - If a function is variadic, set the number of floating-point type
++//   arguments to RAX.
++static int push_args(Node *args) {
++  int stack = 0, gp = 0, fp = 0;
++
++  for (Node *arg = args; arg; arg = arg->next) {
++    if (is_flonum(arg->ty)) {
++      if (fp++ >= FP_MAX) {
++        arg->pass_by_stack = true;
++        stack++;
++      }
++    } else {
++      if (gp++ >= GP_MAX) {
++        arg->pass_by_stack = true;
++        stack++;
++      }
++    }
+   }
++
++  if ((depth + stack) % 2 == 1) {
++    println("  sub $8, %%rsp");
++    depth++;
++    stack++;
++  }
++
++  push_args2(args, true);
++  push_args2(args, false);
++  return stack;
+ }
+ 
+ // Generate code for a given node.
+@@ -444,24 +499,26 @@ static void gen_expr(Node *node) {
+     return;
+   }
+   case ND_FUNCALL: {
+-    push_args(node->args);
++    int stack_args = push_args(node->args);
+     gen_expr(node->lhs);
+ 
+     int gp = 0, fp = 0;
+     for (Node *arg = node->args; arg; arg = arg->next) {
+-      if (is_flonum(arg->ty))
+-        popf(fp++);
+-      else
+-        pop(argreg64[gp++]);
++      if (is_flonum(arg->ty)) {
++        if (fp < FP_MAX)
++          popf(fp++);
++      } else {
++        if (gp < GP_MAX)
++          pop(argreg64[gp++]);
++      }
+     }
+ 
+-    if (depth % 2 == 0) {
+-      println("  call *%%rax");
+-    } else {
+-      println("  sub $8, %%rsp");
+-      println("  call *%%rax");
+-      println("  add $8, %%rsp");
+-    }
++    println("  mov %%rax, %%r10");
++    println("  mov $%d, %%rax", fp);
++    println("  call *%%r10");
++    println("  add $%d, %%rsp", stack_args * 8);
++
++    depth -= stack_args;
+ 
+     // It looks like the most significant 48 or 56 bits in RAX may
+     // contain garbage if a function return type is short or bool/char,
+diff --git a/test/common b/test/common
+index 8f30b46..6d8b24c 100644
+--- a/test/common
++++ b/test/common
+@@ -46,3 +46,15 @@ float add_float(float x, float y) {
+ double add_double(double x, double y) {
+   return x + y;
+ }
++
++int add10_int(int x1, int x2, int x3, int x4, int x5, int x6, int x7, int x8, int x9, int x10) {
++  return x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9 + x10;
++}
++
++float add10_float(float x1, float x2, float x3, float x4, float x5, float x6, float x7, float x8, float x9, float x10) {
++  return x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9 + x10;
++}
++
++double add10_double(double x1, double x2, double x3, double x4, double x5, double x6, double x7, double x8, double x9, double x10) {
++  return x1 + x2 + x3 + x4 + x5 + x6 + x7 + x8 + x9 + x10;
++}
+diff --git a/test/function.c b/test/function.c
+index 0659fcd..f9b9249 100644
+--- a/test/function.c
++++ b/test/function.c
+@@ -122,6 +122,10 @@ char *function_fn(void) {
+   return __FUNCTION__;
+ }
+ 
++int add10_int(int x1, int x2, int x3, int x4, int x5, int x6, int x7, int x8, int x9, int x10);
++float add10_float(float x1, float x2, float x3, float x4, float x5, float x6, float x7, float x8, float x9, float x10);
++double add10_double(double x1, double x2, double x3, double x4, double x5, double x6, double x7, double x8, double x9, double x10);
++
+ int main() {
+   ASSERT(3, ret3());
+   ASSERT(8, add2(3, 5));
+@@ -205,6 +209,13 @@ int main() {
+   ASSERT(0, strcmp("main", __FUNCTION__));
+   ASSERT(0, strcmp("function_fn", function_fn()));
+ 
++
++  ASSERT(55, add10_int(1,2,3,4,5,6,7,8,9,10));
++  ASSERT(55, add10_float(1,2,3,4,5,6,7,8,9,10));
++  ASSERT(55, add10_double(1,2,3,4,5,6,7,8,9,10));
++
++  ASSERT(0, ({ char buf[200]; sprintf(buf, "%d %.1f %.1f %.1f %d %d %.1f %d %d %d %d %.1f %d %d %.1f %.1f %.1f %.1f %d", 1, 1.0, 1.0, 1.0, 1, 1, 1.0, 1, 1, 1, 1, 1.0, 1, 1, 1.0, 1.0, 1.0, 1.0, 1); strcmp("1 1.0 1.0 1.0 1 1 1.0 1 1 1 1 1.0 1 1 1.0 1.0 1.0 1.0 1", buf); }));
++
+   printf("OK\n");
+   return 0;
+ }

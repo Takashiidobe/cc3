@@ -1,0 +1,34 @@
+subject: Ignore "static" and "const" in array-dimensions
+
+
+
+diff --git a/parse.c b/parse.c
+index 481be3b..bc47dbf 100644
+--- a/parse.c
++++ b/parse.c
+@@ -575,8 +575,11 @@ static Type *func_params(Token **rest, Token *tok, Type *ty) {
+   return ty;
+ }
+ 
+-// array-dimensions = const-expr? "]" type-suffix
++// array-dimensions = ("static" | "restrict")* const-expr? "]" type-suffix
+ static Type *array_dimensions(Token **rest, Token *tok, Type *ty) {
++  while (equal(tok, "static") || equal(tok, "restrict"))
++    tok = tok->next;
++
+   if (equal(tok, "]")) {
+     ty = type_suffix(rest, tok->next, ty);
+     return array_of(ty, -1);
+diff --git a/test/compat.c b/test/compat.c
+index a636204..d085729 100644
+--- a/test/compat.c
++++ b/test/compat.c
+@@ -4,6 +4,8 @@ _Noreturn noreturn_fn(int restrict x) {
+   exit(0);
+ }
+ 
++void funcy_type(int arg[restrict static 3]) {}
++
+ int main() {
+   { volatile x; }
+   { int volatile x; }

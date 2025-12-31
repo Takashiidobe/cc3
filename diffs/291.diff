@@ -1,0 +1,64 @@
+subject: Add -MT option
+
+
+
+diff --git a/main.c b/main.c
+index 00eee92..d991d8a 100644
+--- a/main.c
++++ b/main.c
+@@ -17,6 +17,7 @@ static bool opt_c;
+ static bool opt_cc1;
+ static bool opt_hash_hash_hash;
+ static char *opt_MF;
++static char *opt_MT;
+ static char *opt_o;
+ 
+ static StringArray ld_extra_args;
+@@ -33,7 +34,7 @@ static void usage(int status) {
+ }
+ 
+ static bool take_arg(char *arg) {
+-  char *x[] = {"-o", "-I", "-idirafter", "-include", "-x", "-MF"};
++  char *x[] = {"-o", "-I", "-idirafter", "-include", "-x", "-MF", "-MT"};
+ 
+   for (int i = 0; i < sizeof(x) / sizeof(*x); i++)
+     if (!strcmp(arg, x[i]))
+@@ -194,6 +195,14 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-MT")) {
++      if (opt_MT == NULL)
++        opt_MT = argv[++i];
++      else
++        opt_MT = format("%s %s", opt_MT, argv[++i]);
++      continue;
++    }
++
+     if (!strcmp(argv[i], "-cc1-input")) {
+       base_file = argv[++i];
+       continue;
+@@ -357,7 +366,7 @@ static void print_dependencies(void) {
+     path = "-";
+ 
+   FILE *out = open_file(path);
+-  fprintf(out, "%s:", replace_extn(base_file, ".o"));
++  fprintf(out, "%s:", opt_MT ? opt_MT : replace_extn(base_file, ".o"));
+ 
+   File **files = get_input_files();
+ 
+diff --git a/test/driver.sh b/test/driver.sh
+index b870846..152e83a 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -240,4 +240,10 @@ check -MP
+ grep -q '^.*/out3.h:' $tmp/mp
+ check -MP
+ 
++# -MT
++$chibicc -MT foo -M -I$tmp $tmp/out.c | grep -q '^foo:'
++check -MT
++$chibicc -MT foo -MT bar -M -I$tmp $tmp/out.c | grep -q '^foo bar:'
++check -MT
++
+ echo OK

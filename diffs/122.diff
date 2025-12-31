@@ -1,0 +1,62 @@
+subject: Add static global variables
+
+
+
+diff --git a/codegen.c b/codegen.c
+index 4ee8c09..c77c0f0 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -466,7 +466,11 @@ static void emit_data(Obj *prog) {
+     if (var->is_function || !var->is_definition)
+       continue;
+ 
+-    println("  .globl %s", var->name);
++    if (var->is_static)
++      println("  .local %s", var->name);
++    else
++      println("  .globl %s", var->name);
++
+     println("  .align %d", var->align);
+ 
+     if (var->init_data) {
+diff --git a/parse.c b/parse.c
+index c411a2c..d7d15eb 100644
+--- a/parse.c
++++ b/parse.c
+@@ -298,6 +298,7 @@ static Obj *new_lvar(char *name, Type *ty) {
+ static Obj *new_gvar(char *name, Type *ty) {
+   Obj *var = new_var(name, ty);
+   var->next = globals;
++  var->is_static = true;
+   var->is_definition = true;
+   globals = var;
+   return var;
+@@ -2200,6 +2201,7 @@ static Token *global_variable(Token *tok, Type *basety, VarAttr *attr) {
+     Type *ty = declarator(&tok, tok, basety);
+     Obj *var = new_gvar(get_ident(ty->name), ty);
+     var->is_definition = !attr->is_extern;
++    var->is_static = attr->is_static;
+     if (attr->align)
+       var->align = attr->align;
+ 
+diff --git a/test/variable.c b/test/variable.c
+index ac4b251..ae2ff13 100644
+--- a/test/variable.c
++++ b/test/variable.c
+@@ -1,6 +1,7 @@
+ #include "test.h"
+ 
+ int g1, g2[4];
++static int g3 = 3;
+ 
+ int main() {
+   ASSERT(3, ({ int a; a=3; a; }));
+@@ -64,6 +65,8 @@ int main() {
+ 
+   { void *x; }
+ 
++  ASSERT(3, g3);
++
+   printf("OK\n");
+   return 0;
+ }

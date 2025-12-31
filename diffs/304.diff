@@ -1,0 +1,47 @@
+subject: Add -Xlinker option
+
+
+
+diff --git a/main.c b/main.c
+index 497130e..ffaabf4 100644
+--- a/main.c
++++ b/main.c
+@@ -40,7 +40,9 @@ static void usage(int status) {
+ }
+ 
+ static bool take_arg(char *arg) {
+-  char *x[] = {"-o", "-I", "-idirafter", "-include", "-x", "-MF", "-MT"};
++  char *x[] = {
++    "-o", "-I", "-idirafter", "-include", "-x", "-MF", "-MT", "-Xlinker",
++  };
+ 
+   for (int i = 0; i < sizeof(x) / sizeof(*x); i++)
+     if (!strcmp(arg, x[i]))
+@@ -213,6 +215,11 @@ static void parse_args(int argc, char **argv) {
+       continue;
+     }
+ 
++    if (!strcmp(argv[i], "-Xlinker")) {
++      strarray_push(&ld_extra_args, argv[++i]);
++      continue;
++    }
++
+     if (!strcmp(argv[i], "-s")) {
+       strarray_push(&ld_extra_args, "-s");
+       continue;
+diff --git a/test/driver.sh b/test/driver.sh
+index 7ccff99..c9a7b83 100755
+--- a/test/driver.sh
++++ b/test/driver.sh
+@@ -302,4 +302,11 @@ echo 'int main() {}' | $chibicc -c -o $tmp/baz.o -xc -
+ cc -Wl,-z,muldefs,--gc-sections -o $tmp/foo $tmp/foo.o $tmp/bar.o $tmp/baz.o
+ check -Wl,
+ 
++# -Xlinker
++echo 'int foo() {}' | $chibicc -c -o $tmp/foo.o -xc -
++echo 'int foo() {}' | $chibicc -c -o $tmp/bar.o -xc -
++echo 'int main() {}' | $chibicc -c -o $tmp/baz.o -xc -
++cc -Xlinker -z -Xlinker muldefs -Xlinker --gc-sections -o $tmp/foo $tmp/foo.o $tmp/bar.o $tmp/baz.o
++check -Xlinker
++
+ echo OK

@@ -1,0 +1,139 @@
+subject: Add "if" statement
+
+
+
+diff --git a/chibicc.h b/chibicc.h
+index ac316a3..6ab65c3 100644
+--- a/chibicc.h
++++ b/chibicc.h
+@@ -72,6 +72,7 @@ typedef enum {
+   ND_LE,        // <=
+   ND_ASSIGN,    // =
+   ND_RETURN,    // "return"
++  ND_IF,        // "if"
+   ND_BLOCK,     // { ... }
+   ND_EXPR_STMT, // Expression statement
+   ND_VAR,       // Variable
+@@ -82,9 +83,15 @@ typedef enum {
+ struct Node {
+   NodeKind kind; // Node kind
+   Node *next;    // Next node
++
+   Node *lhs;     // Left-hand side
+   Node *rhs;     // Right-hand side
+ 
++  // "if" statement
++  Node *cond;
++  Node *then;
++  Node *els;
++
+   // Block
+   Node *body;
+ 
+diff --git a/codegen.c b/codegen.c
+index 34afde4..ff909af 100644
+--- a/codegen.c
++++ b/codegen.c
+@@ -2,6 +2,11 @@
+ 
+ static int depth;
+ 
++static int count(void) {
++  static int i = 1;
++  return i++;
++}
++
+ static void push(void) {
+   printf("  push %%rax\n");
+   depth++;
+@@ -95,6 +100,19 @@ static void gen_expr(Node *node) {
+ 
+ static void gen_stmt(Node *node) {
+   switch (node->kind) {
++  case ND_IF: {
++    int c = count();
++    gen_expr(node->cond);
++    printf("  cmp $0, %%rax\n");
++    printf("  je  .L.else.%d\n", c);
++    gen_stmt(node->then);
++    printf("  jmp .L.end.%d\n", c);
++    printf(".L.else.%d:\n", c);
++    if (node->els)
++      gen_stmt(node->els);
++    printf(".L.end.%d:\n", c);
++    return;
++  }
+   case ND_BLOCK:
+     for (Node *n = node->body; n; n = n->next)
+       gen_stmt(n);
+diff --git a/parse.c b/parse.c
+index f5c8498..5753fac 100644
+--- a/parse.c
++++ b/parse.c
+@@ -63,6 +63,7 @@ static Obj *new_lvar(char *name) {
+ }
+ 
+ // stmt = "return" expr ";"
++//      | "if" "(" expr ")" stmt ("else" stmt)?
+ //      | "{" compound-stmt
+ //      | expr-stmt
+ static Node *stmt(Token **rest, Token *tok) {
+@@ -72,6 +73,18 @@ static Node *stmt(Token **rest, Token *tok) {
+     return node;
+   }
+ 
++  if (equal(tok, "if")) {
++    Node *node = new_node(ND_IF);
++    tok = skip(tok->next, "(");
++    node->cond = expr(&tok, tok);
++    tok = skip(tok, ")");
++    node->then = stmt(&tok, tok);
++    if (equal(tok, "else"))
++      node->els = stmt(&tok, tok->next);
++    *rest = tok;
++    return node;
++  }
++
+   if (equal(tok, "{"))
+     return compound_stmt(rest, tok->next);
+ 
+diff --git a/test.sh b/test.sh
+index 34ce00c..3548bb4 100755
+--- a/test.sh
++++ b/test.sh
+@@ -62,4 +62,11 @@ assert 3 '{ 1; 2; return 3; }'
+ assert 3 '{ {1; {2;} return 3;} }'
+ assert 5 '{ ;;; return 5; }'
+ 
++assert 3 '{ if (0) return 2; return 3; }'
++assert 3 '{ if (1-1) return 2; return 3; }'
++assert 2 '{ if (1) return 2; return 3; }'
++assert 2 '{ if (2-1) return 2; return 3; }'
++assert 4 '{ if (0) { 1; 2; return 3; } else { return 4; } }'
++assert 3 '{ if (1) { 1; 2; return 3; } else { return 4; } }'
++
+ echo OK
+diff --git a/tokenize.c b/tokenize.c
+index b5c7fcb..728c938 100644
+--- a/tokenize.c
++++ b/tokenize.c
+@@ -79,9 +79,18 @@ static int read_punct(char *p) {
+   return ispunct(*p) ? 1 : 0;
+ }
+ 
++static bool is_keyword(Token *tok) {
++  static char *kw[] = {"return", "if", "else"};
++
++  for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)
++    if (equal(tok, kw[i]))
++      return true;
++  return false;
++}
++
+ static void convert_keywords(Token *tok) {
+   for (Token *t = tok; t->kind != TK_EOF; t = t->next)
+-    if (equal(t, "return"))
++    if (is_keyword(t))
+       t->kind = TK_KEYWORD;
+ }
+ 

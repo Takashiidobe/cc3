@@ -1,0 +1,30 @@
+subject: Resolve conflict between labels and typedefs
+
+
+
+diff --git a/parse.c b/parse.c
+index a6661ca..f5f4a0f 100644
+--- a/parse.c
++++ b/parse.c
+@@ -677,7 +677,7 @@ static Node *compound_stmt(Token **rest, Token *tok) {
+   enter_scope();
+ 
+   while (!equal(tok, "}")) {
+-    if (is_typename(tok)) {
++    if (is_typename(tok) && !equal(tok->next, ":")) {
+       VarAttr attr = {};
+       Type *basety = declspec(&tok, tok, &attr);
+ 
+diff --git a/test/control.c b/test/control.c
+index e79280a..9baa2e2 100644
+--- a/test/control.c
++++ b/test/control.c
+@@ -40,6 +40,8 @@ int main() {
+   ASSERT(2, ({ int i=0; goto e; d: i++; e: i++; f: i++; i; }));
+   ASSERT(1, ({ int i=0; goto i; g: i++; h: i++; i: i++; i; }));
+ 
++  ASSERT(1, ({ typedef int foo; goto foo; foo:; 1; }));
++
+   printf("OK\n");
+   return 0;
+ }
