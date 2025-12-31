@@ -36,6 +36,7 @@ pub enum StmtKind {
 pub struct Expr {
     pub kind: ExprKind,
     pub location: SourceLocation,
+    pub ty: Option<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,4 +81,34 @@ pub enum BinaryOp {
 pub struct Obj {
     pub name: String,
     pub offset: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Type {
+    Int,
+    Ptr(Box<Type>),
+}
+
+impl Type {
+    pub fn is_integer(&self) -> bool {
+        matches!(self, Type::Int)
+    }
+
+    pub fn is_ptr(&self) -> bool {
+        matches!(self, Type::Ptr(_))
+    }
+
+    pub fn base(&self) -> Option<&Type> {
+        match self {
+            Type::Ptr(base) => Some(base),
+            _ => None,
+        }
+    }
+
+    pub fn size(&self) -> i64 {
+        match self {
+            Type::Int => 8,
+            Type::Ptr(_) => 8,
+        }
+    }
 }

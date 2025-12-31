@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, UnaryOp};
+use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
 use crate::error::{CompileError, CompileResult};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
 
@@ -40,6 +40,10 @@ impl<'a> Parser<'a> {
 
         self.expect_punct(Punct::RBrace)?;
         self.expect_eof()?;
+
+        for stmt in &mut body {
+            self.add_type_stmt(stmt);
+        }
 
         let stack_size = align_to(self.locals.len() as i32 * 8, 16);
         let locals = std::mem::take(&mut self.locals);
@@ -264,23 +268,21 @@ impl<'a> Parser<'a> {
 
         loop {
             let op = if self.consume_punct(Punct::Plus) {
-                BinaryOp::Add
+                Some(BinaryOp::Add)
             } else if self.consume_punct(Punct::Minus) {
-                BinaryOp::Sub
+                Some(BinaryOp::Sub)
             } else {
-                break;
+                None
             };
 
+            let Some(op) = op else { break };
             let location = self.last_location();
             let rhs = self.parse_mul()?;
-            expr = self.expr_at(
-                ExprKind::Binary {
-                    op,
-                    lhs: Box::new(expr),
-                    rhs: Box::new(rhs),
-                },
-                location,
-            );
+            expr = match op {
+                BinaryOp::Add => self.new_add(expr, rhs, location)?,
+                BinaryOp::Sub => self.new_sub(expr, rhs, location)?,
+                _ => unreachable!("parse_add only handles +/-"),
+            };
         }
 
         Ok(expr)
@@ -455,11 +457,23 @@ impl<'a> Parser<'a> {
     }
 
     fn expr_at(&self, kind: ExprKind, location: crate::error::SourceLocation) -> Expr {
-        Expr { kind, location }
+        Expr {
+            kind,
+            location,
+            ty: None,
+        }
     }
 
     fn error_here(&self, message: impl Into<String>) -> CompileError {
         let location = self.peek().location;
+        CompileError::at(message, location)
+    }
+
+    fn error_at(
+        &self,
+        location: crate::error::SourceLocation,
+        message: impl Into<String>,
+    ) -> CompileError {
         CompileError::at(message, location)
     }
 
@@ -487,6 +501,213 @@ impl<'a> Parser<'a> {
         let offset = -8 * (self.locals.len() as i32 + 1);
         self.locals.push(Obj { name, offset });
         self.locals.len() - 1
+    }
+
+    fn new_add(
+        &self,
+        mut lhs: Expr,
+        mut rhs: Expr,
+        location: crate::error::SourceLocation,
+    ) -> CompileResult<Expr> {
+        self.add_type_expr(&mut lhs);
+        self.add_type_expr(&mut rhs);
+
+        let mut lhs_ty = lhs.ty.clone().unwrap_or(Type::Int);
+        let mut rhs_ty = rhs.ty.clone().unwrap_or(Type::Int);
+
+        if lhs_ty.is_integer() && rhs_ty.is_integer() {
+            return Ok(self.expr_at(
+                ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            ));
+        }
+
+        if lhs_ty.is_ptr() && rhs_ty.is_ptr() {
+            return Err(self.error_at(location, "invalid operands"));
+        }
+
+        if !lhs_ty.is_ptr() && rhs_ty.is_ptr() {
+            std::mem::swap(&mut lhs, &mut rhs);
+            std::mem::swap(&mut lhs_ty, &mut rhs_ty);
+        }
+
+        let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
+        let scale = self.expr_at(ExprKind::Num(base_size), location);
+        let rhs = self.expr_at(
+            ExprKind::Binary {
+                op: BinaryOp::Mul,
+                lhs: Box::new(rhs),
+                rhs: Box::new(scale),
+            },
+            location,
+        );
+        let mut expr = self.expr_at(
+            ExprKind::Binary {
+                op: BinaryOp::Add,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            location,
+        );
+        self.add_type_expr(&mut expr);
+        Ok(expr)
+    }
+
+    fn new_sub(
+        &self,
+        mut lhs: Expr,
+        mut rhs: Expr,
+        location: crate::error::SourceLocation,
+    ) -> CompileResult<Expr> {
+        self.add_type_expr(&mut lhs);
+        self.add_type_expr(&mut rhs);
+
+        let lhs_ty = lhs.ty.clone().unwrap_or(Type::Int);
+        let rhs_ty = rhs.ty.clone().unwrap_or(Type::Int);
+
+        if lhs_ty.is_integer() && rhs_ty.is_integer() {
+            return Ok(self.expr_at(
+                ExprKind::Binary {
+                    op: BinaryOp::Sub,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            ));
+        }
+
+        if lhs_ty.is_ptr() && rhs_ty.is_integer() {
+            let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
+            let scale = self.expr_at(ExprKind::Num(base_size), location);
+            let rhs = self.expr_at(
+                ExprKind::Binary {
+                    op: BinaryOp::Mul,
+                    lhs: Box::new(rhs),
+                    rhs: Box::new(scale),
+                },
+                location,
+            );
+            let mut expr = self.expr_at(
+                ExprKind::Binary {
+                    op: BinaryOp::Sub,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            );
+            self.add_type_expr(&mut expr);
+            return Ok(expr);
+        }
+
+        if lhs_ty.is_ptr() && rhs_ty.is_ptr() {
+            let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
+            let scale = self.expr_at(ExprKind::Num(base_size), location);
+            let mut sub_expr = self.expr_at(
+                ExprKind::Binary {
+                    op: BinaryOp::Sub,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            );
+            sub_expr.ty = Some(Type::Int);
+            let mut expr = self.expr_at(
+                ExprKind::Binary {
+                    op: BinaryOp::Div,
+                    lhs: Box::new(sub_expr),
+                    rhs: Box::new(scale),
+                },
+                location,
+            );
+            self.add_type_expr(&mut expr);
+            return Ok(expr);
+        }
+
+        Err(self.error_at(location, "invalid operands"))
+    }
+
+    fn add_type_stmt(&self, stmt: &mut Stmt) {
+        match &mut stmt.kind {
+            StmtKind::Return(expr) => self.add_type_expr(expr),
+            StmtKind::Block(stmts) => {
+                for stmt in stmts {
+                    self.add_type_stmt(stmt);
+                }
+            }
+            StmtKind::If { cond, then, els } => {
+                self.add_type_expr(cond);
+                self.add_type_stmt(then);
+                if let Some(els) = els {
+                    self.add_type_stmt(els);
+                }
+            }
+            StmtKind::For {
+                init,
+                cond,
+                inc,
+                body,
+            } => {
+                if let Some(init) = init {
+                    self.add_type_stmt(init);
+                }
+                if let Some(cond) = cond {
+                    self.add_type_expr(cond);
+                }
+                if let Some(inc) = inc {
+                    self.add_type_expr(inc);
+                }
+                self.add_type_stmt(body);
+            }
+            StmtKind::Expr(expr) => self.add_type_expr(expr),
+            StmtKind::Decl(_) => {}
+        }
+    }
+
+    fn add_type_expr(&self, expr: &mut Expr) {
+        if expr.ty.is_some() {
+            return;
+        }
+
+        let ty = match &mut expr.kind {
+            ExprKind::Num(_) => Type::Int,
+            ExprKind::Var(_) => Type::Int,
+            ExprKind::Unary { expr, .. } => {
+                self.add_type_expr(expr);
+                expr.ty.clone().unwrap_or(Type::Int)
+            }
+            ExprKind::Addr(expr) => {
+                self.add_type_expr(expr);
+                Type::Ptr(Box::new(expr.ty.clone().unwrap_or(Type::Int)))
+            }
+            ExprKind::Deref(expr) => {
+                self.add_type_expr(expr);
+                match expr.ty.clone().unwrap_or(Type::Int) {
+                    Type::Ptr(base) => *base,
+                    _ => Type::Int,
+                }
+            }
+            ExprKind::Assign { lhs, rhs } => {
+                self.add_type_expr(lhs);
+                self.add_type_expr(rhs);
+                lhs.ty.clone().unwrap_or(Type::Int)
+            }
+            ExprKind::Binary { op, lhs, rhs } => {
+                self.add_type_expr(lhs);
+                self.add_type_expr(rhs);
+                match op {
+                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => Type::Int,
+                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                        lhs.ty.clone().unwrap_or(Type::Int)
+                    }
+                }
+            }
+        };
+
+        expr.ty = Some(ty);
     }
 }
 
