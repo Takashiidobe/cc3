@@ -43,7 +43,7 @@ impl<'a> Parser<'a> {
             return Ok(Stmt::Return(expr));
         }
 
-        Err(self.error_here("expected a statement"))
+        Err(self.error_expected("a statement"))
     }
 
     fn parse_expr(&mut self) -> CompileResult<Expr> {
@@ -80,7 +80,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(Expr::Num(value))
             }
-            _ => Err(self.error_here("expected a number")),
+            _ => Err(self.error_expected("a number")),
         }
     }
 
@@ -91,7 +91,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(())
             }
-            _ => Err(self.error_here(format!("expected keyword '{kw:?}'"))),
+            _ => Err(self.error_expected(format!("keyword '{kw:?}'"))),
         }
     }
 
@@ -112,7 +112,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(name)
             }
-            _ => Err(self.error_here("expected identifier")),
+            _ => Err(self.error_expected("identifier")),
         }
     }
 
@@ -123,7 +123,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(())
             }
-            _ => Err(self.error_here(format!("expected '{ch}'"))),
+            _ => Err(self.error_expected(format!("'{ch}'"))),
         }
     }
 
@@ -141,7 +141,7 @@ impl<'a> Parser<'a> {
         let token = self.peek().clone();
         match token.kind {
             TokenKind::Eof => Ok(()),
-            _ => Err(self.error_here("expected end of file")),
+            _ => Err(self.error_expected("end of file")),
         }
     }
 
@@ -154,5 +154,21 @@ impl<'a> Parser<'a> {
     fn error_here(&self, message: impl Into<String>) -> CompileError {
         let location = self.peek().location;
         CompileError::at(message, location)
+    }
+
+    fn error_expected(&self, expected: impl Into<String>) -> CompileError {
+        let expected = expected.into();
+        let found = self.token_desc(self.peek());
+        self.error_here(format!("expected {expected}, found {found}"))
+    }
+
+    fn token_desc(&self, token: &Token) -> String {
+        match &token.kind {
+            TokenKind::Keyword(kw) => format!("keyword '{kw:?}'"),
+            TokenKind::Ident(name) => format!("identifier '{name}'"),
+            TokenKind::Num(value) => format!("number {value}"),
+            TokenKind::Punct(ch) => format!("'{ch}'"),
+            TokenKind::Eof => "end of file".to_string(),
+        }
     }
 }

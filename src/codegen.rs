@@ -1,44 +1,59 @@
 use crate::ast::{BinaryOp, Expr, Program, Stmt};
-use std::fmt::Write;
 
-pub fn generate(program: &Program) -> String {
-    let mut out = String::new();
-    writeln!(&mut out, "  .globl main").expect("write to string");
-    writeln!(&mut out, "main:").expect("write to string");
-
-    for stmt in &program.body {
-        gen_stmt(stmt, &mut out);
-    }
-
-    out
+pub struct Codegen {
+    buffer: String,
 }
 
-fn gen_stmt(stmt: &Stmt, out: &mut String) {
-    match stmt {
-        Stmt::Return(expr) => {
-            gen_expr(expr, out);
-            writeln!(out, "  ret").expect("write to string");
+impl Codegen {
+    pub fn new() -> Self {
+        Self {
+            buffer: String::new(),
         }
     }
-}
 
-fn gen_expr(expr: &Expr, out: &mut String) {
-    match expr {
-        Expr::Num(value) => {
-            writeln!(out, "  mov ${}, %rax", value).expect("write to string");
+    pub fn generate(mut self, program: &Program) -> String {
+        self.emit_line("  .globl main");
+        self.emit_line("main:");
+
+        for stmt in &program.body {
+            self.gen_stmt(stmt);
         }
-        Expr::Binary { op, lhs, rhs } => {
-            gen_expr(lhs, out);
-            writeln!(out, "  push %rax").expect("write to string");
-            gen_expr(rhs, out);
-            writeln!(out, "  pop %rdi").expect("write to string");
-            match op {
-                BinaryOp::Add => {
-                    writeln!(out, "  add %rdi, %rax").expect("write to string");
-                }
-                BinaryOp::Sub => {
-                    writeln!(out, "  sub %rax, %rdi").expect("write to string");
-                    writeln!(out, "  mov %rdi, %rax").expect("write to string");
+
+        self.buffer
+    }
+
+    fn emit_line(&mut self, line: &str) {
+        self.buffer.push_str(line);
+        self.buffer.push('\n');
+    }
+
+    fn gen_stmt(&mut self, stmt: &Stmt) {
+        match stmt {
+            Stmt::Return(expr) => {
+                self.gen_expr(expr);
+                self.emit_line("  ret");
+            }
+        }
+    }
+
+    fn gen_expr(&mut self, expr: &Expr) {
+        match expr {
+            Expr::Num(value) => {
+                self.emit_line(&format!("  mov ${}, %rax", value));
+            }
+            Expr::Binary { op, lhs, rhs } => {
+                self.gen_expr(lhs);
+                self.emit_line("  push %rax");
+                self.gen_expr(rhs);
+                self.emit_line("  pop %rdi");
+                match op {
+                    BinaryOp::Add => {
+                        self.emit_line("  add %rdi, %rax");
+                    }
+                    BinaryOp::Sub => {
+                        self.emit_line("  sub %rax, %rdi");
+                        self.emit_line("  mov %rdi, %rax");
+                    }
                 }
             }
         }

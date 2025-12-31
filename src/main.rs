@@ -36,7 +36,7 @@ fn run(args: &Args) -> CompileResult<()> {
 
     let tokens = lexer::tokenize(&source)?;
     let program = parser::parse(&tokens)?;
-    let asm = codegen::generate(&program);
+    let asm = codegen::Codegen::new().generate(&program);
 
     match &args.output {
         Some(path) => {
@@ -75,7 +75,7 @@ fn format_diagnostic(err: &CompileError, path: &std::path::Path) -> String {
         location.line,
         location.column
     ));
-    out.push_str("   |\n");
+    out.push_str(&format!("{:>width$} |\n", "", width = width));
 
     if let Some(text) = line_text {
         out.push_str(&format!(

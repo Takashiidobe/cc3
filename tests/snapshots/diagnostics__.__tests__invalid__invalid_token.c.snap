@@ -1,0 +1,6 @@
+---
+source: tests/diagnostics.rs
+expression: "&log"
+---
+stderr: "error: invalid token: @\n  --> ./tests/invalid/invalid_token.c:1:14\n    |\n  1 | int main() { @ }\n    |              ^\n\n"
+status: 1
