@@ -1,13 +1,15 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub body: Vec<Stmt>,
+    pub locals: Vec<Obj>,
+    pub stack_size: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Return(Expr),
     Expr(Expr),
-    Decl(char),
+    Decl(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,7 +19,7 @@ pub enum Expr {
         op: UnaryOp,
         expr: Box<Expr>,
     },
-    Var(char),
+    Var(usize),
     Assign {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
@@ -44,4 +46,10 @@ pub enum BinaryOp {
     Ne,
     Lt,
     Le,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Obj {
+    pub name: String,
+    pub offset: i32,
 }

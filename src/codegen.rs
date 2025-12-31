@@ -16,12 +16,12 @@ impl Codegen {
         self.emit_line("main:");
         self.emit_line("  push %rbp");
         self.emit_line("  mov %rsp, %rbp");
-        self.emit_line("  sub $208, %rsp");
+        self.emit_line(&format!("  sub ${}, %rsp", program.stack_size));
 
         let mut last_was_return = false;
         for stmt in &program.body {
             last_was_return = matches!(stmt, Stmt::Return(_));
-            self.gen_stmt(stmt);
+            self.gen_stmt(stmt, program);
         }
 
         if !last_was_return {
@@ -38,48 +38,48 @@ impl Codegen {
         self.buffer.push('\n');
     }
 
-    fn gen_stmt(&mut self, stmt: &Stmt) {
+    fn gen_stmt(&mut self, stmt: &Stmt, program: &Program) {
         match stmt {
             Stmt::Return(expr) => {
-                self.gen_expr(expr);
+                self.gen_expr(expr, program);
                 self.emit_epilogue();
                 self.emit_line("  ret");
             }
             Stmt::Expr(expr) => {
-                self.gen_expr(expr);
+                self.gen_expr(expr, program);
             }
             Stmt::Decl(_) => {}
         }
     }
 
-    fn gen_expr(&mut self, expr: &Expr) {
+    fn gen_expr(&mut self, expr: &Expr, program: &Program) {
         match expr {
             Expr::Num(value) => {
                 self.emit_line(&format!("  mov ${}, %rax", value));
             }
             Expr::Unary { op, expr } => {
-                self.gen_expr(expr);
+                self.gen_expr(expr, program);
                 match op {
                     UnaryOp::Neg => {
                         self.emit_line("  neg %rax");
                     }
                 }
             }
-            Expr::Var(name) => {
-                self.gen_addr(*name);
+            Expr::Var(idx) => {
+                self.gen_addr(*idx, program);
                 self.emit_line("  mov (%rax), %rax");
             }
             Expr::Assign { lhs, rhs } => {
-                self.gen_lvalue(lhs);
+                self.gen_lvalue(lhs, program);
                 self.emit_line("  push %rax");
-                self.gen_expr(rhs);
+                self.gen_expr(rhs, program);
                 self.emit_line("  pop %rdi");
                 self.emit_line("  mov %rax, (%rdi)");
             }
             Expr::Binary { op, lhs, rhs } => {
-                self.gen_expr(rhs);
+                self.gen_expr(rhs, program);
                 self.emit_line("  push %rax");
-                self.gen_expr(lhs);
+                self.gen_expr(lhs, program);
                 self.emit_line("  pop %rdi");
                 match op {
                     BinaryOp::Add => {
@@ -116,14 +116,14 @@ impl Codegen {
         self.emit_line("  pop %rbp");
     }
 
-    fn gen_addr(&mut self, name: char) {
-        let offset = (name as i32 - 'a' as i32 + 1) * 8;
-        self.emit_line(&format!("  lea -{}(%rbp), %rax", offset));
+    fn gen_addr(&mut self, idx: usize, program: &Program) {
+        let offset = program.locals[idx].offset;
+        self.emit_line(&format!("  lea {}(%rbp), %rax", offset));
     }
 
-    fn gen_lvalue(&mut self, expr: &Expr) {
+    fn gen_lvalue(&mut self, expr: &Expr, program: &Program) {
         match expr {
-            Expr::Var(name) => self.gen_addr(*name),
+            Expr::Var(idx) => self.gen_addr(*idx, program),
             _ => self.emit_line("  mov $0, %rax"),
         }
     }

@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Expr, Obj, Program, Stmt, UnaryOp};
 use crate::error::{CompileError, CompileResult};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
 
@@ -10,11 +10,16 @@ pub fn parse(tokens: &[Token]) -> CompileResult<Program> {
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    locals: Vec<Obj>,
 }
 
 impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            locals: Vec::new(),
+        }
     }
 
     fn parse_program(&mut self) -> CompileResult<Program> {
@@ -36,7 +41,13 @@ impl<'a> Parser<'a> {
         self.expect_punct(Punct::RBrace)?;
         self.expect_eof()?;
 
-        Ok(Program { body })
+        let stack_size = align_to(self.locals.len() as i32 * 8, 16);
+        let locals = std::mem::take(&mut self.locals);
+        Ok(Program {
+            body,
+            locals,
+            stack_size,
+        })
     }
 
     fn parse_stmt(&mut self) -> CompileResult<Stmt> {
@@ -48,14 +59,9 @@ impl<'a> Parser<'a> {
 
         if self.consume_keyword(Keyword::Int) {
             let name = self.expect_ident()?;
-            if name.len() != 1 {
-                return Err(
-                    self.error_here(format!("expected single-letter variable, got '{name}'"))
-                );
-            }
-            let ch = name.chars().next().unwrap();
+            let idx = self.find_var(&name).unwrap_or_else(|| self.new_lvar(name));
             self.expect_punct(Punct::Semi)?;
-            return Ok(Stmt::Decl(ch));
+            return Ok(Stmt::Decl(idx));
         }
 
         let expr = self.parse_expr()?;
@@ -226,12 +232,11 @@ impl<'a> Parser<'a> {
                 Ok(expr)
             }
             TokenKind::Ident(name) => {
-                if name.len() == 1 {
-                    self.pos += 1;
-                    Ok(Expr::Var(name.chars().next().unwrap()))
-                } else {
-                    Err(self.error_here(format!("expected single-letter variable, got '{name}'")))
-                }
+                let idx = self
+                    .find_var(&name)
+                    .unwrap_or_else(|| self.new_lvar(name.clone()));
+                self.pos += 1;
+                Ok(Expr::Var(idx))
             }
             TokenKind::Num(value) => {
                 self.pos += 1;
@@ -332,4 +337,18 @@ impl<'a> Parser<'a> {
             TokenKind::Eof => "end of file".to_string(),
         }
     }
+
+    fn find_var(&self, name: &str) -> Option<usize> {
+        self.locals.iter().position(|var| var.name == name)
+    }
+
+    fn new_lvar(&mut self, name: String) -> usize {
+        let offset = -8 * (self.locals.len() as i32 + 1);
+        self.locals.push(Obj { name, offset });
+        self.locals.len() - 1
+    }
+}
+
+fn align_to(n: i32, align: i32) -> i32 {
+    (n + align - 1) / align * align
 }
