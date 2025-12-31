@@ -1,6 +1,6 @@
 use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
 use crate::error::{CompileError, CompileResult};
-use crate::lexer::{Keyword, Token, TokenKind};
+use crate::lexer::{Keyword, Punct, Token, TokenKind};
 
 pub fn parse(tokens: &[Token]) -> CompileResult<Program> {
     let mut parser = Parser::new(tokens);
@@ -24,13 +24,13 @@ impl<'a> Parser<'a> {
             return Err(self.error_here(format!("expected function name 'main', got '{name}'")));
         }
 
-        self.expect_punct('(')?;
-        self.expect_punct(')')?;
-        self.expect_punct('{')?;
+        self.expect_punct(Punct::LParen)?;
+        self.expect_punct(Punct::RParen)?;
+        self.expect_punct(Punct::LBrace)?;
 
         let body = vec![self.parse_stmt()?];
 
-        self.expect_punct('}')?;
+        self.expect_punct(Punct::RBrace)?;
         self.expect_eof()?;
 
         Ok(Program { body })
@@ -39,7 +39,7 @@ impl<'a> Parser<'a> {
     fn parse_stmt(&mut self) -> CompileResult<Stmt> {
         if self.consume_keyword(Keyword::Return) {
             let expr = self.parse_expr()?;
-            self.expect_punct(';')?;
+            self.expect_punct(Punct::Semi)?;
             return Ok(Stmt::Return(expr));
         }
 
@@ -47,16 +47,89 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> CompileResult<Expr> {
-        self.parse_add()
+        self.parse_equality()
+    }
+
+    fn parse_equality(&mut self) -> CompileResult<Expr> {
+        let mut expr = self.parse_relational()?;
+
+        loop {
+            let op = if self.consume_punct(Punct::EqEq) {
+                BinaryOp::Eq
+            } else if self.consume_punct(Punct::NotEq) {
+                BinaryOp::Ne
+            } else {
+                break;
+            };
+
+            let rhs = self.parse_relational()?;
+            expr = Expr::Binary {
+                op,
+                lhs: Box::new(expr),
+                rhs: Box::new(rhs),
+            };
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_relational(&mut self) -> CompileResult<Expr> {
+        let mut expr = self.parse_add()?;
+
+        loop {
+            if self.consume_punct(Punct::Less) {
+                let rhs = self.parse_add()?;
+                expr = Expr::Binary {
+                    op: BinaryOp::Lt,
+                    lhs: Box::new(expr),
+                    rhs: Box::new(rhs),
+                };
+                continue;
+            }
+
+            if self.consume_punct(Punct::LessEq) {
+                let rhs = self.parse_add()?;
+                expr = Expr::Binary {
+                    op: BinaryOp::Le,
+                    lhs: Box::new(expr),
+                    rhs: Box::new(rhs),
+                };
+                continue;
+            }
+
+            if self.consume_punct(Punct::Greater) {
+                let rhs = self.parse_add()?;
+                expr = Expr::Binary {
+                    op: BinaryOp::Lt,
+                    lhs: Box::new(rhs),
+                    rhs: Box::new(expr),
+                };
+                continue;
+            }
+
+            if self.consume_punct(Punct::GreaterEq) {
+                let rhs = self.parse_add()?;
+                expr = Expr::Binary {
+                    op: BinaryOp::Le,
+                    lhs: Box::new(rhs),
+                    rhs: Box::new(expr),
+                };
+                continue;
+            }
+
+            break;
+        }
+
+        Ok(expr)
     }
 
     fn parse_add(&mut self) -> CompileResult<Expr> {
         let mut expr = self.parse_mul()?;
 
         loop {
-            let op = if self.consume_punct('+') {
+            let op = if self.consume_punct(Punct::Plus) {
                 BinaryOp::Add
-            } else if self.consume_punct('-') {
+            } else if self.consume_punct(Punct::Minus) {
                 BinaryOp::Sub
             } else {
                 break;
@@ -77,9 +150,9 @@ impl<'a> Parser<'a> {
         let mut expr = self.parse_unary()?;
 
         loop {
-            let op = if self.consume_punct('*') {
+            let op = if self.consume_punct(Punct::Star) {
                 BinaryOp::Mul
-            } else if self.consume_punct('/') {
+            } else if self.consume_punct(Punct::Slash) {
                 BinaryOp::Div
             } else {
                 break;
@@ -97,10 +170,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_unary(&mut self) -> CompileResult<Expr> {
-        if self.consume_punct('+') {
+        if self.consume_punct(Punct::Plus) {
             return self.parse_unary();
         }
-        if self.consume_punct('-') {
+        if self.consume_punct(Punct::Minus) {
             let expr = self.parse_unary()?;
             return Ok(Expr::Unary {
                 op: UnaryOp::Neg,
@@ -114,10 +187,10 @@ impl<'a> Parser<'a> {
     fn parse_primary(&mut self) -> CompileResult<Expr> {
         let token = self.peek().clone();
         match token.kind {
-            TokenKind::Punct('(') => {
+            TokenKind::Punct(Punct::LParen) => {
                 self.pos += 1;
                 let expr = self.parse_expr()?;
-                self.expect_punct(')')?;
+                self.expect_punct(Punct::RParen)?;
                 Ok(expr)
             }
             TokenKind::Num(value) => {
@@ -160,20 +233,20 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn expect_punct(&mut self, ch: char) -> CompileResult<()> {
+    fn expect_punct(&mut self, punct: Punct) -> CompileResult<()> {
         let token = self.peek().clone();
         match token.kind {
-            TokenKind::Punct(found) if found == ch => {
+            TokenKind::Punct(found) if found == punct => {
                 self.pos += 1;
                 Ok(())
             }
-            _ => Err(self.error_expected(format!("'{ch}'"))),
+            _ => Err(self.error_expected(format!("'{punct}'"))),
         }
     }
 
-    fn consume_punct(&mut self, ch: char) -> bool {
+    fn consume_punct(&mut self, punct: Punct) -> bool {
         let token = self.peek().clone();
-        if matches!(token.kind, TokenKind::Punct(found) if found == ch) {
+        if matches!(token.kind, TokenKind::Punct(found) if found == punct) {
             self.pos += 1;
             true
         } else {
@@ -211,7 +284,7 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(kw) => format!("keyword '{kw:?}'"),
             TokenKind::Ident(name) => format!("identifier '{name}'"),
             TokenKind::Num(value) => format!("number {value}"),
-            TokenKind::Punct(ch) => format!("'{ch}'"),
+            TokenKind::Punct(punct) => format!("'{punct}'"),
             TokenKind::Eof => "end of file".to_string(),
         }
     }

@@ -68,6 +68,17 @@ impl Codegen {
                         self.emit_line("  cqo");
                         self.emit_line("  idiv %rdi");
                     }
+                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => {
+                        self.emit_line("  cmp %rdi, %rax");
+                        match op {
+                            BinaryOp::Eq => self.emit_line("  sete %al"),
+                            BinaryOp::Ne => self.emit_line("  setne %al"),
+                            BinaryOp::Lt => self.emit_line("  setl %al"),
+                            BinaryOp::Le => self.emit_line("  setle %al"),
+                            _ => {}
+                        }
+                        self.emit_line("  movzb %al, %rax");
+                    }
                 }
             }
         }

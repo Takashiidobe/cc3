@@ -11,8 +11,50 @@ pub enum TokenKind {
     Keyword(Keyword),
     Ident(String),
     Num(i64),
-    Punct(char),
+    Punct(Punct),
     Eof,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Punct {
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    LParen,
+    RParen,
+    LBrace,
+    RBrace,
+    Semi,
+    EqEq,
+    NotEq,
+    Less,
+    LessEq,
+    Greater,
+    GreaterEq,
+}
+
+impl std::fmt::Display for Punct {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            Punct::Plus => "+",
+            Punct::Minus => "-",
+            Punct::Star => "*",
+            Punct::Slash => "/",
+            Punct::LParen => "(",
+            Punct::RParen => ")",
+            Punct::LBrace => "{",
+            Punct::RBrace => "}",
+            Punct::Semi => ";",
+            Punct::EqEq => "==",
+            Punct::NotEq => "!=",
+            Punct::Less => "<",
+            Punct::LessEq => "<=",
+            Punct::Greater => ">",
+            Punct::GreaterEq => ">=",
+        };
+        f.write_str(text)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,17 +128,17 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             continue;
         }
 
-        if is_punct(b) {
+        if let Some((punct, len)) = read_punct(&input[i..]) {
             tokens.push(Token {
-                kind: TokenKind::Punct(b as char),
+                kind: TokenKind::Punct(punct),
                 location: SourceLocation {
                     line,
                     column,
                     byte: i,
                 },
             });
-            i += 1;
-            column += 1;
+            i += len;
+            column += len;
             continue;
         }
 
@@ -130,9 +172,34 @@ fn is_ident_continue(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-fn is_punct(b: u8) -> bool {
-    matches!(
-        b,
-        b'(' | b')' | b'{' | b'}' | b';' | b'+' | b'-' | b'*' | b'/'
-    )
+fn read_punct(input: &str) -> Option<(Punct, usize)> {
+    if input.starts_with("==") {
+        return Some((Punct::EqEq, 2));
+    }
+    if input.starts_with("!=") {
+        return Some((Punct::NotEq, 2));
+    }
+    if input.starts_with("<=") {
+        return Some((Punct::LessEq, 2));
+    }
+    if input.starts_with(">=") {
+        return Some((Punct::GreaterEq, 2));
+    }
+
+    let ch = input.as_bytes().first().copied()?;
+    let punct = match ch {
+        b'+' => Punct::Plus,
+        b'-' => Punct::Minus,
+        b'*' => Punct::Star,
+        b'/' => Punct::Slash,
+        b'(' => Punct::LParen,
+        b')' => Punct::RParen,
+        b'{' => Punct::LBrace,
+        b'}' => Punct::RBrace,
+        b';' => Punct::Semi,
+        b'<' => Punct::Less,
+        b'>' => Punct::Greater,
+        _ => return None,
+    };
+    Some((punct, 1))
 }
