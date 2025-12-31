@@ -15,8 +15,15 @@ impl Codegen {
         self.emit_line("  .globl main");
         self.emit_line("main:");
 
+        let mut last_was_return = false;
         for stmt in &program.body {
+            last_was_return = matches!(stmt, Stmt::Return(_));
             self.gen_stmt(stmt);
+        }
+
+        if !last_was_return {
+            self.emit_line("  mov $0, %rax");
+            self.emit_line("  ret");
         }
 
         self.buffer
@@ -32,6 +39,9 @@ impl Codegen {
             Stmt::Return(expr) => {
                 self.gen_expr(expr);
                 self.emit_line("  ret");
+            }
+            Stmt::Expr(expr) => {
+                self.gen_expr(expr);
             }
         }
     }

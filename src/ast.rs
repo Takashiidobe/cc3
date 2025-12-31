@@ -6,6 +6,7 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Return(Expr),
+    Expr(Expr),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

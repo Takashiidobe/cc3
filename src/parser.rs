@@ -28,7 +28,10 @@ impl<'a> Parser<'a> {
         self.expect_punct(Punct::RParen)?;
         self.expect_punct(Punct::LBrace)?;
 
-        let body = vec![self.parse_stmt()?];
+        let mut body = Vec::new();
+        while !self.check_punct(Punct::RBrace) {
+            body.push(self.parse_stmt()?);
+        }
 
         self.expect_punct(Punct::RBrace)?;
         self.expect_eof()?;
@@ -43,7 +46,9 @@ impl<'a> Parser<'a> {
             return Ok(Stmt::Return(expr));
         }
 
-        Err(self.error_expected("a statement"))
+        let expr = self.parse_expr()?;
+        self.expect_punct(Punct::Semi)?;
+        Ok(Stmt::Expr(expr))
     }
 
     fn parse_expr(&mut self) -> CompileResult<Expr> {
@@ -252,6 +257,10 @@ impl<'a> Parser<'a> {
         } else {
             false
         }
+    }
+
+    fn check_punct(&self, punct: Punct) -> bool {
+        matches!(self.peek().kind, TokenKind::Punct(found) if found == punct)
     }
 
     fn expect_eof(&mut self) -> CompileResult<()> {
