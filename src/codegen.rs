@@ -69,6 +69,27 @@ impl Codegen {
                     self.emit_line(&format!(".L.end.{}:", label));
                 }
             }
+            Stmt::For {
+                init,
+                cond,
+                inc,
+                body,
+            } => {
+                let label = self.next_label();
+                self.gen_stmt(init, program);
+                self.emit_line(&format!(".L.begin.{}:", label));
+                if let Some(cond) = cond {
+                    self.gen_expr(cond, program);
+                    self.emit_line("  cmp $0, %rax");
+                    self.emit_line(&format!("  je .L.end.{}", label));
+                }
+                self.gen_stmt(body, program);
+                if let Some(inc) = inc {
+                    self.gen_expr(inc, program);
+                }
+                self.emit_line(&format!("  jmp .L.begin.{}", label));
+                self.emit_line(&format!(".L.end.{}:", label));
+            }
             Stmt::Block(stmts) => {
                 for stmt in stmts {
                     self.gen_stmt(stmt, program);

@@ -74,6 +74,32 @@ impl<'a> Parser<'a> {
             });
         }
 
+        if self.consume_keyword(Keyword::For) {
+            self.expect_punct(Punct::LParen)?;
+            let init = self.parse_expr_stmt()?;
+            let cond = if self.consume_punct(Punct::Semi) {
+                None
+            } else {
+                let expr = self.parse_expr()?;
+                self.expect_punct(Punct::Semi)?;
+                Some(expr)
+            };
+            let inc = if self.consume_punct(Punct::RParen) {
+                None
+            } else {
+                let expr = self.parse_expr()?;
+                self.expect_punct(Punct::RParen)?;
+                Some(expr)
+            };
+            let body = self.parse_stmt()?;
+            return Ok(Stmt::For {
+                init: Box::new(init),
+                cond,
+                inc,
+                body: Box::new(body),
+            });
+        }
+
         if self.consume_punct(Punct::LBrace) {
             let mut stmts = Vec::new();
             while !self.check_punct(Punct::RBrace) {
@@ -90,6 +116,10 @@ impl<'a> Parser<'a> {
             return Ok(Stmt::Decl(idx));
         }
 
+        self.parse_expr_stmt()
+    }
+
+    fn parse_expr_stmt(&mut self) -> CompileResult<Stmt> {
         if self.consume_punct(Punct::Semi) {
             return Ok(Stmt::Block(Vec::new()));
         }

@@ -6,6 +6,7 @@ pub enum Keyword {
     Return,
     If,
     Else,
+    For,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +128,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 "return" => TokenKind::Keyword(Keyword::Return),
                 "if" => TokenKind::Keyword(Keyword::If),
                 "else" => TokenKind::Keyword(Keyword::Else),
+                "for" => TokenKind::Keyword(Keyword::For),
                 _ => TokenKind::Ident(word.to_string()),
             };
             tokens.push(Token { kind, location });
