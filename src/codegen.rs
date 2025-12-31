@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Expr, ExprKind, Program, Stmt, StmtKind, UnaryOp};
 
 pub struct Codegen {
     buffer: String,
@@ -22,7 +22,7 @@ impl Codegen {
 
         let mut last_was_return = false;
         for stmt in &program.body {
-            last_was_return = matches!(stmt, Stmt::Return(_));
+            last_was_return = matches!(stmt.kind, StmtKind::Return(_));
             self.gen_stmt(stmt, program);
         }
 
@@ -46,13 +46,13 @@ impl Codegen {
     }
 
     fn gen_stmt(&mut self, stmt: &Stmt, program: &Program) {
-        match stmt {
-            Stmt::Return(expr) => {
+        match &stmt.kind {
+            StmtKind::Return(expr) => {
                 self.gen_expr(expr, program);
                 self.emit_epilogue();
                 self.emit_line("  ret");
             }
-            Stmt::If { cond, then, els } => {
+            StmtKind::If { cond, then, els } => {
                 let label = self.next_label();
                 self.gen_expr(cond, program);
                 self.emit_line("  cmp $0, %rax");
@@ -69,7 +69,7 @@ impl Codegen {
                     self.emit_line(&format!(".L.end.{}:", label));
                 }
             }
-            Stmt::For {
+            StmtKind::For {
                 init,
                 cond,
                 inc,
@@ -92,24 +92,24 @@ impl Codegen {
                 self.emit_line(&format!("  jmp .L.begin.{}", label));
                 self.emit_line(&format!(".L.end.{}:", label));
             }
-            Stmt::Block(stmts) => {
+            StmtKind::Block(stmts) => {
                 for stmt in stmts {
                     self.gen_stmt(stmt, program);
                 }
             }
-            Stmt::Expr(expr) => {
+            StmtKind::Expr(expr) => {
                 self.gen_expr(expr, program);
             }
-            Stmt::Decl(_) => {}
+            StmtKind::Decl(_) => {}
         }
     }
 
     fn gen_expr(&mut self, expr: &Expr, program: &Program) {
-        match expr {
-            Expr::Num(value) => {
+        match &expr.kind {
+            ExprKind::Num(value) => {
                 self.emit_line(&format!("  mov ${}, %rax", value));
             }
-            Expr::Unary { op, expr } => {
+            ExprKind::Unary { op, expr } => {
                 self.gen_expr(expr, program);
                 match op {
                     UnaryOp::Neg => {
@@ -117,18 +117,18 @@ impl Codegen {
                     }
                 }
             }
-            Expr::Var(idx) => {
+            ExprKind::Var(idx) => {
                 self.gen_addr(*idx, program);
                 self.emit_line("  mov (%rax), %rax");
             }
-            Expr::Assign { lhs, rhs } => {
+            ExprKind::Assign { lhs, rhs } => {
                 self.gen_lvalue(lhs, program);
                 self.emit_line("  push %rax");
                 self.gen_expr(rhs, program);
                 self.emit_line("  pop %rdi");
                 self.emit_line("  mov %rax, (%rdi)");
             }
-            Expr::Binary { op, lhs, rhs } => {
+            ExprKind::Binary { op, lhs, rhs } => {
                 self.gen_expr(rhs, program);
                 self.emit_line("  push %rax");
                 self.gen_expr(lhs, program);
@@ -174,8 +174,8 @@ impl Codegen {
     }
 
     fn gen_lvalue(&mut self, expr: &Expr, program: &Program) {
-        match expr {
-            Expr::Var(idx) => self.gen_addr(*idx, program),
+        match &expr.kind {
+            ExprKind::Var(idx) => self.gen_addr(*idx, program),
             _ => self.emit_line("  mov $0, %rax"),
         }
     }

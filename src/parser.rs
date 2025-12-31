@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, Obj, Program, Stmt, UnaryOp};
+use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, UnaryOp};
 use crate::error::{CompileError, CompileResult};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
 
@@ -54,7 +54,7 @@ impl<'a> Parser<'a> {
         if self.consume_keyword(Keyword::Return) {
             let expr = self.parse_expr()?;
             self.expect_punct(Punct::Semi)?;
-            return Ok(Stmt::Return(expr));
+            return Ok(self.stmt_last(StmtKind::Return(expr)));
         }
 
         if self.consume_keyword(Keyword::If) {
@@ -67,11 +67,11 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
-            return Ok(Stmt::If {
+            return Ok(self.stmt_last(StmtKind::If {
                 cond,
                 then: Box::new(then),
                 els,
-            });
+            }));
         }
 
         if self.consume_keyword(Keyword::For) {
@@ -92,12 +92,12 @@ impl<'a> Parser<'a> {
                 Some(expr)
             };
             let body = self.parse_stmt()?;
-            return Ok(Stmt::For {
+            return Ok(self.stmt_last(StmtKind::For {
                 init: Some(Box::new(init)),
                 cond,
                 inc,
                 body: Box::new(body),
-            });
+            }));
         }
 
         if self.consume_keyword(Keyword::While) {
@@ -105,12 +105,12 @@ impl<'a> Parser<'a> {
             let cond = self.parse_expr()?;
             self.expect_punct(Punct::RParen)?;
             let body = self.parse_stmt()?;
-            return Ok(Stmt::For {
+            return Ok(self.stmt_last(StmtKind::For {
                 init: None,
                 cond: Some(cond),
                 inc: None,
                 body: Box::new(body),
-            });
+            }));
         }
 
         if self.consume_punct(Punct::LBrace) {
@@ -119,14 +119,14 @@ impl<'a> Parser<'a> {
                 stmts.push(self.parse_stmt()?);
             }
             self.expect_punct(Punct::RBrace)?;
-            return Ok(Stmt::Block(stmts));
+            return Ok(self.stmt_last(StmtKind::Block(stmts)));
         }
 
         if self.consume_keyword(Keyword::Int) {
             let name = self.expect_ident()?;
             let idx = self.find_var(&name).unwrap_or_else(|| self.new_lvar(name));
             self.expect_punct(Punct::Semi)?;
-            return Ok(Stmt::Decl(idx));
+            return Ok(self.stmt_last(StmtKind::Decl(idx)));
         }
 
         self.parse_expr_stmt()
@@ -134,12 +134,13 @@ impl<'a> Parser<'a> {
 
     fn parse_expr_stmt(&mut self) -> CompileResult<Stmt> {
         if self.consume_punct(Punct::Semi) {
-            return Ok(Stmt::Block(Vec::new()));
+            return Ok(self.stmt_last(StmtKind::Block(Vec::new())));
         }
 
+        let location = self.peek().location;
         let expr = self.parse_expr()?;
         self.expect_punct(Punct::Semi)?;
-        Ok(Stmt::Expr(expr))
+        Ok(self.stmt_at(StmtKind::Expr(expr), location))
     }
 
     fn parse_expr(&mut self) -> CompileResult<Expr> {
@@ -149,14 +150,18 @@ impl<'a> Parser<'a> {
     fn parse_assign(&mut self) -> CompileResult<Expr> {
         let expr = self.parse_equality()?;
         if self.consume_punct(Punct::Assign) {
-            if !matches!(expr, Expr::Var(_)) {
+            if !matches!(expr.kind, ExprKind::Var(_)) {
                 return Err(self.error_here("invalid assignment target"));
             }
+            let location = self.last_location();
             let rhs = self.parse_assign()?;
-            return Ok(Expr::Assign {
-                lhs: Box::new(expr),
-                rhs: Box::new(rhs),
-            });
+            return Ok(self.expr_at(
+                ExprKind::Assign {
+                    lhs: Box::new(expr),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            ));
         }
         Ok(expr)
     }
@@ -173,12 +178,16 @@ impl<'a> Parser<'a> {
                 break;
             };
 
+            let location = self.last_location();
             let rhs = self.parse_relational()?;
-            expr = Expr::Binary {
-                op,
-                lhs: Box::new(expr),
-                rhs: Box::new(rhs),
-            };
+            expr = self.expr_at(
+                ExprKind::Binary {
+                    op,
+                    lhs: Box::new(expr),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            );
         }
 
         Ok(expr)
@@ -189,42 +198,58 @@ impl<'a> Parser<'a> {
 
         loop {
             if self.consume_punct(Punct::Less) {
+                let location = self.last_location();
                 let rhs = self.parse_add()?;
-                expr = Expr::Binary {
-                    op: BinaryOp::Lt,
-                    lhs: Box::new(expr),
-                    rhs: Box::new(rhs),
-                };
+                expr = self.expr_at(
+                    ExprKind::Binary {
+                        op: BinaryOp::Lt,
+                        lhs: Box::new(expr),
+                        rhs: Box::new(rhs),
+                    },
+                    location,
+                );
                 continue;
             }
 
             if self.consume_punct(Punct::LessEq) {
+                let location = self.last_location();
                 let rhs = self.parse_add()?;
-                expr = Expr::Binary {
-                    op: BinaryOp::Le,
-                    lhs: Box::new(expr),
-                    rhs: Box::new(rhs),
-                };
+                expr = self.expr_at(
+                    ExprKind::Binary {
+                        op: BinaryOp::Le,
+                        lhs: Box::new(expr),
+                        rhs: Box::new(rhs),
+                    },
+                    location,
+                );
                 continue;
             }
 
             if self.consume_punct(Punct::Greater) {
+                let location = self.last_location();
                 let rhs = self.parse_add()?;
-                expr = Expr::Binary {
-                    op: BinaryOp::Lt,
-                    lhs: Box::new(rhs),
-                    rhs: Box::new(expr),
-                };
+                expr = self.expr_at(
+                    ExprKind::Binary {
+                        op: BinaryOp::Lt,
+                        lhs: Box::new(rhs),
+                        rhs: Box::new(expr),
+                    },
+                    location,
+                );
                 continue;
             }
 
             if self.consume_punct(Punct::GreaterEq) {
+                let location = self.last_location();
                 let rhs = self.parse_add()?;
-                expr = Expr::Binary {
-                    op: BinaryOp::Le,
-                    lhs: Box::new(rhs),
-                    rhs: Box::new(expr),
-                };
+                expr = self.expr_at(
+                    ExprKind::Binary {
+                        op: BinaryOp::Le,
+                        lhs: Box::new(rhs),
+                        rhs: Box::new(expr),
+                    },
+                    location,
+                );
                 continue;
             }
 
@@ -246,12 +271,16 @@ impl<'a> Parser<'a> {
                 break;
             };
 
+            let location = self.last_location();
             let rhs = self.parse_mul()?;
-            expr = Expr::Binary {
-                op,
-                lhs: Box::new(expr),
-                rhs: Box::new(rhs),
-            };
+            expr = self.expr_at(
+                ExprKind::Binary {
+                    op,
+                    lhs: Box::new(expr),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            );
         }
 
         Ok(expr)
@@ -269,12 +298,16 @@ impl<'a> Parser<'a> {
                 break;
             };
 
+            let location = self.last_location();
             let rhs = self.parse_unary()?;
-            expr = Expr::Binary {
-                op,
-                lhs: Box::new(expr),
-                rhs: Box::new(rhs),
-            };
+            expr = self.expr_at(
+                ExprKind::Binary {
+                    op,
+                    lhs: Box::new(expr),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            );
         }
 
         Ok(expr)
@@ -285,11 +318,15 @@ impl<'a> Parser<'a> {
             return self.parse_unary();
         }
         if self.consume_punct(Punct::Minus) {
+            let location = self.last_location();
             let expr = self.parse_unary()?;
-            return Ok(Expr::Unary {
-                op: UnaryOp::Neg,
-                expr: Box::new(expr),
-            });
+            return Ok(self.expr_at(
+                ExprKind::Unary {
+                    op: UnaryOp::Neg,
+                    expr: Box::new(expr),
+                },
+                location,
+            ));
         }
 
         self.parse_primary()
@@ -309,11 +346,11 @@ impl<'a> Parser<'a> {
                     .find_var(&name)
                     .unwrap_or_else(|| self.new_lvar(name.clone()));
                 self.pos += 1;
-                Ok(Expr::Var(idx))
+                Ok(self.expr_at(ExprKind::Var(idx), token.location))
             }
             TokenKind::Num(value) => {
                 self.pos += 1;
-                Ok(Expr::Num(value))
+                Ok(self.expr_at(ExprKind::Num(value), token.location))
             }
             _ => Err(self.error_expected("a primary expression")),
         }
@@ -388,6 +425,25 @@ impl<'a> Parser<'a> {
         self.tokens
             .get(self.pos)
             .unwrap_or_else(|| &self.tokens[self.tokens.len().saturating_sub(1)])
+    }
+
+    fn last_location(&self) -> crate::error::SourceLocation {
+        self.tokens
+            .get(self.pos.saturating_sub(1))
+            .map(|token| token.location)
+            .unwrap_or_else(|| self.peek().location)
+    }
+
+    fn stmt_last(&self, kind: StmtKind) -> Stmt {
+        self.stmt_at(kind, self.last_location())
+    }
+
+    fn stmt_at(&self, kind: StmtKind, location: crate::error::SourceLocation) -> Stmt {
+        Stmt { kind, location }
+    }
+
+    fn expr_at(&self, kind: ExprKind, location: crate::error::SourceLocation) -> Expr {
+        Expr { kind, location }
     }
 
     fn error_here(&self, message: impl Into<String>) -> CompileError {

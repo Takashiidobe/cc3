@@ -1,3 +1,5 @@
+use crate::error::SourceLocation;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
     pub body: Vec<Stmt>,
@@ -6,7 +8,13 @@ pub struct Program {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Stmt {
+pub struct Stmt {
+    pub kind: StmtKind,
+    pub location: SourceLocation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StmtKind {
     Return(Expr),
     Block(Vec<Stmt>),
     If {
@@ -25,7 +33,13 @@ pub enum Stmt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Expr {
+pub struct Expr {
+    pub kind: ExprKind,
+    pub location: SourceLocation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExprKind {
     Num(i64),
     Unary {
         op: UnaryOp,
