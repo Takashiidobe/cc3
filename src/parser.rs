@@ -402,6 +402,13 @@ impl<'a> Parser<'a> {
                 Ok(expr)
             }
             TokenKind::Ident(name) => {
+                if matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LParen)) {
+                    self.pos += 1;
+                    self.expect_punct(Punct::LParen)?;
+                    self.expect_punct(Punct::RParen)?;
+                    return Ok(self.expr_at(ExprKind::Call(name), token.location));
+                }
+
                 let idx = match self.find_var(&name) {
                     Some(idx) => idx,
                     None => return Err(self.error_at(token.location, "undefined variable")),
@@ -496,6 +503,12 @@ impl<'a> Parser<'a> {
     fn peek(&self) -> &Token {
         self.tokens
             .get(self.pos)
+            .unwrap_or_else(|| &self.tokens[self.tokens.len().saturating_sub(1)])
+    }
+
+    fn peek_n(&self, n: usize) -> &Token {
+        self.tokens
+            .get(self.pos + n)
             .unwrap_or_else(|| &self.tokens[self.tokens.len().saturating_sub(1)])
     }
 
@@ -738,6 +751,7 @@ impl<'a> Parser<'a> {
                 .get(*idx)
                 .map(|obj| obj.ty.clone())
                 .unwrap_or(Type::Int),
+            ExprKind::Call(_) => Type::Int,
             ExprKind::Unary { expr, .. } => {
                 self.add_type_expr(expr)?;
                 expr.ty.clone().unwrap_or(Type::Int)

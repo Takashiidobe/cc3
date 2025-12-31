@@ -117,6 +117,10 @@ impl Codegen {
                     }
                 }
             }
+            ExprKind::Call(name) => {
+                self.emit_line("  mov $0, %rax");
+                self.emit_line(&format!("  call {}", name));
+            }
             ExprKind::Addr(expr) => {
                 self.gen_lvalue(expr, program);
             }

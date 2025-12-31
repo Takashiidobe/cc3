@@ -7,9 +7,20 @@ use std::{
     process::{Command as StdCommand, Output, Stdio},
 };
 
-fn compile(src: &Path, exe: &Path) -> io::Result<Output> {
+fn compile(
+    src: &Path,
+    exe: &Path,
+    extra_objs: &[&Path],
+    extra_args: &[String],
+) -> io::Result<Output> {
     let mut cmd = StdCommand::new("clang");
     cmd.arg("-o").arg(exe).arg(src);
+    for arg in extra_args {
+        cmd.arg(arg);
+    }
+    for obj in extra_objs {
+        cmd.arg(obj);
+    }
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).output()
 }
 
@@ -51,6 +62,24 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     let asm_path = tmp.path().join(format!("{stem}.S"));
     let exe_mine = tmp.path().join(format!("{stem}.mine"));
     let exe_ref = tmp.path().join(format!("{stem}.ref"));
+    let helper_src = tmp.path().join("helper.c");
+    let helper_header = tmp.path().join("helper.h");
+    let helper_obj = tmp.path().join("helper.o");
+
+    std::fs::write(
+        &helper_src,
+        "int ret3() { return 3; }\nint ret5() { return 5; }\n",
+    )?;
+    std::fs::write(&helper_header, "int ret3();\nint ret5();\n")?;
+    let helper_out = StdCommand::new("clang")
+        .arg("-c")
+        .arg("-o")
+        .arg(&helper_obj)
+        .arg(&helper_src)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()?;
+    ensure_success("cc(helper)", &helper_src, &helper_out);
 
     // 1) Your compiler: codegen -> .S, then cc -> exe_mine
     let mut bin = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
@@ -67,7 +96,7 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     );
     ensure_success("codegen", path, &codegen_out);
 
-    let compile_out_mine = compile(&asm_path, &exe_mine)?;
+    let compile_out_mine = compile(&asm_path, &exe_mine, &[helper_obj.as_path()], &[])?;
     eprintln!(
         "[{}] cc(asm) status: {:?}",
         path.display(),
@@ -80,7 +109,11 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
 
     assert_yaml_snapshot!(path.to_str(), &mine);
 
-    let compile_out_ref = compile(path, &exe_ref)?;
+    let include_args = vec![
+        "-include".to_string(),
+        helper_header.to_string_lossy().into_owned(),
+    ];
+    let compile_out_ref = compile(path, &exe_ref, &[helper_obj.as_path()], &include_args)?;
     eprintln!(
         "[{}] cc(src) status: {:?}",
         path.display(),
