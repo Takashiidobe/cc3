@@ -119,7 +119,7 @@ impl<'a> Parser<'a> {
     }
 
     fn error_here(&self, message: impl Into<String>) -> CompileError {
-        let pos = self.peek().pos;
-        CompileError::at(message, pos)
+        let location = self.peek().location;
+        CompileError::at(message, location)
     }
 }

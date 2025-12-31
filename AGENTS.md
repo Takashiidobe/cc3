@@ -32,6 +32,9 @@ the task.
 
 **ALWAYS** use rust edition 2024.
 
+Note that unit tests should be in a different file ending in `_test.rs`,
+so tests for the codegen should live in `codegen_test.rs`.
+
 ## Quick Reference
 
 ```bash
@@ -49,7 +52,8 @@ bd sync               # Sync with git
 **MANDATORY WORKFLOW:**
 
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **ALWAYS add integration tests instead of manually running compiled binaries.**
+2. Run `cargo check` to verify the project compiles
+3. **ALWAYS add integration tests instead of manually running compiled binaries.**
    - **Create test files in `tests/files/`**
    - Add `.c` test files that assert that new functionality works as
      expected
@@ -66,19 +70,19 @@ bd sync               # Sync with git
    ```bash
    cargo test
    ```
-3. Run `cargo clippy --all-targets` and fix any linter errors
-4. Run `cargo fmt` to format code
-5. **Update issue status** - Close finished work, update in-progress items
-6. **PUSH TO REMOTE** - This is MANDATORY:
+4. Run `cargo clippy --all-targets` and fix any linter errors
+5. Run `cargo fmt` to format code
+6. **Update issue status** - Close finished work, update in-progress items
+7. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
    bd sync
    git push
    git status  # MUST show "up to date with origin"
    ```
-7. **Clean up** - Clear stashes, prune remote branches
-8. **Verify** - All changes committed AND pushed
-9. **Hand off** - Provide context for next session
+8. **Clean up** - Clear stashes, prune remote branches
+9. **Verify** - All changes committed AND pushed
+10. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
 - Work is NOT complete until `git push` succeeds

@@ -19,3 +19,6 @@ tempfile = "3.23.0"
 name = "codegen"
 harness = false
 
+[[test]]
+name = "diagnostics"
+harness = false

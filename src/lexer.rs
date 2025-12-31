@@ -1,4 +1,4 @@
-use crate::error::{CompileError, CompileResult};
+use crate::error::{CompileError, CompileResult, SourceLocation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Keyword {
@@ -18,40 +18,59 @@ pub enum TokenKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     pub kind: TokenKind,
-    pub pos: usize,
+    pub location: SourceLocation,
 }
 
 pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
     let bytes = input.as_bytes();
     let mut tokens = Vec::new();
     let mut i = 0;
+    let mut line = 1;
+    let mut column = 1;
 
     while i < bytes.len() {
         let b = bytes[i];
         if b.is_ascii_whitespace() {
+            if b == b'\n' {
+                line += 1;
+                column = 1;
+            } else {
+                column += 1;
+            }
             i += 1;
             continue;
         }
 
         if b.is_ascii_digit() {
             let start = i;
+            let location = SourceLocation {
+                line,
+                column,
+                byte: start,
+            };
             i += 1;
             while i < bytes.len() && bytes[i].is_ascii_digit() {
                 i += 1;
             }
             let num_str = &input[start..i];
             let value = num_str.parse::<i64>().map_err(|err| {
-                CompileError::at(format!("invalid number literal {num_str}: {err}"), start)
+                CompileError::at(format!("invalid number literal {num_str}: {err}"), location)
             })?;
             tokens.push(Token {
                 kind: TokenKind::Num(value),
-                pos: start,
+                location,
             });
+            column += i - start;
             continue;
         }
 
         if is_ident_start(b) {
             let start = i;
+            let location = SourceLocation {
+                line,
+                column,
+                byte: start,
+            };
             i += 1;
             while i < bytes.len() && is_ident_continue(bytes[i]) {
                 i += 1;
@@ -62,25 +81,42 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 "return" => TokenKind::Keyword(Keyword::Return),
                 _ => TokenKind::Ident(word.to_string()),
             };
-            tokens.push(Token { kind, pos: start });
+            tokens.push(Token { kind, location });
+            column += i - start;
             continue;
         }
 
         if is_punct(b) {
             tokens.push(Token {
                 kind: TokenKind::Punct(b as char),
-                pos: i,
+                location: SourceLocation {
+                    line,
+                    column,
+                    byte: i,
+                },
             });
             i += 1;
+            column += 1;
             continue;
         }
 
-        return Err(CompileError::at(format!("invalid token: {}", b as char), i));
+        return Err(CompileError::at(
+            format!("invalid token: {}", b as char),
+            SourceLocation {
+                line,
+                column,
+                byte: i,
+            },
+        ));
     }
 
     tokens.push(Token {
         kind: TokenKind::Eof,
-        pos: input.len(),
+        location: SourceLocation {
+            line,
+            column,
+            byte: input.len(),
+        },
     });
 
     Ok(tokens)

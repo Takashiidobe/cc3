@@ -1,33 +1,45 @@
 use std::fmt;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceLocation {
+    pub line: usize,
+    pub column: usize,
+    pub byte: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct CompileError {
     message: String,
-    pos: Option<usize>,
+    location: Option<SourceLocation>,
 }
 
 impl CompileError {
     pub fn new(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
-            pos: None,
+            location: None,
         }
     }
 
-    pub fn at(message: impl Into<String>, pos: usize) -> Self {
+    pub fn at(message: impl Into<String>, location: SourceLocation) -> Self {
         Self {
             message: message.into(),
-            pos: Some(pos),
+            location: Some(location),
         }
+    }
+
+    pub fn location(&self) -> Option<SourceLocation> {
+        self.location
+    }
+
+    pub fn message(&self) -> &str {
+        &self.message
     }
 }
 
 impl fmt::Display for CompileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.pos {
-            Some(pos) => write!(f, "{} at byte {}", self.message, pos),
-            None => write!(f, "{}", self.message),
-        }
+        write!(f, "{}", self.message)
     }
 }
 

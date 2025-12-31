@@ -5,6 +5,7 @@ mod lexer;
 mod parser;
 
 use clap::Parser;
+use colored::Colorize;
 use std::{fs, io, path::PathBuf};
 
 use crate::error::{CompileError, CompileResult};
@@ -22,13 +23,13 @@ struct Args {
 
 fn main() {
     let args = Args::parse();
-    if let Err(err) = run(args) {
-        eprintln!("{err}");
+    if let Err(err) = run(&args) {
+        eprintln!("{}", format_diagnostic(&err, args.input.as_path()));
         std::process::exit(1);
     }
 }
 
-fn run(args: Args) -> CompileResult<()> {
+fn run(args: &Args) -> CompileResult<()> {
     let source = fs::read_to_string(&args.input).map_err(|err| {
         CompileError::new(format!("failed to read {}: {err}", args.input.display()))
     })?;
@@ -37,9 +38,9 @@ fn run(args: Args) -> CompileResult<()> {
     let program = parser::parse(&tokens)?;
     let asm = codegen::generate(&program);
 
-    match args.output {
+    match &args.output {
         Some(path) => {
-            fs::write(&path, asm).map_err(|err| {
+            fs::write(path, asm).map_err(|err| {
                 CompileError::new(format!("failed to write {}: {err}", path.display()))
             })?;
         }
@@ -53,4 +54,45 @@ fn run(args: Args) -> CompileResult<()> {
     }
 
     Ok(())
+}
+
+fn format_diagnostic(err: &CompileError, path: &std::path::Path) -> String {
+    let header = format!("{}: {}", "error".red().bold(), err.message().bold());
+    let Some(location) = err.location() else {
+        return header;
+    };
+
+    let source = fs::read_to_string(path).unwrap_or_default();
+    let line_text = source.lines().nth(location.line.saturating_sub(1));
+    let width = location.line.to_string().len().max(3);
+
+    let mut out = String::new();
+    out.push_str(&header);
+    out.push('\n');
+    out.push_str(&format!(
+        "  --> {}:{}:{}\n",
+        path.display(),
+        location.line,
+        location.column
+    ));
+    out.push_str("   |\n");
+
+    if let Some(text) = line_text {
+        out.push_str(&format!(
+            "{:>width$} | {}\n",
+            location.line,
+            text,
+            width = width
+        ));
+        let caret_pad = " ".repeat(location.column.saturating_sub(1));
+        out.push_str(&format!(
+            "{:>width$} | {}{}\n",
+            "",
+            caret_pad,
+            "^".red(),
+            width = width
+        ));
+    }
+
+    out
 }

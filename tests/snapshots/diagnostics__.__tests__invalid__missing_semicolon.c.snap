@@ -1,0 +1,6 @@
+---
+source: tests/diagnostics.rs
+expression: "&log"
+---
+stderr: "error: expected ';'\n  --> ./tests/invalid/missing_semicolon.c:3:1\n   |\n  3 | }\n    | ^\n\n"
+status: 1
