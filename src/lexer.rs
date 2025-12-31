@@ -131,5 +131,8 @@ fn is_ident_continue(b: u8) -> bool {
 }
 
 fn is_punct(b: u8) -> bool {
-    matches!(b, b'(' | b')' | b'{' | b'}' | b';' | b'+' | b'-')
+    matches!(
+        b,
+        b'(' | b')' | b'{' | b'}' | b';' | b'+' | b'-' | b'*' | b'/'
+    )
 }

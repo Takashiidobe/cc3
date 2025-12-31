@@ -42,17 +42,23 @@ impl Codegen {
                 self.emit_line(&format!("  mov ${}, %rax", value));
             }
             Expr::Binary { op, lhs, rhs } => {
-                self.gen_expr(lhs);
-                self.emit_line("  push %rax");
                 self.gen_expr(rhs);
+                self.emit_line("  push %rax");
+                self.gen_expr(lhs);
                 self.emit_line("  pop %rdi");
                 match op {
                     BinaryOp::Add => {
                         self.emit_line("  add %rdi, %rax");
                     }
                     BinaryOp::Sub => {
-                        self.emit_line("  sub %rax, %rdi");
-                        self.emit_line("  mov %rdi, %rax");
+                        self.emit_line("  sub %rdi, %rax");
+                    }
+                    BinaryOp::Mul => {
+                        self.emit_line("  imul %rdi, %rax");
+                    }
+                    BinaryOp::Div => {
+                        self.emit_line("  cqo");
+                        self.emit_line("  idiv %rdi");
                     }
                 }
             }

@@ -51,13 +51,36 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_add(&mut self) -> CompileResult<Expr> {
-        let mut expr = self.parse_primary()?;
+        let mut expr = self.parse_mul()?;
 
         loop {
             let op = if self.consume_punct('+') {
                 BinaryOp::Add
             } else if self.consume_punct('-') {
                 BinaryOp::Sub
+            } else {
+                break;
+            };
+
+            let rhs = self.parse_mul()?;
+            expr = Expr::Binary {
+                op,
+                lhs: Box::new(expr),
+                rhs: Box::new(rhs),
+            };
+        }
+
+        Ok(expr)
+    }
+
+    fn parse_mul(&mut self) -> CompileResult<Expr> {
+        let mut expr = self.parse_primary()?;
+
+        loop {
+            let op = if self.consume_punct('*') {
+                BinaryOp::Mul
+            } else if self.consume_punct('/') {
+                BinaryOp::Div
             } else {
                 break;
             };
@@ -76,11 +99,17 @@ impl<'a> Parser<'a> {
     fn parse_primary(&mut self) -> CompileResult<Expr> {
         let token = self.peek().clone();
         match token.kind {
+            TokenKind::Punct('(') => {
+                self.pos += 1;
+                let expr = self.parse_expr()?;
+                self.expect_punct(')')?;
+                Ok(expr)
+            }
             TokenKind::Num(value) => {
                 self.pos += 1;
                 Ok(Expr::Num(value))
             }
-            _ => Err(self.error_expected("a number")),
+            _ => Err(self.error_expected("a primary expression")),
         }
     }
 
