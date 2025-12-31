@@ -7,6 +7,7 @@ pub struct Program {
 pub enum Stmt {
     Return(Expr),
     Expr(Expr),
+    Decl(char),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -15,6 +16,11 @@ pub enum Expr {
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,
+    },
+    Var(char),
+    Assign {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
     },
     Binary {
         op: BinaryOp,

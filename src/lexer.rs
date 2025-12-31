@@ -26,6 +26,7 @@ pub enum Punct {
     LBrace,
     RBrace,
     Semi,
+    Assign,
     EqEq,
     NotEq,
     Less,
@@ -46,6 +47,7 @@ impl std::fmt::Display for Punct {
             Punct::LBrace => "{",
             Punct::RBrace => "}",
             Punct::Semi => ";",
+            Punct::Assign => "=",
             Punct::EqEq => "==",
             Punct::NotEq => "!=",
             Punct::Less => "<",
@@ -184,6 +186,9 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
     }
     if input.starts_with(">=") {
         return Some((Punct::GreaterEq, 2));
+    }
+    if input.starts_with("=") {
+        return Some((Punct::Assign, 1));
     }
 
     let ch = input.as_bytes().first().copied()?;

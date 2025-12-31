@@ -46,13 +46,40 @@ impl<'a> Parser<'a> {
             return Ok(Stmt::Return(expr));
         }
 
+        if self.consume_keyword(Keyword::Int) {
+            let name = self.expect_ident()?;
+            if name.len() != 1 {
+                return Err(
+                    self.error_here(format!("expected single-letter variable, got '{name}'"))
+                );
+            }
+            let ch = name.chars().next().unwrap();
+            self.expect_punct(Punct::Semi)?;
+            return Ok(Stmt::Decl(ch));
+        }
+
         let expr = self.parse_expr()?;
         self.expect_punct(Punct::Semi)?;
         Ok(Stmt::Expr(expr))
     }
 
     fn parse_expr(&mut self) -> CompileResult<Expr> {
-        self.parse_equality()
+        self.parse_assign()
+    }
+
+    fn parse_assign(&mut self) -> CompileResult<Expr> {
+        let expr = self.parse_equality()?;
+        if self.consume_punct(Punct::Assign) {
+            if !matches!(expr, Expr::Var(_)) {
+                return Err(self.error_here("invalid assignment target"));
+            }
+            let rhs = self.parse_assign()?;
+            return Ok(Expr::Assign {
+                lhs: Box::new(expr),
+                rhs: Box::new(rhs),
+            });
+        }
+        Ok(expr)
     }
 
     fn parse_equality(&mut self) -> CompileResult<Expr> {
@@ -197,6 +224,14 @@ impl<'a> Parser<'a> {
                 let expr = self.parse_expr()?;
                 self.expect_punct(Punct::RParen)?;
                 Ok(expr)
+            }
+            TokenKind::Ident(name) => {
+                if name.len() == 1 {
+                    self.pos += 1;
+                    Ok(Expr::Var(name.chars().next().unwrap()))
+                } else {
+                    Err(self.error_here(format!("expected single-letter variable, got '{name}'")))
+                }
             }
             TokenKind::Num(value) => {
                 self.pos += 1;
