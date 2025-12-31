@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, Program, Stmt};
+use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
 use crate::error::{CompileError, CompileResult};
 use crate::lexer::{Keyword, Token, TokenKind};
 
@@ -74,7 +74,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_mul(&mut self) -> CompileResult<Expr> {
-        let mut expr = self.parse_primary()?;
+        let mut expr = self.parse_unary()?;
 
         loop {
             let op = if self.consume_punct('*') {
@@ -85,7 +85,7 @@ impl<'a> Parser<'a> {
                 break;
             };
 
-            let rhs = self.parse_primary()?;
+            let rhs = self.parse_unary()?;
             expr = Expr::Binary {
                 op,
                 lhs: Box::new(expr),
@@ -94,6 +94,21 @@ impl<'a> Parser<'a> {
         }
 
         Ok(expr)
+    }
+
+    fn parse_unary(&mut self) -> CompileResult<Expr> {
+        if self.consume_punct('+') {
+            return self.parse_unary();
+        }
+        if self.consume_punct('-') {
+            let expr = self.parse_unary()?;
+            return Ok(Expr::Unary {
+                op: UnaryOp::Neg,
+                expr: Box::new(expr),
+            });
+        }
+
+        self.parse_primary()
     }
 
     fn parse_primary(&mut self) -> CompileResult<Expr> {

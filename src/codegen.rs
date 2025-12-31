@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, Program, Stmt};
+use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
 
 pub struct Codegen {
     buffer: String,
@@ -40,6 +40,14 @@ impl Codegen {
         match expr {
             Expr::Num(value) => {
                 self.emit_line(&format!("  mov ${}, %rax", value));
+            }
+            Expr::Unary { op, expr } => {
+                self.gen_expr(expr);
+                match op {
+                    UnaryOp::Neg => {
+                        self.emit_line("  neg %rax");
+                    }
+                }
             }
             Expr::Binary { op, lhs, rhs } => {
                 self.gen_expr(rhs);
