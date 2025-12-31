@@ -150,7 +150,7 @@ impl<'a> Parser<'a> {
     fn parse_assign(&mut self) -> CompileResult<Expr> {
         let expr = self.parse_equality()?;
         if self.consume_punct(Punct::Assign) {
-            if !matches!(expr.kind, ExprKind::Var(_)) {
+            if !matches!(expr.kind, ExprKind::Var(_) | ExprKind::Deref(_)) {
                 return Err(self.error_here("invalid assignment target"));
             }
             let location = self.last_location();
@@ -327,6 +327,18 @@ impl<'a> Parser<'a> {
                 },
                 location,
             ));
+        }
+
+        if self.consume_punct(Punct::Amp) {
+            let location = self.last_location();
+            let expr = self.parse_unary()?;
+            return Ok(self.expr_at(ExprKind::Addr(Box::new(expr)), location));
+        }
+
+        if self.consume_punct(Punct::Star) {
+            let location = self.last_location();
+            let expr = self.parse_unary()?;
+            return Ok(self.expr_at(ExprKind::Deref(Box::new(expr)), location));
         }
 
         self.parse_primary()

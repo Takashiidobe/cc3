@@ -117,6 +117,13 @@ impl Codegen {
                     }
                 }
             }
+            ExprKind::Addr(expr) => {
+                self.gen_lvalue(expr, program);
+            }
+            ExprKind::Deref(expr) => {
+                self.gen_expr(expr, program);
+                self.emit_line("  mov (%rax), %rax");
+            }
             ExprKind::Var(idx) => {
                 self.gen_addr(*idx, program);
                 self.emit_line("  mov (%rax), %rax");
@@ -176,6 +183,7 @@ impl Codegen {
     fn gen_lvalue(&mut self, expr: &Expr, program: &Program) {
         match &expr.kind {
             ExprKind::Var(idx) => self.gen_addr(*idx, program),
+            ExprKind::Deref(expr) => self.gen_expr(expr, program),
             _ => self.emit_line("  mov $0, %rax"),
         }
     }

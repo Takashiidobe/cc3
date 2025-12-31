@@ -45,6 +45,8 @@ pub enum ExprKind {
         op: UnaryOp,
         expr: Box<Expr>,
     },
+    Addr(Box<Expr>),
+    Deref(Box<Expr>),
     Var(usize),
     Assign {
         lhs: Box<Expr>,
