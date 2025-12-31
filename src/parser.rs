@@ -1,4 +1,4 @@
-use crate::ast::{Expr, Program, Stmt};
+use crate::ast::{BinaryOp, Expr, Program, Stmt};
 use crate::error::{CompileError, CompileResult};
 use crate::lexer::{Keyword, Token, TokenKind};
 
@@ -47,7 +47,30 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> CompileResult<Expr> {
-        self.parse_primary()
+        self.parse_add()
+    }
+
+    fn parse_add(&mut self) -> CompileResult<Expr> {
+        let mut expr = self.parse_primary()?;
+
+        loop {
+            let op = if self.consume_punct('+') {
+                BinaryOp::Add
+            } else if self.consume_punct('-') {
+                BinaryOp::Sub
+            } else {
+                break;
+            };
+
+            let rhs = self.parse_primary()?;
+            expr = Expr::Binary {
+                op,
+                lhs: Box::new(expr),
+                rhs: Box::new(rhs),
+            };
+        }
+
+        Ok(expr)
     }
 
     fn parse_primary(&mut self) -> CompileResult<Expr> {
@@ -101,6 +124,16 @@ impl<'a> Parser<'a> {
                 Ok(())
             }
             _ => Err(self.error_here(format!("expected '{ch}'"))),
+        }
+    }
+
+    fn consume_punct(&mut self, ch: char) -> bool {
+        let token = self.peek().clone();
+        if matches!(token.kind, TokenKind::Punct(found) if found == ch) {
+            self.pos += 1;
+            true
+        } else {
+            false
         }
     }
 
