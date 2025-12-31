@@ -2,12 +2,14 @@ use crate::ast::{BinaryOp, Expr, Program, Stmt, UnaryOp};
 
 pub struct Codegen {
     buffer: String,
+    label_counter: usize,
 }
 
 impl Codegen {
     pub fn new() -> Self {
         Self {
             buffer: String::new(),
+            label_counter: 0,
         }
     }
 
@@ -38,12 +40,34 @@ impl Codegen {
         self.buffer.push('\n');
     }
 
+    fn next_label(&mut self) -> usize {
+        self.label_counter += 1;
+        self.label_counter
+    }
+
     fn gen_stmt(&mut self, stmt: &Stmt, program: &Program) {
         match stmt {
             Stmt::Return(expr) => {
                 self.gen_expr(expr, program);
                 self.emit_epilogue();
                 self.emit_line("  ret");
+            }
+            Stmt::If { cond, then, els } => {
+                let label = self.next_label();
+                self.gen_expr(cond, program);
+                self.emit_line("  cmp $0, %rax");
+                if let Some(els) = els {
+                    self.emit_line(&format!("  je .L.else.{}", label));
+                    self.gen_stmt(then, program);
+                    self.emit_line(&format!("  jmp .L.end.{}", label));
+                    self.emit_line(&format!(".L.else.{}:", label));
+                    self.gen_stmt(els, program);
+                    self.emit_line(&format!(".L.end.{}:", label));
+                } else {
+                    self.emit_line(&format!("  je .L.end.{}", label));
+                    self.gen_stmt(then, program);
+                    self.emit_line(&format!(".L.end.{}:", label));
+                }
             }
             Stmt::Block(stmts) => {
                 for stmt in stmts {

@@ -57,6 +57,23 @@ impl<'a> Parser<'a> {
             return Ok(Stmt::Return(expr));
         }
 
+        if self.consume_keyword(Keyword::If) {
+            self.expect_punct(Punct::LParen)?;
+            let cond = self.parse_expr()?;
+            self.expect_punct(Punct::RParen)?;
+            let then = self.parse_stmt()?;
+            let els = if self.consume_keyword(Keyword::Else) {
+                Some(Box::new(self.parse_stmt()?))
+            } else {
+                None
+            };
+            return Ok(Stmt::If {
+                cond,
+                then: Box::new(then),
+                els,
+            });
+        }
+
         if self.consume_punct(Punct::LBrace) {
             let mut stmts = Vec::new();
             while !self.check_punct(Punct::RBrace) {

@@ -9,6 +9,11 @@ pub struct Program {
 pub enum Stmt {
     Return(Expr),
     Block(Vec<Stmt>),
+    If {
+        cond: Expr,
+        then: Box<Stmt>,
+        els: Option<Box<Stmt>>,
+    },
     Expr(Expr),
     Decl(usize),
 }
