@@ -76,7 +76,9 @@ impl Codegen {
                 body,
             } => {
                 let label = self.next_label();
-                self.gen_stmt(init, program);
+                if let Some(init) = init {
+                    self.gen_stmt(init, program);
+                }
                 self.emit_line(&format!(".L.begin.{}:", label));
                 if let Some(cond) = cond {
                     self.gen_expr(cond, program);

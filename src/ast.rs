@@ -15,7 +15,7 @@ pub enum Stmt {
         els: Option<Box<Stmt>>,
     },
     For {
-        init: Box<Stmt>,
+        init: Option<Box<Stmt>>,
         cond: Option<Expr>,
         inc: Option<Expr>,
         body: Box<Stmt>,

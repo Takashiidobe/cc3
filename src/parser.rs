@@ -93,9 +93,22 @@ impl<'a> Parser<'a> {
             };
             let body = self.parse_stmt()?;
             return Ok(Stmt::For {
-                init: Box::new(init),
+                init: Some(Box::new(init)),
                 cond,
                 inc,
+                body: Box::new(body),
+            });
+        }
+
+        if self.consume_keyword(Keyword::While) {
+            self.expect_punct(Punct::LParen)?;
+            let cond = self.parse_expr()?;
+            self.expect_punct(Punct::RParen)?;
+            let body = self.parse_stmt()?;
+            return Ok(Stmt::For {
+                init: None,
+                cond: Some(cond),
+                inc: None,
                 body: Box::new(body),
             });
         }
