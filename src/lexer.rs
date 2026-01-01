@@ -159,34 +159,19 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 column,
                 byte: start,
             };
-            i += 1;
-            while i < bytes.len() && bytes[i] != b'"' {
-                if bytes[i] == b'\n' || bytes[i] == b'\0' {
-                    return Err(CompileError::at(
-                        "unclosed string literal",
-                        SourceLocation {
-                            line,
-                            column,
-                            byte: start,
-                        },
-                    ));
+            let end = string_literal_end(bytes, start + 1, location)?;
+            let mut str_bytes = Vec::with_capacity(end - (start + 1) + 1);
+            let mut p = start + 1;
+            while p < end {
+                if bytes[p] == b'\\' {
+                    let escaped = read_escaped_char(bytes.get(p + 1).copied().unwrap_or(b'\0'));
+                    str_bytes.push(escaped);
+                    p += 2;
+                } else {
+                    str_bytes.push(bytes[p]);
+                    p += 1;
                 }
-                i += 1;
             }
-            if i >= bytes.len() {
-                return Err(CompileError::at(
-                    "unclosed string literal",
-                    SourceLocation {
-                        line,
-                        column,
-                        byte: start,
-                    },
-                ));
-            }
-
-            let content = &bytes[start + 1..i];
-            let mut str_bytes = Vec::with_capacity(content.len() + 1);
-            str_bytes.extend_from_slice(content);
             str_bytes.push(0);
             let ty = Type::Array {
                 base: Box::new(Type::Char),
@@ -199,7 +184,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 },
                 location,
             });
-            i += 1;
+            i = end + 1;
             column += i - start;
             continue;
         }
@@ -238,6 +223,41 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
     });
 
     Ok(tokens)
+}
+
+fn read_escaped_char(b: u8) -> u8 {
+    match b {
+        b'a' => b'\x07',
+        b'b' => b'\x08',
+        b't' => b'\t',
+        b'n' => b'\n',
+        b'v' => b'\x0b',
+        b'f' => b'\x0c',
+        b'r' => b'\r',
+        b'e' => 27,
+        _ => b,
+    }
+}
+
+fn string_literal_end(
+    input: &[u8],
+    mut pos: usize,
+    start_location: SourceLocation,
+) -> CompileResult<usize> {
+    while pos < input.len() {
+        match input[pos] {
+            b'"' => return Ok(pos),
+            b'\n' | b'\0' => {
+                return Err(CompileError::at("unclosed string literal", start_location));
+            }
+            b'\\' => {
+                pos += 1;
+            }
+            _ => {}
+        }
+        pos += 1;
+    }
+    Err(CompileError::at("unclosed string literal", start_location))
 }
 
 fn is_ident_start(b: u8) -> bool {
