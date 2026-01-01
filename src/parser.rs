@@ -73,6 +73,8 @@ impl<'a> Parser<'a> {
         const INT: i32 = 1 << 6;
         const LONG: i32 = 1 << 8;
         const LONG_INT: i32 = LONG + INT;
+        const LONG_LONG: i32 = LONG + LONG;
+        const LONG_LONG_INT: i32 = LONG + LONG + INT;
         const OTHER: i32 = 1 << 10;
 
         let mut ty = Type::Int;
@@ -114,7 +116,7 @@ impl<'a> Parser<'a> {
                 CHAR => Type::Char,
                 SHORT | SHORT_INT => Type::Short,
                 INT => Type::Int,
-                LONG | LONG_INT => Type::Long,
+                LONG | LONG_INT | LONG_LONG | LONG_LONG_INT => Type::Long,
                 _ => return Err(self.error_at(location, "invalid type")),
             };
         }

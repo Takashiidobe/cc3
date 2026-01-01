@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "({ char x; sizeof(x); }) => 1\n({ short int x; sizeof(x); }) => 2\n({ int short x; sizeof(x); }) => 2\n({ int x; sizeof(x); }) => 4\n({ long int x; sizeof(x); }) => 8\n({ int long x; sizeof(x); }) => 8\n({ long long x; sizeof(x); }) => 8\nOK\n"
+status: 0
