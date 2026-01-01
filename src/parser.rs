@@ -367,7 +367,16 @@ impl<'a> Parser<'a> {
 
         if self.consume_keyword(Keyword::For) {
             self.expect_punct(Punct::LParen)?;
-            let init = self.parse_expr_stmt()?;
+
+            self.enter_scope();
+
+            let init = if self.is_typename() {
+                let basety = self.parse_declspec(None)?;
+                self.parse_declaration(basety)?
+            } else {
+                self.parse_expr_stmt()?
+            };
+
             let cond = if self.consume_punct(Punct::Semicolon) {
                 None
             } else {
@@ -383,6 +392,9 @@ impl<'a> Parser<'a> {
                 Some(expr)
             };
             let body = self.parse_stmt()?;
+
+            self.leave_scope();
+
             return Ok(self.stmt_last(StmtKind::For {
                 init: Some(Box::new(init)),
                 cond,
