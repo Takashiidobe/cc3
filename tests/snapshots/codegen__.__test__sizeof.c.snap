@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "sizeof(char) => 1\nsizeof(short) => 2\nsizeof(short int) => 2\nsizeof(int short) => 2\nsizeof(int) => 4\nsizeof(long) => 8\nsizeof(long int) => 8\nsizeof(long int) => 8\nsizeof(char *) => 8\nsizeof(int *) => 8\nsizeof(long *) => 8\nsizeof(int **) => 8\nsizeof(int(*)[4]) => 8\nsizeof(int*[4]) => 32\nsizeof(int[4]) => 16\nsizeof(int[3][4]) => 48\nsizeof(struct {int a; int b;}) => 8\nOK\n"
+status: 0

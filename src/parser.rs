@@ -163,7 +163,11 @@ impl<'a> Parser<'a> {
     }
 
     fn is_typename(&self) -> bool {
-        match self.peek().kind {
+        self.is_typename_token(self.peek())
+    }
+
+    fn is_typename_token(&self, token: &Token) -> bool {
+        match token.kind {
             TokenKind::Keyword(
                 Keyword::Void
                 | Keyword::Char
@@ -174,7 +178,7 @@ impl<'a> Parser<'a> {
                 | Keyword::Union
                 | Keyword::Typedef,
             ) => true,
-            TokenKind::Ident(_) => self.find_typedef(self.peek()).is_some(),
+            TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
         }
     }
@@ -453,6 +457,36 @@ impl<'a> Parser<'a> {
         ty = self.parse_array_suffix(ty)?;
 
         Ok((ty, token))
+    }
+
+    fn parse_abstract_declarator(&mut self, mut ty: Type) -> CompileResult<Type> {
+        while self.consume_punct(Punct::Star) {
+            ty = Type::Ptr(Box::new(ty));
+        }
+
+        if self.check_punct(Punct::LParen) {
+            let start_pos = self.pos;
+            self.pos += 1;
+
+            let dummy = Type::Char;
+            let _ = self.parse_abstract_declarator(dummy)?;
+            self.expect_punct(Punct::RParen)?;
+
+            ty = self.parse_array_suffix(ty)?;
+            let final_pos = self.pos;
+
+            self.pos = start_pos + 1;
+            let ty = self.parse_abstract_declarator(ty)?;
+            self.pos = final_pos;
+            return Ok(ty);
+        }
+
+        self.parse_array_suffix(ty)
+    }
+
+    fn parse_typename(&mut self) -> CompileResult<Type> {
+        let basety = self.parse_declspec(None)?;
+        self.parse_abstract_declarator(basety)
     }
 
     // Shared parsing logic for struct/union declarations
@@ -918,6 +952,16 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Keyword(Keyword::Sizeof) => {
                 let location = token.location;
+                if matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LParen))
+                    && self.is_typename_token(self.peek_n(2))
+                {
+                    self.pos += 1;
+                    self.expect_punct(Punct::LParen)?;
+                    let ty = self.parse_typename()?;
+                    self.expect_punct(Punct::RParen)?;
+                    return Ok(self.expr_at(ExprKind::Num(ty.size()), location));
+                }
+
                 self.pos += 1;
                 let mut expr = self.parse_unary()?;
                 self.add_type_expr(&mut expr)?;
