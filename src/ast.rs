@@ -124,6 +124,7 @@ pub struct Obj {
 pub enum Type {
     Char,
     Int,
+    Long,
     Ptr(Box<Type>),
     #[allow(dead_code)]
     Func(Box<Type>),
@@ -141,7 +142,7 @@ pub enum Type {
 
 impl Type {
     pub fn is_integer(&self) -> bool {
-        matches!(self, Type::Char | Type::Int)
+        matches!(self, Type::Char | Type::Int | Type::Long)
     }
 
     pub fn is_ptr(&self) -> bool {
@@ -164,6 +165,7 @@ impl Type {
         match self {
             Type::Char => 1,
             Type::Int => 4,
+            Type::Long => 8,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
             Type::Struct { members } => {
@@ -193,6 +195,7 @@ impl Type {
         match self {
             Type::Char => 1,
             Type::Int => 4,
+            Type::Long => 8,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
             Type::Struct { members } | Type::Union { members } => {
