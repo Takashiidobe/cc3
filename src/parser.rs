@@ -352,13 +352,25 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr(&mut self) -> CompileResult<Expr> {
-        self.parse_assign()
+        let expr = self.parse_assign()?;
+        if self.consume_punct(Punct::Comma) {
+            let location = self.last_location();
+            let rhs = self.parse_expr()?;
+            return Ok(self.expr_at(
+                ExprKind::Comma {
+                    lhs: Box::new(expr),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            ));
+        }
+        Ok(expr)
     }
 
     fn parse_assign(&mut self) -> CompileResult<Expr> {
         let expr = self.parse_equality()?;
         if self.consume_punct(Punct::Assign) {
-            if !matches!(expr.kind, ExprKind::Var { .. } | ExprKind::Deref(_)) {
+            if !self.is_lvalue(&expr) {
                 return Err(self.error_here("invalid assignment target"));
             }
             let location = self.last_location();
@@ -372,6 +384,14 @@ impl<'a> Parser<'a> {
             ));
         }
         Ok(expr)
+    }
+
+    fn is_lvalue(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Var { .. } | ExprKind::Deref(_) => true,
+            ExprKind::Comma { rhs, .. } => self.is_lvalue(rhs),
+            _ => false,
+        }
     }
 
     fn parse_equality(&mut self) -> CompileResult<Expr> {
@@ -1162,6 +1182,11 @@ impl<'a> Parser<'a> {
                     return Err(self.error_at(lhs.location, "not an lvalue"));
                 }
                 lhs_ty
+            }
+            ExprKind::Comma { lhs, rhs } => {
+                self.add_type_expr(lhs)?;
+                self.add_type_expr(rhs)?;
+                rhs.ty.clone().unwrap_or(Type::Int)
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 self.add_type_expr(lhs)?;

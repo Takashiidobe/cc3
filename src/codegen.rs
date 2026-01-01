@@ -204,6 +204,10 @@ impl Codegen {
                 self.gen_expr(rhs, function, globals);
                 self.store(expr.ty.as_ref());
             }
+            ExprKind::Comma { lhs, rhs } => {
+                self.gen_expr(lhs, function, globals);
+                self.gen_expr(rhs, function, globals);
+            }
             ExprKind::Binary { op, lhs, rhs } => {
                 self.gen_expr(rhs, function, globals);
                 self.emit_line("  push %rax");
@@ -290,6 +294,10 @@ impl Codegen {
         match &expr.kind {
             ExprKind::Var { idx, is_local } => self.gen_addr(*idx, *is_local, function, globals),
             ExprKind::Deref(expr) => self.gen_expr(expr, function, globals),
+            ExprKind::Comma { lhs, rhs } => {
+                self.gen_expr(lhs, function, globals);
+                self.gen_lvalue(rhs, function, globals);
+            }
             _ => self.emit_line("  mov $0, %rax"),
         }
     }

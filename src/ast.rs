@@ -59,6 +59,10 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    Comma {
+        lhs: Box<Expr>,
+        rhs: Box<Expr>,
+    },
     Binary {
         op: BinaryOp,
         lhs: Box<Expr>,
