@@ -41,6 +41,7 @@ struct Scope {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct VarAttr {
     is_typedef: bool,
+    is_static: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -68,7 +69,7 @@ impl<'a> Parser<'a> {
 
             // Function
             if self.is_function()? {
-                self.parse_function_with_basety(basety)?;
+                self.parse_function_with_basety(basety, &attr)?;
                 continue;
             }
 
@@ -100,9 +101,26 @@ impl<'a> Parser<'a> {
         while self.is_typename() {
             saw_typename = true;
 
-            if self.consume_keyword(Keyword::Typedef) {
+            // Handle storage class specifiers
+            let token = self.peek();
+            let is_typedef_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Typedef));
+            let is_static_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Static));
+
+            if is_typedef_kw || is_static_kw {
                 if let Some(attr) = attr.as_deref_mut() {
-                    attr.is_typedef = true;
+                    if is_typedef_kw {
+                        self.consume_keyword(Keyword::Typedef);
+                        attr.is_typedef = true;
+                    } else {
+                        self.consume_keyword(Keyword::Static);
+                        attr.is_static = true;
+                    }
+
+                    if attr.is_typedef && attr.is_static {
+                        return Err(
+                            self.error_here("typedef and static may not be used together")
+                        );
+                    }
                 } else {
                     return Err(
                         self.error_here("storage class specifier is not allowed in this context")
@@ -187,14 +205,15 @@ impl<'a> Parser<'a> {
                 | Keyword::Struct
                 | Keyword::Union
                 | Keyword::Enum
-                | Keyword::Typedef,
+                | Keyword::Typedef
+                | Keyword::Static,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
         }
     }
 
-    fn parse_function_with_basety(&mut self, basety: Type) -> CompileResult<()> {
+    fn parse_function_with_basety(&mut self, basety: Type, attr: &VarAttr) -> CompileResult<()> {
         let name = self.expect_ident()?;
 
         self.expect_punct(Punct::LParen)?;
@@ -229,13 +248,13 @@ impl<'a> Parser<'a> {
 
         if !is_definition {
             // Function declaration - no body
-            self.new_function_decl(name, Type::Func(Box::new(basety)));
+            self.new_function_decl(name, Type::Func(Box::new(basety)), attr.is_static);
             self.leave_scope();
             return Ok(());
         }
 
         // Ensure the function is visible for recursive calls.
-        self.new_function_decl(name.clone(), Type::Func(Box::new(basety.clone())));
+        self.new_function_decl(name.clone(), Type::Func(Box::new(basety.clone())), attr.is_static);
 
         let prev_return = self.current_fn_return.clone();
         self.current_fn_return = Some(basety.clone());
@@ -272,6 +291,7 @@ impl<'a> Parser<'a> {
             body,
             locals,
             stack_size,
+            attr.is_static,
         );
         self.leave_scope();
         Ok(())
@@ -1375,6 +1395,7 @@ impl<'a> Parser<'a> {
             offset: 0,
             is_function: false,
             is_definition: false,
+            is_static: false,
             init_data: None,
             params: Vec::new(),
             body: Vec::new(),
@@ -1394,6 +1415,7 @@ impl<'a> Parser<'a> {
             offset: 0,
             is_function: false,
             is_definition: false,
+            is_static: false,
             init_data: None,
             params: Vec::new(),
             body: Vec::new(),
@@ -1404,7 +1426,7 @@ impl<'a> Parser<'a> {
         idx
     }
 
-    fn new_function_decl(&mut self, name: String, ty: Type) {
+    fn new_function_decl(&mut self, name: String, ty: Type, is_static: bool) {
         self.globals.push(Obj {
             name,
             ty,
@@ -1412,6 +1434,7 @@ impl<'a> Parser<'a> {
             offset: 0,
             is_function: true,
             is_definition: false,
+            is_static,
             init_data: None,
             params: vec![],
             body: vec![],
@@ -1428,6 +1451,7 @@ impl<'a> Parser<'a> {
         body: Vec<Stmt>,
         locals: Vec<Obj>,
         stack_size: i32,
+        is_static: bool,
     ) {
         self.globals.push(Obj {
             name,
@@ -1436,6 +1460,7 @@ impl<'a> Parser<'a> {
             offset: 0,
             is_function: true,
             is_definition: true,
+            is_static,
             init_data: None,
             params,
             body,

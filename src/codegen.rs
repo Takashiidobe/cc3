@@ -68,7 +68,11 @@ impl Codegen {
     fn generate_function(&mut self, function: &Obj, globals: &[Obj]) {
         self.current_fn = Some(function.name.clone());
 
-        self.emit_line(&format!("  .globl {}", function.name));
+        if function.is_static {
+            self.emit_line(&format!("  .local {}", function.name));
+        } else {
+            self.emit_line(&format!("  .globl {}", function.name));
+        }
         self.emit_line("  .text");
         self.emit_line(&format!("{}:", function.name));
         self.emit_line("  push %rbp");

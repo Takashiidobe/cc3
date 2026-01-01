@@ -114,6 +114,7 @@ pub struct Obj {
     // Global variable or function
     pub is_function: bool,
     pub is_definition: bool,
+    pub is_static: bool,
 
     // Global variable
     pub init_data: Option<Vec<u8>>,
