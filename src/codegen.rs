@@ -248,16 +248,18 @@ impl Codegen {
     }
 
     fn load(&mut self, ty: Option<&crate::ast::Type>) {
-        // If it is an array, do not attempt to load a value to the
-        // register because in general we can't load an entire array to a
-        // register. As a result, the result of an evaluation of an array
-        // becomes not the array itself but the address of the array.
+        use crate::ast::Type;
+        // If it is an array, struct, or union, do not attempt to load a value to the
+        // register because in general we can't load an entire aggregate to a
+        // register. As a result, the result of an evaluation of an array/struct/union
+        // becomes not the value itself but the address.
         // This is where "array is automatically converted to a pointer to
         // the first element of the array in C" occurs.
-        if let Some(ty) = ty
-            && ty.is_array()
-        {
-            return;
+        if let Some(ty) = ty {
+            match ty {
+                Type::Array { .. } | Type::Struct { .. } | Type::Union { .. } => return,
+                _ => {}
+            }
         }
         if let Some(ty) = ty
             && ty.size() == 1
@@ -269,7 +271,23 @@ impl Codegen {
     }
 
     fn store(&mut self, ty: Option<&crate::ast::Type>) {
+        use crate::ast::Type;
         self.emit_line("  pop %rdi");
+
+        // For struct/union, copy bytes one by one
+        if let Some(ty) = ty {
+            match ty {
+                Type::Struct { .. } | Type::Union { .. } => {
+                    for i in 0..ty.size() {
+                        self.emit_line(&format!("  mov {}(%rax), %r8b", i));
+                        self.emit_line(&format!("  mov %r8b, {}(%rdi)", i));
+                    }
+                    return;
+                }
+                _ => {}
+            }
+        }
+
         if let Some(ty) = ty
             && ty.size() == 1
         {
