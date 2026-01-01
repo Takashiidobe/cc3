@@ -54,7 +54,7 @@ bd sync               # Sync with git
 1. **File issues for remaining work** - Create issues for anything that needs follow-up
 2. Run `cargo check` to verify the project compiles
 3. **ALWAYS add integration tests instead of manually running compiled binaries.**
-   - **Create test files in `tests/files/`**
+   - **Create test files in the `test` dir**
    - Add `.c` test files that assert that new functionality works as
      expected
    - **Run the test suite**
@@ -70,7 +70,7 @@ bd sync               # Sync with git
    ```bash
    cargo test
    ```
-4. Run `cargo clippy --all-targets` and fix any linter errors
+4. Run `cargo clippy --all-targets --allow-dirty --fix` and fix any linter errors that can't be fixed automatically
 5. Run `cargo fmt` to format code
 6. **Update issue status** - Close finished work, update in-progress items
 7. **PUSH TO REMOTE** - This is MANDATORY:

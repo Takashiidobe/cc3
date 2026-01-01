@@ -148,10 +148,6 @@ impl Type {
         matches!(self, Type::Char | Type::Short | Type::Int | Type::Long)
     }
 
-    pub fn is_ptr(&self) -> bool {
-        matches!(self, Type::Ptr(_))
-    }
-
     pub fn is_array(&self) -> bool {
         matches!(self, Type::Array { .. })
     }

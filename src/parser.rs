@@ -66,22 +66,64 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_declspec(&mut self) -> CompileResult<Type> {
-        if self.consume_keyword(Keyword::Void) {
-            Ok(Type::Void)
-        } else if self.consume_keyword(Keyword::Char) {
-            Ok(Type::Char)
-        } else if self.consume_keyword(Keyword::Short) {
-            Ok(Type::Short)
-        } else if self.consume_keyword(Keyword::Long) {
-            Ok(Type::Long)
-        } else if self.consume_keyword(Keyword::Struct) {
-            self.parse_struct_decl()
-        } else if self.consume_keyword(Keyword::Union) {
-            self.parse_union_decl()
-        } else {
-            self.expect_keyword(Keyword::Int)?;
-            Ok(Type::Int)
+        const VOID: i32 = 1 << 0;
+        const CHAR: i32 = 1 << 2;
+        const SHORT: i32 = 1 << 4;
+        const SHORT_INT: i32 = SHORT + INT;
+        const INT: i32 = 1 << 6;
+        const LONG: i32 = 1 << 8;
+        const LONG_INT: i32 = LONG + INT;
+        const OTHER: i32 = 1 << 10;
+
+        let mut ty = Type::Int;
+        let mut counter = 0i32;
+        let mut saw_typename = false;
+
+        while self.is_typename() {
+            saw_typename = true;
+
+            if self.consume_keyword(Keyword::Struct) {
+                ty = self.parse_struct_decl()?;
+                counter += OTHER;
+                continue;
+            }
+
+            if self.consume_keyword(Keyword::Union) {
+                ty = self.parse_union_decl()?;
+                counter += OTHER;
+                continue;
+            }
+
+            let location = self.peek().location;
+            if self.consume_keyword(Keyword::Void) {
+                counter += VOID;
+            } else if self.consume_keyword(Keyword::Char) {
+                counter += CHAR;
+            } else if self.consume_keyword(Keyword::Short) {
+                counter += SHORT;
+            } else if self.consume_keyword(Keyword::Int) {
+                counter += INT;
+            } else if self.consume_keyword(Keyword::Long) {
+                counter += LONG;
+            } else {
+                return Err(self.error_at(location, "invalid type"));
+            }
+
+            ty = match counter {
+                VOID => Type::Void,
+                CHAR => Type::Char,
+                SHORT | SHORT_INT => Type::Short,
+                INT => Type::Int,
+                LONG | LONG_INT => Type::Long,
+                _ => return Err(self.error_at(location, "invalid type")),
+            };
         }
+
+        if !saw_typename {
+            return Err(self.error_here("typename expected"));
+        }
+
+        Ok(ty)
     }
 
     fn is_typename(&self) -> bool {
@@ -868,17 +910,6 @@ impl<'a> Parser<'a> {
                 Ok(self.expr_at(ExprKind::Num(value), token.location))
             }
             _ => Err(self.error_expected("a primary expression")),
-        }
-    }
-
-    fn expect_keyword(&mut self, kw: Keyword) -> CompileResult<()> {
-        let token = self.peek().clone();
-        match token.kind {
-            TokenKind::Keyword(found) if found == kw => {
-                self.pos += 1;
-                Ok(())
-            }
-            _ => Err(self.error_expected(format!("keyword '{kw:?}'"))),
         }
     }
 
