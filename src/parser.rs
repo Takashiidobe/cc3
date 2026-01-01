@@ -1451,13 +1451,25 @@ impl<'a> Parser<'a> {
             return Err(self.error_at(name_token.location, "not a function"));
         }
 
+        let params = func.params.clone();
+
         self.pos += 1;
         self.expect_punct(Punct::LParen)?;
 
         let mut args = Vec::new();
+        let mut param_iter = params.iter();
         if !self.check_punct(Punct::RParen) {
             loop {
-                let arg = self.parse_assign()?;
+                let mut arg = self.parse_assign()?;
+                self.add_type_expr(&mut arg)?;
+                if let Some(param) = param_iter.next() {
+                    if matches!(param.ty, Type::Struct { .. } | Type::Union { .. }) {
+                        return Err(
+                            self.error_at(arg.location, "passing struct or union is not supported")
+                        );
+                    }
+                    arg = self.cast_expr(arg, param.ty.clone());
+                }
                 args.push(arg);
                 if args.len() > 6 {
                     return Err(self.error_at(
