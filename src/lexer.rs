@@ -164,9 +164,10 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             let mut p = start + 1;
             while p < end {
                 if bytes[p] == b'\\' {
-                    let escaped = read_escaped_char(bytes.get(p + 1).copied().unwrap_or(b'\0'));
+                    let mut escaped_pos = p + 1;
+                    let escaped = read_escaped_char(bytes, &mut escaped_pos);
                     str_bytes.push(escaped);
-                    p += 2;
+                    p = escaped_pos;
                 } else {
                     str_bytes.push(bytes[p]);
                     p += 1;
@@ -225,7 +226,27 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
     Ok(tokens)
 }
 
-fn read_escaped_char(b: u8) -> u8 {
+fn read_escaped_char(input: &[u8], pos: &mut usize) -> u8 {
+    if *pos >= input.len() {
+        return 0;
+    }
+
+    let b = input[*pos];
+    if b.is_ascii_digit() && b <= b'7' {
+        let mut value = b - b'0';
+        *pos += 1;
+        if *pos < input.len() && input[*pos].is_ascii_digit() && input[*pos] <= b'7' {
+            value = (value << 3) + (input[*pos] - b'0');
+            *pos += 1;
+            if *pos < input.len() && input[*pos].is_ascii_digit() && input[*pos] <= b'7' {
+                value = (value << 3) + (input[*pos] - b'0');
+                *pos += 1;
+            }
+        }
+        return value;
+    }
+
+    *pos += 1;
     match b {
         b'a' => b'\x07',
         b'b' => b'\x08',
