@@ -90,6 +90,47 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
 
     while i < bytes.len() {
         let b = bytes[i];
+        if b == b'/' && i + 1 < bytes.len() {
+            if bytes[i + 1] == b'/' {
+                i += 2;
+                column += 2;
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                    column += 1;
+                }
+                continue;
+            }
+            if bytes[i + 1] == b'*' {
+                let start_location = SourceLocation {
+                    line,
+                    column,
+                    byte: i,
+                };
+                i += 2;
+                column += 2;
+                let mut closed = false;
+                while i + 1 < bytes.len() {
+                    if bytes[i] == b'*' && bytes[i + 1] == b'/' {
+                        i += 2;
+                        column += 2;
+                        closed = true;
+                        break;
+                    }
+                    if bytes[i] == b'\n' {
+                        line += 1;
+                        column = 1;
+                        i += 1;
+                    } else {
+                        i += 1;
+                        column += 1;
+                    }
+                }
+                if !closed {
+                    return Err(CompileError::at("unclosed block comment", start_location));
+                }
+                continue;
+            }
+        }
         if b.is_ascii_whitespace() {
             if b == b'\n' {
                 line += 1;
