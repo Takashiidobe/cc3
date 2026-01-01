@@ -249,6 +249,42 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             continue;
         }
 
+        if b == b'\'' {
+            let start = i;
+            let location = SourceLocation {
+                line,
+                column,
+                byte: start,
+            };
+            i += 1;
+            if i >= bytes.len() {
+                return Err(CompileError::at("unclosed char literal", location));
+            }
+
+            let value = if bytes[i] == b'\\' {
+                let mut escaped_pos = i + 1;
+                let escaped = read_escaped_char(bytes, &mut escaped_pos, location)?;
+                i = escaped_pos;
+                escaped as i8 as i64
+            } else {
+                let escaped = bytes[i];
+                i += 1;
+                escaped as i8 as i64
+            };
+
+            if i >= bytes.len() || bytes[i] != b'\'' {
+                return Err(CompileError::at("unclosed char literal", location));
+            }
+            i += 1;
+
+            tokens.push(Token {
+                kind: TokenKind::Num(value),
+                location,
+            });
+            column += i - start;
+            continue;
+        }
+
         if let Some((punct, len)) = read_punct(&input[i..]) {
             tokens.push(Token {
                 kind: TokenKind::Punct(punct),

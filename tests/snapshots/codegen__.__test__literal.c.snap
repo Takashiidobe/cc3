@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "'a' => 97\n'\\n' => 10\n'\\x80' => -128\nOK\n"
+status: 0
