@@ -683,6 +683,15 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            if self.consume_punct(Punct::Arrow) {
+                let location = self.last_location();
+                let name_token = self.expect_ident_token()?;
+                // x->y is short for (*x).y
+                expr = self.expr_at(ExprKind::Deref(Box::new(expr)), location);
+                expr = self.struct_ref(expr, name_token)?;
+                continue;
+            }
+
             break;
         }
 

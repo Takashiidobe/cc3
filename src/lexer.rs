@@ -32,6 +32,7 @@ pub enum Punct {
     Amp,
     Slash,
     Dot,
+    Arrow,
     LParen,
     RParen,
     LBrace,
@@ -58,6 +59,7 @@ impl std::fmt::Display for Punct {
             Punct::Amp => "&",
             Punct::Slash => "/",
             Punct::Dot => ".",
+            Punct::Arrow => "->",
             Punct::LParen => "(",
             Punct::RParen => ")",
             Punct::LBrace => "{",
@@ -371,6 +373,9 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
     }
     if input.starts_with(">=") {
         return Some((Punct::GreaterEq, 2));
+    }
+    if input.starts_with("->") {
+        return Some((Punct::Arrow, 2));
     }
     if input.starts_with("=") {
         return Some((Punct::Assign, 1));
