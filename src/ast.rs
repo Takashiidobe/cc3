@@ -123,6 +123,7 @@ pub struct Obj {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
+    Void,
     Char,
     Short,
     Int,
@@ -165,6 +166,7 @@ impl Type {
 
     pub fn size(&self) -> i64 {
         match self {
+            Type::Void => 1,
             Type::Char => 1,
             Type::Short => 2,
             Type::Int => 4,
@@ -196,6 +198,7 @@ impl Type {
 
     pub fn align(&self) -> i64 {
         match self {
+            Type::Void => 1,
             Type::Char => 1,
             Type::Short => 2,
             Type::Int => 4,

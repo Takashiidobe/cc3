@@ -66,7 +66,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_declspec(&mut self) -> CompileResult<Type> {
-        if self.consume_keyword(Keyword::Char) {
+        if self.consume_keyword(Keyword::Void) {
+            Ok(Type::Void)
+        } else if self.consume_keyword(Keyword::Char) {
             Ok(Type::Char)
         } else if self.consume_keyword(Keyword::Short) {
             Ok(Type::Short)
@@ -86,7 +88,8 @@ impl<'a> Parser<'a> {
         matches!(
             self.peek().kind,
             TokenKind::Keyword(
-                Keyword::Char
+                Keyword::Void
+                    | Keyword::Char
                     | Keyword::Short
                     | Keyword::Int
                     | Keyword::Long
@@ -303,6 +306,12 @@ impl<'a> Parser<'a> {
                 TokenKind::Ident(name) => name,
                 _ => unreachable!("parse_declarator only returns identifiers"),
             };
+            if ty == Type::Void {
+                return Err(CompileError::at(
+                    "variable declared void",
+                    name_token.location,
+                ));
+            }
             let idx = self.new_lvar(name, ty);
             stmts.push(self.stmt_at(StmtKind::Decl(idx), name_token.location));
 
@@ -1413,7 +1422,14 @@ impl<'a> Parser<'a> {
                 let expr_ty = expr.ty.clone().unwrap_or(Type::Int);
                 // Dereference works on pointers and arrays
                 match expr_ty.base() {
-                    Some(base) => base.clone(),
+                    Some(base) => {
+                        if *base == Type::Void {
+                            return Err(
+                                self.error_at(expr.location, "dereferencing a void pointer")
+                            );
+                        }
+                        base.clone()
+                    }
                     None => {
                         return Err(self.error_at(expr.location, "invalid pointer dereference"));
                     }
