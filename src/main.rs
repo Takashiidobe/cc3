@@ -36,7 +36,8 @@ fn run(args: &Args) -> CompileResult<()> {
 
     let tokens = lexer::tokenize(&source)?;
     let program = parser::parse(&tokens)?;
-    let asm = codegen::Codegen::new().generate(&program);
+    let mut asm = format!(".file 1 \"{}\"\n", args.input.display());
+    asm.push_str(&codegen::Codegen::new().generate(&program));
 
     match &args.output {
         Some(path) => {
