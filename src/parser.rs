@@ -214,25 +214,38 @@ impl<'a> Parser<'a> {
 
         let token = self.expect_ident_token()?;
 
-        // Parse array suffixes
-        while self.consume_punct(Punct::LBracket) {
-            let size_token = self.peek().clone();
-            match size_token.kind {
-                TokenKind::Num(len) => {
-                    self.pos += 1;
-                    self.expect_punct(Punct::RBracket)?;
-                    ty = Type::Array {
-                        base: Box::new(ty),
-                        len: len as i32,
-                    };
-                }
-                _ => {
-                    return Err(self.error_expected("array size"));
-                }
-            }
-        }
+        // Parse array suffixes recursively to get correct nesting order
+        ty = self.parse_array_suffix(ty)?;
 
         Ok((ty, token))
+    }
+
+    fn parse_array_suffix(&mut self, ty: Type) -> CompileResult<Type> {
+        if !self.consume_punct(Punct::LBracket) {
+            return Ok(ty);
+        }
+
+        let size_token = self.peek().clone();
+        let len = match size_token.kind {
+            TokenKind::Num(len) => {
+                self.pos += 1;
+                len as i32
+            }
+            _ => {
+                return Err(self.error_expected("array size"));
+            }
+        };
+
+        self.expect_punct(Punct::RBracket)?;
+
+        // Recursively parse remaining array suffixes
+        let ty = self.parse_array_suffix(ty)?;
+
+        // Build array type with the result
+        Ok(Type::Array {
+            base: Box::new(ty),
+            len,
+        })
     }
 
     fn parse_expr_stmt(&mut self) -> CompileResult<Stmt> {
