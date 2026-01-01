@@ -230,7 +230,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 let ch = bytes[i];
                 let is_valid = match base {
                     2 => ch == b'0' || ch == b'1',
-                    8 => ch >= b'0' && ch <= b'7',
+                    8 => (b'0'..=b'7').contains(&ch),
                     10 => ch.is_ascii_digit(),
                     16 => ch.is_ascii_hexdigit(),
                     _ => false,
@@ -245,7 +245,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             // Check for invalid trailing alphanumeric
             if i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
                 return Err(CompileError::at(
-                    format!("invalid digit in number literal"),
+                    "invalid digit in number literal".to_string(),
                     location,
                 ));
             }

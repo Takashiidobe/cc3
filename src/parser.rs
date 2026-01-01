@@ -442,6 +442,12 @@ impl<'a> Parser<'a> {
                 TokenKind::Ident(name) => name,
                 _ => unreachable!("parse_declarator only returns identifiers"),
             };
+            if ty.size() < 0 {
+                return Err(CompileError::at(
+                    "variable has incomplete type",
+                    name_token.location,
+                ));
+            }
             if ty == Type::Void {
                 return Err(CompileError::at(
                     "variable declared void",
@@ -710,6 +716,7 @@ impl<'a> Parser<'a> {
                 members.push(Member {
                     name,
                     ty,
+                    location: name_token.location,
                     offset: 0,
                 });
             }
@@ -726,18 +733,23 @@ impl<'a> Parser<'a> {
             return Ok(ty);
         }
 
-        let size_token = self.peek().clone();
-        let len = match size_token.kind {
-            TokenKind::Num(len) => {
-                self.pos += 1;
-                len as i32
-            }
-            _ => {
-                return Err(self.error_expected("array size"));
-            }
-        };
+        let len = if self.consume_punct(Punct::RBracket) {
+            -1
+        } else {
+            let size_token = self.peek().clone();
+            let len = match size_token.kind {
+                TokenKind::Num(len) => {
+                    self.pos += 1;
+                    len as i32
+                }
+                _ => {
+                    return Err(self.error_expected("array size"));
+                }
+            };
 
-        self.expect_punct(Punct::RBracket)?;
+            self.expect_punct(Punct::RBracket)?;
+            len
+        };
 
         // Recursively parse remaining array suffixes
         let ty = self.parse_array_suffix(ty)?;

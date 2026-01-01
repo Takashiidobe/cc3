@@ -9,6 +9,7 @@ pub struct Program {
 pub struct Member {
     pub name: String,
     pub ty: Type,
+    pub location: SourceLocation,
     pub offset: i32,
 }
 
@@ -208,7 +209,16 @@ impl Type {
                 // Round up to alignment
                 ((max_size + align - 1) / align) * align
             }
-            Type::Array { base, len } => base.size() * (*len as i64),
+            Type::Array { base, len } => {
+                if *len < 0 {
+                    return -1;
+                }
+                let base_size = base.size();
+                if base_size < 0 {
+                    return -1;
+                }
+                base_size * (*len as i64)
+            }
         }
     }
 
