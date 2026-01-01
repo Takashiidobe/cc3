@@ -35,10 +35,30 @@ impl<'a> Parser<'a> {
         let name = self.expect_ident()?;
 
         self.expect_punct(Punct::LParen)?;
-        self.expect_punct(Punct::RParen)?;
-        self.expect_punct(Punct::LBrace)?;
 
         self.locals.clear();
+
+        // Parse function parameters
+        let mut params = Vec::new();
+        if !self.check_punct(Punct::RParen) {
+            loop {
+                self.expect_keyword(Keyword::Int)?;
+                let param_name = self.expect_ident()?;
+                // Use new_lvar to assign correct offset
+                let _idx = self.new_lvar(param_name.clone(), Type::Int);
+                // Get the newly added param
+                if let Some(param) = self.locals.last() {
+                    params.push(param.clone());
+                }
+
+                if !self.consume_punct(Punct::Comma) {
+                    break;
+                }
+            }
+        }
+
+        self.expect_punct(Punct::RParen)?;
+        self.expect_punct(Punct::LBrace)?;
 
         let mut body = Vec::new();
         while !self.check_punct(Punct::RBrace) {
@@ -55,6 +75,7 @@ impl<'a> Parser<'a> {
         let locals = std::mem::take(&mut self.locals);
         Ok(Function {
             name,
+            params,
             body,
             locals,
             stack_size,

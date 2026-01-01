@@ -33,6 +33,11 @@ impl Codegen {
         self.emit_line("  mov %rsp, %rbp");
         self.emit_line(&format!("  sub ${}, %rsp", function.stack_size));
 
+        // Save passed-by-register arguments to the stack
+        for (i, param) in function.params.iter().enumerate() {
+            self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS[i], param.offset));
+        }
+
         let mut last_was_return = false;
         for stmt in &function.body {
             last_was_return = matches!(stmt.kind, StmtKind::Return(_));

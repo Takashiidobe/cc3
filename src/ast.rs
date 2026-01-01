@@ -8,6 +8,7 @@ pub struct Program {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Function {
     pub name: String,
+    pub params: Vec<Obj>,
     pub body: Vec<Stmt>,
     pub locals: Vec<Obj>,
     pub stack_size: i32,
