@@ -16,14 +16,23 @@ struct Parser<'a> {
     scopes: Vec<Scope>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 struct VarScope {
     name: String,
     idx: usize,
     is_local: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct TagScope {
+    name: String,
+    ty: Type,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
 struct Scope {
     vars: Vec<VarScope>,
+    tags: Vec<TagScope>,
 }
 
 impl<'a> Parser<'a> {
@@ -34,7 +43,7 @@ impl<'a> Parser<'a> {
             locals: Vec::new(),
             globals: Vec::new(),
             string_label: 0,
-            scopes: vec![Scope { vars: Vec::new() }],
+            scopes: vec![Scope::default()],
         }
     }
 
@@ -315,6 +324,31 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_struct_decl(&mut self) -> CompileResult<Type> {
+        // Read a struct tag (optional identifier)
+        let tag = if matches!(self.peek().kind, TokenKind::Ident(_)) {
+            let tag_token = self.peek().clone();
+            self.pos += 1;
+            Some(tag_token)
+        } else {
+            None
+        };
+
+        // If we have a tag but no opening brace, look up the existing struct type
+        if tag.is_some() && !self.check_punct(Punct::LBrace) {
+            let tag_token = tag.as_ref().unwrap();
+            let name = match &tag_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => unreachable!(),
+            };
+            match self.find_tag(name) {
+                Some(ty) => return Ok(ty),
+                None => {
+                    return Err(self.error_at(tag_token.location, "unknown struct type"));
+                }
+            }
+        }
+
+        // Parse struct members
         self.expect_punct(Punct::LBrace)?;
         let mut members = self.parse_struct_members()?;
         let mut offset = 0i32;
@@ -324,7 +358,19 @@ impl<'a> Parser<'a> {
             member.offset = offset;
             offset += member.ty.size() as i32;
         }
-        Ok(Type::Struct { members })
+
+        let ty = Type::Struct { members };
+
+        // Register the struct type if a tag was given
+        if let Some(tag_token) = tag {
+            let name = match tag_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => unreachable!(),
+            };
+            self.push_tag_scope(name, ty.clone());
+        }
+
+        Ok(ty)
     }
 
     fn parse_struct_members(&mut self) -> CompileResult<Vec<Member>> {
@@ -887,6 +933,23 @@ impl<'a> Parser<'a> {
         None
     }
 
+    fn find_tag(&self, name: &str) -> Option<Type> {
+        for scope in self.scopes.iter().rev() {
+            for tag in scope.tags.iter().rev() {
+                if tag.name == name {
+                    return Some(tag.ty.clone());
+                }
+            }
+        }
+        None
+    }
+
+    fn push_tag_scope(&mut self, name: String, ty: Type) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.tags.push(TagScope { name, ty });
+        }
+    }
+
     fn new_lvar(&mut self, name: String, ty: Type) -> usize {
         let idx = self.locals.len();
         self.locals.push(Obj {
@@ -943,7 +1006,7 @@ impl<'a> Parser<'a> {
     }
 
     fn enter_scope(&mut self) {
-        self.scopes.push(Scope { vars: Vec::new() });
+        self.scopes.push(Scope::default());
     }
 
     fn leave_scope(&mut self) {
