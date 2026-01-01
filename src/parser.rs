@@ -455,7 +455,24 @@ impl<'a> Parser<'a> {
             return Ok(self.expr_at(ExprKind::Deref(Box::new(expr)), location));
         }
 
-        self.parse_primary()
+        self.parse_postfix()
+    }
+
+    fn parse_postfix(&mut self) -> CompileResult<Expr> {
+        let mut expr = self.parse_primary()?;
+
+        // Handle array subscript: x[y] is equivalent to *(x+y)
+        while self.consume_punct(Punct::LBracket) {
+            let location = self.last_location();
+            let index = self.parse_expr()?;
+            self.expect_punct(Punct::RBracket)?;
+
+            // Transform x[y] to *(x+y)
+            let add_expr = self.new_add(expr, index, location)?;
+            expr = self.expr_at(ExprKind::Deref(Box::new(add_expr)), location);
+        }
+
+        Ok(expr)
     }
 
     fn parse_primary(&mut self) -> CompileResult<Expr> {
@@ -702,11 +719,15 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        if lhs_ty.is_ptr() && rhs_ty.is_ptr() {
+        // Check if types have base (pointers or arrays)
+        let lhs_has_base = lhs_ty.base().is_some();
+        let rhs_has_base = rhs_ty.base().is_some();
+
+        if lhs_has_base && rhs_has_base {
             return Err(self.error_at(location, "invalid operands"));
         }
 
-        if !lhs_ty.is_ptr() && rhs_ty.is_ptr() {
+        if !lhs_has_base && rhs_has_base {
             std::mem::swap(&mut lhs, &mut rhs);
             std::mem::swap(&mut lhs_ty, &mut rhs_ty);
         }
@@ -756,7 +777,7 @@ impl<'a> Parser<'a> {
             ));
         }
 
-        if lhs_ty.is_ptr() && rhs_ty.is_integer() {
+        if lhs_ty.base().is_some() && rhs_ty.is_integer() {
             let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
             let scale = self.expr_at(ExprKind::Num(base_size), location);
             let rhs = self.expr_at(
@@ -779,7 +800,7 @@ impl<'a> Parser<'a> {
             return Ok(expr);
         }
 
-        if lhs_ty.is_ptr() && rhs_ty.is_ptr() {
+        if lhs_ty.base().is_some() && rhs_ty.base().is_some() {
             let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
             let scale = self.expr_at(ExprKind::Num(base_size), location);
             let mut sub_expr = self.expr_at(
