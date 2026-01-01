@@ -13,6 +13,17 @@ struct Parser<'a> {
     locals: Vec<Obj>,
     globals: Vec<Obj>,
     string_label: usize,
+    scopes: Vec<Scope>,
+}
+
+struct VarScope {
+    name: String,
+    idx: usize,
+    is_local: bool,
+}
+
+struct Scope {
+    vars: Vec<VarScope>,
 }
 
 impl<'a> Parser<'a> {
@@ -23,6 +34,7 @@ impl<'a> Parser<'a> {
             locals: Vec::new(),
             globals: Vec::new(),
             string_label: 0,
+            scopes: vec![Scope { vars: Vec::new() }],
         }
     }
 
@@ -66,6 +78,7 @@ impl<'a> Parser<'a> {
         self.expect_punct(Punct::LParen)?;
 
         self.locals.clear();
+        self.enter_scope();
 
         // Parse function parameters
         let mut params = Vec::new();
@@ -92,6 +105,7 @@ impl<'a> Parser<'a> {
 
         self.expect_punct(Punct::RParen)?;
         self.expect_punct(Punct::LBrace)?;
+        self.enter_scope();
 
         let mut body = Vec::new();
         while !self.check_punct(Punct::RBrace) {
@@ -99,6 +113,7 @@ impl<'a> Parser<'a> {
         }
 
         self.expect_punct(Punct::RBrace)?;
+        self.leave_scope();
 
         for stmt in &mut body {
             self.add_type_stmt(stmt)?;
@@ -126,6 +141,7 @@ impl<'a> Parser<'a> {
             locals,
             stack_size,
         };
+        self.leave_scope();
         self.globals.push(func);
         Ok(())
     }
@@ -237,12 +253,7 @@ impl<'a> Parser<'a> {
         }
 
         if self.consume_punct(Punct::LBrace) {
-            let mut stmts = Vec::new();
-            while !self.check_punct(Punct::RBrace) {
-                stmts.push(self.parse_stmt()?);
-            }
-            self.expect_punct(Punct::RBrace)?;
-            return Ok(self.stmt_last(StmtKind::Block(stmts)));
+            return self.parse_block_stmt();
         }
 
         self.parse_expr_stmt()
@@ -570,11 +581,13 @@ impl<'a> Parser<'a> {
             {
                 let location = token.location;
                 self.pos += 2;
+                self.enter_scope();
                 let mut stmts = Vec::new();
                 while !self.check_punct(Punct::RBrace) {
                     stmts.push(self.parse_stmt()?);
                 }
                 self.expect_punct(Punct::RBrace)?;
+                self.leave_scope();
                 self.expect_punct(Punct::RParen)?;
                 Ok(self.expr_at(ExprKind::StmtExpr(stmts), location))
             }
@@ -771,13 +784,12 @@ impl<'a> Parser<'a> {
     }
 
     fn find_var(&self, name: &str) -> Option<(usize, bool)> {
-        // Search locals first
-        if let Some(idx) = self.locals.iter().position(|var| var.name == name) {
-            return Some((idx, true));
-        }
-        // Search globals
-        if let Some(idx) = self.globals.iter().position(|var| var.name == name) {
-            return Some((idx, false));
+        for scope in self.scopes.iter().rev() {
+            for var in scope.vars.iter().rev() {
+                if var.name == name {
+                    return Some((var.idx, var.is_local));
+                }
+            }
         }
         None
     }
@@ -789,6 +801,7 @@ impl<'a> Parser<'a> {
             let last_offset = self.locals.last().unwrap().offset;
             last_offset - ty.size() as i32
         };
+        let idx = self.locals.len();
         self.locals.push(Obj {
             name,
             ty,
@@ -801,10 +814,12 @@ impl<'a> Parser<'a> {
             locals: Vec::new(),
             stack_size: 0,
         });
-        self.locals.len() - 1
+        self.push_scope(idx, true);
+        idx
     }
 
     fn new_gvar(&mut self, name: String, ty: Type) -> usize {
+        let idx = self.globals.len();
         self.globals.push(Obj {
             name,
             ty,
@@ -817,7 +832,8 @@ impl<'a> Parser<'a> {
             locals: Vec::new(),
             stack_size: 0,
         });
-        self.globals.len() - 1
+        self.push_scope(idx, false);
+        idx
     }
 
     fn new_unique_name(&mut self) -> String {
@@ -837,6 +853,40 @@ impl<'a> Parser<'a> {
             obj.init_data = Some(bytes);
         }
         idx
+    }
+
+    fn enter_scope(&mut self) {
+        self.scopes.push(Scope { vars: Vec::new() });
+    }
+
+    fn leave_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    fn push_scope(&mut self, idx: usize, is_local: bool) {
+        let name = if is_local {
+            self.locals[idx].name.clone()
+        } else {
+            self.globals[idx].name.clone()
+        };
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.vars.push(VarScope {
+                name,
+                idx,
+                is_local,
+            });
+        }
+    }
+
+    fn parse_block_stmt(&mut self) -> CompileResult<Stmt> {
+        self.enter_scope();
+        let mut stmts = Vec::new();
+        while !self.check_punct(Punct::RBrace) {
+            stmts.push(self.parse_stmt()?);
+        }
+        self.expect_punct(Punct::RBrace)?;
+        self.leave_scope();
+        Ok(self.stmt_last(StmtKind::Block(stmts)))
     }
 
     fn parse_funcall(&mut self, name_token: Token) -> CompileResult<Expr> {
