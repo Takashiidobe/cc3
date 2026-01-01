@@ -1036,6 +1036,52 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    fn get_common_type(&self, ty1: &Type, ty2: &Type) -> Type {
+        if let Some(base) = ty1.base() {
+            return Type::Ptr(Box::new(base.clone()));
+        }
+        if ty1.size() == 8 || ty2.size() == 8 {
+            Type::Long
+        } else {
+            Type::Int
+        }
+    }
+
+    fn dummy_expr(&self, location: crate::error::SourceLocation) -> Expr {
+        self.expr_at(ExprKind::Num(0), location)
+    }
+
+    fn cast_expr(&self, expr: Expr, ty: Type) -> Expr {
+        let location = expr.location;
+        let mut cast = self.expr_at(
+            ExprKind::Cast {
+                expr: Box::new(expr),
+                ty: ty.clone(),
+            },
+            location,
+        );
+        cast.ty = Some(ty);
+        cast
+    }
+
+    fn cast_expr_in_place(&self, expr: &mut Expr, ty: Type) {
+        let location = expr.location;
+        let inner = std::mem::replace(expr, self.dummy_expr(location));
+        *expr = self.cast_expr(inner, ty);
+    }
+
+    fn usual_arith_conv(&self, lhs: &mut Expr, rhs: &mut Expr) -> CompileResult<Type> {
+        self.add_type_expr(lhs)?;
+        self.add_type_expr(rhs)?;
+        let ty = self.get_common_type(
+            lhs.ty.as_ref().unwrap_or(&Type::Int),
+            rhs.ty.as_ref().unwrap_or(&Type::Int),
+        );
+        self.cast_expr_in_place(lhs, ty.clone());
+        self.cast_expr_in_place(rhs, ty.clone());
+        Ok(ty)
+    }
+
     fn consume_keyword(&mut self, kw: Keyword) -> bool {
         let token = self.peek().clone();
         if matches!(token.kind, TokenKind::Keyword(found) if found == kw) {
@@ -1437,7 +1483,8 @@ impl<'a> Parser<'a> {
         }
 
         let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
-        let scale = self.expr_at(ExprKind::Num(base_size), location);
+        let mut scale = self.expr_at(ExprKind::Num(base_size), location);
+        scale.ty = Some(Type::Long);
         let rhs = self.expr_at(
             ExprKind::Binary {
                 op: BinaryOp::Mul,
@@ -1483,7 +1530,8 @@ impl<'a> Parser<'a> {
 
         if lhs_ty.base().is_some() && rhs_ty.is_integer() {
             let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
-            let scale = self.expr_at(ExprKind::Num(base_size), location);
+            let mut scale = self.expr_at(ExprKind::Num(base_size), location);
+            scale.ty = Some(Type::Long);
             let rhs = self.expr_at(
                 ExprKind::Binary {
                     op: BinaryOp::Mul,
@@ -1506,7 +1554,8 @@ impl<'a> Parser<'a> {
 
         if lhs_ty.base().is_some() && rhs_ty.base().is_some() {
             let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
-            let scale = self.expr_at(ExprKind::Num(base_size), location);
+            let mut scale = self.expr_at(ExprKind::Num(base_size), location);
+            scale.ty = Some(Type::Long);
             let mut sub_expr = self.expr_at(
                 ExprKind::Binary {
                     op: BinaryOp::Sub,
@@ -1575,7 +1624,13 @@ impl<'a> Parser<'a> {
         }
 
         let ty = match &mut expr.kind {
-            ExprKind::Num(_) => Type::Int,
+            ExprKind::Num(value) => {
+                if i32::try_from(*value).is_ok() {
+                    Type::Int
+                } else {
+                    Type::Long
+                }
+            }
             ExprKind::Var { idx, is_local } => {
                 if *is_local {
                     self.locals
@@ -1597,7 +1652,9 @@ impl<'a> Parser<'a> {
             }
             ExprKind::Unary { expr, .. } => {
                 self.add_type_expr(expr)?;
-                expr.ty.clone().unwrap_or(Type::Int)
+                let ty = self.get_common_type(&Type::Int, expr.ty.as_ref().unwrap_or(&Type::Int));
+                self.cast_expr_in_place(expr, ty.clone());
+                ty
             }
             ExprKind::Addr(expr) => {
                 self.add_type_expr(expr)?;
@@ -1660,6 +1717,9 @@ impl<'a> Parser<'a> {
                 if lhs_ty.is_array() {
                     return Err(self.error_at(lhs.location, "not an lvalue"));
                 }
+                if !matches!(lhs_ty, Type::Struct { .. }) {
+                    self.cast_expr_in_place(rhs, lhs_ty.clone());
+                }
                 lhs_ty
             }
             ExprKind::Member { member, .. } => member.ty.clone(),
@@ -1672,16 +1732,15 @@ impl<'a> Parser<'a> {
                 self.add_type_expr(rhs)?;
                 rhs.ty.clone().unwrap_or(Type::Int)
             }
-            ExprKind::Binary { op, lhs, rhs } => {
-                self.add_type_expr(lhs)?;
-                self.add_type_expr(rhs)?;
-                match op {
-                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => Type::Int,
-                    BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-                        lhs.ty.clone().unwrap_or(Type::Int)
-                    }
+            ExprKind::Binary { op, lhs, rhs } => match op {
+                BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => {
+                    self.usual_arith_conv(lhs, rhs)?;
+                    Type::Int
                 }
-            }
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                    self.usual_arith_conv(lhs, rhs)?
+                }
+            },
         };
 
         expr.ty = Some(ty);

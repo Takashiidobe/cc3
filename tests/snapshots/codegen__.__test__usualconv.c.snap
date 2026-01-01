@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "-10 + (long)5 => -5\n-10 - (long)5 => -15\n-10 * (long)5 => -50\n-10 / (long)5 => -2\n-2 < (long)-1 => 1\n-2 <= (long)-1 => 1\n-2 > (long)-1 => 0\n-2 >= (long)-1 => 0\n(long)-2 < -1 => 1\n(long)-2 <= -1 => 1\n(long)-2 > -1 => 0\n(long)-2 >= -1 => 0\n2147483647 + 2147483647 + 2 => 0\n({ long x; x=-1; x; }) => -1\n({ char x[3]; x[0]=0; x[1]=1; x[2]=2; char *y=x+1; y[0]; }) => 1\n({ char x[3]; x[0]=0; x[1]=1; x[2]=2; char *y=x+1; y[-1]; }) => 0\n({ struct t {char a;} x, y; x.a=5; y=x; y.a; }) => 5\nOK\n"
+status: 0

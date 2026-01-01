@@ -321,8 +321,8 @@ impl Codegen {
 
         if let Some(ty) = ty {
             match ty.size() {
-                1 => self.emit_line("  movsbq (%rax), %rax"),
-                2 => self.emit_line("  movswq (%rax), %rax"),
+                1 => self.emit_line("  movsbl (%rax), %eax"),
+                2 => self.emit_line("  movswl (%rax), %eax"),
                 4 => self.emit_line("  movslq (%rax), %rax"),
                 8 => self.emit_line("  mov (%rax), %rax"),
                 _ => unreachable!(),
