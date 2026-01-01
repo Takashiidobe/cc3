@@ -31,6 +31,19 @@ fn run_exe(exe: &Path) -> io::Result<Output> {
         .output()
 }
 
+fn preprocess(src: &Path) -> io::Result<Output> {
+    StdCommand::new("clang")
+        .arg("-E")
+        .arg("-P")
+        .arg("-C")
+        .arg("-I")
+        .arg("test")
+        .arg(src)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 struct RunLog {
     stdout: String,
@@ -59,37 +72,30 @@ fn ensure_success(tag: &str, path: &Path, out: &Output) {
 fn run_case(path: &Path) -> datatest_stable::Result<()> {
     let tmp = tempfile::tempdir()?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+    let preprocessed_path = tmp.path().join(format!("{stem}.i"));
     let asm_path = tmp.path().join(format!("{stem}.S"));
     let exe_mine = tmp.path().join(format!("{stem}.mine"));
-    let helper_src = tmp.path().join("helper.c");
-    let helper_obj = tmp.path().join("helper.o");
+    let common_obj = tmp.path().join("common.o");
 
-    std::fs::write(
-        &helper_src,
-        concat!(
-            "int ret3() { return 3; }\n",
-            "int ret5() { return 5; }\n",
-            "int add(int x, int y) { return x + y; }\n",
-            "int sub(int x, int y) { return x - y; }\n",
-            "int add6(int a, int b, int c, int d, int e, int f) {\n",
-            "  return a + b + c + d + e + f;\n",
-            "}\n",
-        ),
-    )?;
-    let helper_out = StdCommand::new("clang")
+    let preprocess_out = preprocess(path)?;
+    ensure_success("preprocess", path, &preprocess_out);
+    std::fs::write(&preprocessed_path, &preprocess_out.stdout)?;
+
+    let common_out = StdCommand::new("clang")
         .arg("-c")
         .arg("-o")
-        .arg(&helper_obj)
-        .arg(&helper_src)
+        .arg(&common_obj)
+        .arg("-xc")
+        .arg("test/common")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()?;
-    ensure_success("cc(helper)", &helper_src, &helper_out);
+    ensure_success("cc(common)", Path::new("test/common"), &common_out);
 
     // 1) Your compiler: codegen -> .S, then cc -> exe_mine
     let mut bin = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
     let codegen_out = bin
-        .arg(path)
+        .arg(&preprocessed_path)
         .arg("-o")
         .arg(&asm_path)
         .stderr(Stdio::piped())
@@ -101,7 +107,7 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     );
     ensure_success("codegen", path, &codegen_out);
 
-    let compile_out_mine = compile(&asm_path, &exe_mine, &[helper_obj.as_path()], &[])?;
+    let compile_out_mine = compile(&asm_path, &exe_mine, &[common_obj.as_path()], &[])?;
     eprintln!(
         "[{}] cc(asm) status: {:?}",
         path.display(),
@@ -118,5 +124,5 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
 }
 
 datatest_stable::harness! {
-    { test = run_case, root = "./tests/files/", pattern = r#"^.*.c$"# },
+    { test = run_case, root = "./test/", pattern = r#"^.*.c$"# },
 }

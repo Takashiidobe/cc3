@@ -81,7 +81,7 @@ impl<'a> Parser<'a> {
         self.enter_scope();
 
         // Parse function parameters
-        let mut params = Vec::new();
+        let mut param_indices = Vec::new();
         if !self.check_punct(Punct::RParen) {
             loop {
                 let param_basety = self.parse_declspec()?;
@@ -91,11 +91,8 @@ impl<'a> Parser<'a> {
                     _ => unreachable!("parse_declarator only returns identifiers"),
                 };
                 // Use new_lvar to assign correct offset
-                let _idx = self.new_lvar(param_name.clone(), param_ty);
-                // Get the newly added param
-                if let Some(param) = self.locals.last() {
-                    params.push(param.clone());
-                }
+                let idx = self.new_lvar(param_name.clone(), param_ty);
+                param_indices.push(idx);
 
                 if !self.consume_punct(Punct::Comma) {
                     break;
@@ -119,14 +116,8 @@ impl<'a> Parser<'a> {
             self.add_type_stmt(stmt)?;
         }
 
-        // Calculate stack size based on the total size of all locals
-        let total_size = if self.locals.is_empty() {
-            0
-        } else {
-            -self.locals.last().unwrap().offset
-        };
-        let stack_size = align_to(total_size, 16);
-        let locals = std::mem::take(&mut self.locals);
+        let mut locals = std::mem::take(&mut self.locals);
+        let stack_size = assign_lvar_offsets(&mut locals);
 
         // Create function object
         let func = Obj {
@@ -136,7 +127,10 @@ impl<'a> Parser<'a> {
             offset: 0,
             is_function: true,
             init_data: None,
-            params,
+            params: param_indices
+                .iter()
+                .map(|idx| locals[*idx].clone())
+                .collect(),
             body,
             locals,
             stack_size,
@@ -795,18 +789,12 @@ impl<'a> Parser<'a> {
     }
 
     fn new_lvar(&mut self, name: String, ty: Type) -> usize {
-        let offset = if self.locals.is_empty() {
-            -(ty.size() as i32)
-        } else {
-            let last_offset = self.locals.last().unwrap().offset;
-            last_offset - ty.size() as i32
-        };
         let idx = self.locals.len();
         self.locals.push(Obj {
             name,
             ty,
             is_local: true,
-            offset,
+            offset: 0,
             is_function: false,
             init_data: None,
             params: Vec::new(),
@@ -1194,4 +1182,13 @@ impl<'a> Parser<'a> {
 
 fn align_to(n: i32, align: i32) -> i32 {
     (n + align - 1) / align * align
+}
+
+fn assign_lvar_offsets(locals: &mut [Obj]) -> i32 {
+    let mut offset = 0i32;
+    for var in locals.iter_mut().rev() {
+        offset += var.ty.size() as i32;
+        var.offset = -offset;
+    }
+    align_to(offset, 16)
 }
