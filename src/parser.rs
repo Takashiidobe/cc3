@@ -223,6 +223,9 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
 
+        // Ensure the function is visible for recursive calls.
+        self.new_function_decl(name.clone(), Type::Func(Box::new(basety.clone())));
+
         self.expect_punct(Punct::LBrace)?;
         self.enter_scope();
 
@@ -1231,6 +1234,10 @@ impl<'a> Parser<'a> {
         None
     }
 
+    fn find_global(&self, name: &str) -> Option<&Obj> {
+        self.globals.iter().find(|obj| obj.name == name)
+    }
+
     fn find_typedef(&self, tok: &Token) -> Option<Type> {
         if let TokenKind::Ident(name) = &tok.kind {
             for scope in self.scopes.iter().rev() {
@@ -1420,6 +1427,18 @@ impl<'a> Parser<'a> {
             TokenKind::Ident(name) => name,
             _ => unreachable!("parse_funcall expects identifier token"),
         };
+
+        if self.find_var(&name).is_some() {
+            return Err(self.error_at(name_token.location, "not a function"));
+        }
+
+        let func = self.find_global(&name);
+        let Some(func) = func else {
+            return Err(self.error_at(name_token.location, "implicit declaration of a function"));
+        };
+        if !func.is_function {
+            return Err(self.error_at(name_token.location, "not a function"));
+        }
 
         self.pos += 1;
         self.expect_punct(Punct::LParen)?;
@@ -1644,11 +1663,18 @@ impl<'a> Parser<'a> {
                         .unwrap_or(Type::Int)
                 }
             }
-            ExprKind::Call { args, .. } => {
+            ExprKind::Call { name, args } => {
                 for arg in args {
                     self.add_type_expr(arg)?;
                 }
-                Type::Int
+                if let Some(func) = self.find_global(name)
+                    && func.is_function
+                    && let Type::Func(ret) = &func.ty
+                {
+                    ret.as_ref().clone()
+                } else {
+                    Type::Int
+                }
             }
             ExprKind::Unary { expr, .. } => {
                 self.add_type_expr(expr)?;
