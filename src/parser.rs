@@ -484,6 +484,14 @@ impl<'a> Parser<'a> {
                 self.expect_punct(Punct::RParen)?;
                 Ok(expr)
             }
+            TokenKind::Keyword(Keyword::Sizeof) => {
+                let location = token.location;
+                self.pos += 1;
+                let mut expr = self.parse_unary()?;
+                self.add_type_expr(&mut expr)?;
+                let size = expr.ty.as_ref().map(|ty| ty.size()).unwrap_or(8);
+                Ok(self.expr_at(ExprKind::Num(size), location))
+            }
             TokenKind::Ident(ref name) => {
                 if matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LParen)) {
                     return self.parse_funcall(token);

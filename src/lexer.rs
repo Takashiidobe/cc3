@@ -8,6 +8,7 @@ pub enum Keyword {
     Else,
     For,
     While,
+    Sizeof,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -139,6 +140,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 "else" => TokenKind::Keyword(Keyword::Else),
                 "for" => TokenKind::Keyword(Keyword::For),
                 "while" => TokenKind::Keyword(Keyword::While),
+                "sizeof" => TokenKind::Keyword(Keyword::Sizeof),
                 _ => TokenKind::Ident(word.to_string()),
             };
             tokens.push(Token { kind, location });
