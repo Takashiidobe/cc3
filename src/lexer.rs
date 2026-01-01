@@ -39,6 +39,7 @@ pub enum Punct {
     Star,
     Amp,
     Slash,
+    Mod,
     Dot,
     Arrow,
     LParen,
@@ -54,6 +55,7 @@ pub enum Punct {
     SubAssign,
     MulAssign,
     DivAssign,
+    ModAssign,
     Inc,
     Dec,
     Not,
@@ -74,6 +76,7 @@ impl std::fmt::Display for Punct {
             Punct::Star => "*",
             Punct::Amp => "&",
             Punct::Slash => "/",
+            Punct::Mod => "%",
             Punct::Dot => ".",
             Punct::Arrow => "->",
             Punct::LParen => "(",
@@ -89,6 +92,7 @@ impl std::fmt::Display for Punct {
             Punct::SubAssign => "-=",
             Punct::MulAssign => "*=",
             Punct::DivAssign => "/=",
+            Punct::ModAssign => "%=",
             Punct::Inc => "++",
             Punct::Dec => "--",
             Punct::Not => "!",
@@ -508,6 +512,9 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
     if input.starts_with("/=") {
         return Some((Punct::DivAssign, 2));
     }
+    if input.starts_with("%=") {
+        return Some((Punct::ModAssign, 2));
+    }
     if input.starts_with("++") {
         return Some((Punct::Inc, 2));
     }
@@ -525,6 +532,7 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
         b'*' => Punct::Star,
         b'&' => Punct::Amp,
         b'/' => Punct::Slash,
+        b'%' => Punct::Mod,
         b'.' => Punct::Dot,
         b'!' => Punct::Not,
         b'~' => Punct::BitNot,

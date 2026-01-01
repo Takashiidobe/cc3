@@ -261,13 +261,16 @@ impl Codegen {
                     BinaryOp::Mul => {
                         self.emit_line(&format!("  imul {}, {}", di, ax));
                     }
-                    BinaryOp::Div => {
+                    BinaryOp::Div | BinaryOp::Mod => {
                         if lhs_ty.size() == 8 {
                             self.emit_line("  cqo");
                         } else {
                             self.emit_line("  cdq");
                         }
                         self.emit_line(&format!("  idiv {}", di));
+                        if matches!(op, BinaryOp::Mod) {
+                            self.emit_line("  mov %rdx, %rax");
+                        }
                     }
                     BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => {
                         self.emit_line(&format!("  cmp {}, {}", di, ax));

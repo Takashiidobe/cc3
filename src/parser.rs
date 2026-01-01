@@ -797,6 +797,7 @@ impl<'a> Parser<'a> {
             (Punct::SubAssign, BinaryOp::Sub),
             (Punct::MulAssign, BinaryOp::Mul),
             (Punct::DivAssign, BinaryOp::Div),
+            (Punct::ModAssign, BinaryOp::Mod),
         ];
 
         for (punct, op) in compound_ops {
@@ -1024,6 +1025,8 @@ impl<'a> Parser<'a> {
                 BinaryOp::Mul
             } else if self.consume_punct(Punct::Slash) {
                 BinaryOp::Div
+            } else if self.consume_punct(Punct::Mod) {
+                BinaryOp::Mod
             } else {
                 break;
             };
@@ -2112,7 +2115,7 @@ impl<'a> Parser<'a> {
                     self.usual_arith_conv(lhs, rhs)?;
                     Type::Int
                 }
-                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
+                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
                     self.usual_arith_conv(lhs, rhs)?
                 }
             },
