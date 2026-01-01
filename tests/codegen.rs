@@ -121,7 +121,8 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     // Only persist snapshot if test passed (status 0)
     // This prevents accepting incorrect tests and shows what failed
     assert_eq!(
-        mine.status, 0,
+        mine.status,
+        0,
         "[{}] test failed with status {}\n--- stdout ---\n{}",
         path.display(),
         mine.status,

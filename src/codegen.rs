@@ -263,30 +263,21 @@ impl Codegen {
         // becomes not the value itself but the address.
         // This is where "array is automatically converted to a pointer to
         // the first element of the array in C" occurs.
-        if let Some(ty) = ty {
-            match ty {
-                Type::Array { .. } | Type::Struct { .. } | Type::Union { .. } => return,
-                _ => {}
-            }
+        if let Some(ty) = ty
+            && let Type::Array { .. } | Type::Struct { .. } | Type::Union { .. } = ty
+        {
+            return;
         }
+
         if let Some(ty) = ty {
             match ty.size() {
-                1 => {
-                    self.emit_line("  movsbq (%rax), %rax");
-                    return;
-                }
-                2 => {
-                    self.emit_line("  movswq (%rax), %rax");
-                    return;
-                }
-                4 => {
-                    self.emit_line("  movslq (%rax), %rax");
-                    return;
-                }
-                _ => {}
+                1 => self.emit_line("  movsbq (%rax), %rax"),
+                2 => self.emit_line("  movswq (%rax), %rax"),
+                4 => self.emit_line("  movslq (%rax), %rax"),
+                8 => self.emit_line("  mov (%rax), %rax"),
+                _ => unreachable!(),
             }
         }
-        self.emit_line("  mov (%rax), %rax");
     }
 
     fn store(&mut self, ty: Option<&crate::ast::Type>) {
@@ -309,22 +300,13 @@ impl Codegen {
 
         if let Some(ty) = ty {
             match ty.size() {
-                1 => {
-                    self.emit_line("  mov %al, (%rdi)");
-                    return;
-                }
-                2 => {
-                    self.emit_line("  mov %ax, (%rdi)");
-                    return;
-                }
-                4 => {
-                    self.emit_line("  mov %eax, (%rdi)");
-                    return;
-                }
-                _ => {}
+                1 => self.emit_line("  mov %al, (%rdi)"),
+                2 => self.emit_line("  mov %ax, (%rdi)"),
+                4 => self.emit_line("  mov %eax, (%rdi)"),
+                8 => self.emit_line("  mov %rax, (%rdi)"),
+                _ => unreachable!(),
             }
         }
-        self.emit_line("  mov %rax, (%rdi)");
     }
 
     fn emit_epilogue(&mut self) {

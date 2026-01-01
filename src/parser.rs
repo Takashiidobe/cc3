@@ -85,7 +85,14 @@ impl<'a> Parser<'a> {
     fn is_typename(&self) -> bool {
         matches!(
             self.peek().kind,
-            TokenKind::Keyword(Keyword::Char | Keyword::Short | Keyword::Int | Keyword::Long | Keyword::Struct | Keyword::Union)
+            TokenKind::Keyword(
+                Keyword::Char
+                    | Keyword::Short
+                    | Keyword::Int
+                    | Keyword::Long
+                    | Keyword::Struct
+                    | Keyword::Union
+            )
         )
     }
 
@@ -376,8 +383,9 @@ impl<'a> Parser<'a> {
         };
 
         // If we have a tag but no opening brace, look up the existing type
-        if tag.is_some() && !self.check_punct(Punct::LBrace) {
-            let tag_token = tag.as_ref().unwrap();
+        if let Some(ref tag_token) = tag
+            && !self.check_punct(Punct::LBrace)
+        {
             let name = match &tag_token.kind {
                 TokenKind::Ident(name) => name,
                 _ => unreachable!(),
@@ -386,9 +394,7 @@ impl<'a> Parser<'a> {
                 Some(Type::Struct { members }) | Some(Type::Union { members }) => {
                     return Ok((None, members));
                 }
-                _ => {
-                    return Err(self.error_at(tag_token.location, "unknown struct/union type"));
-                }
+                _ => return Err(self.error_at(tag_token.location, "unknown struct/union type")),
             }
         }
 
@@ -1084,7 +1090,15 @@ impl<'a> Parser<'a> {
         });
     }
 
-    fn new_function_def(&mut self, name: String, ty: Type, params: Vec<Obj>, body: Vec<Stmt>, locals: Vec<Obj>, stack_size: i32) {
+    fn new_function_def(
+        &mut self,
+        name: String,
+        ty: Type,
+        params: Vec<Obj>,
+        body: Vec<Stmt>,
+        locals: Vec<Obj>,
+        stack_size: i32,
+    ) {
         self.globals.push(Obj {
             name,
             ty,

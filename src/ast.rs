@@ -206,7 +206,11 @@ impl Type {
                 if members.is_empty() {
                     return 1;
                 }
-                members.iter().map(|member| member.ty.align()).max().unwrap_or(1)
+                members
+                    .iter()
+                    .map(|member| member.ty.align())
+                    .max()
+                    .unwrap_or(1)
             }
             Type::Array { base, .. } => base.align(),
         }
