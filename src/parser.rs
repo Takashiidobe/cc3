@@ -81,15 +81,16 @@ impl<'a> Parser<'a> {
 
     fn parse_declspec(&mut self, mut attr: Option<&mut VarAttr>) -> CompileResult<Type> {
         const VOID: i32 = 1 << 0;
-        const CHAR: i32 = 1 << 2;
-        const SHORT: i32 = 1 << 4;
+        const BOOL: i32 = 1 << 2;
+        const CHAR: i32 = 1 << 4;
+        const SHORT: i32 = 1 << 6;
         const SHORT_INT: i32 = SHORT + INT;
-        const INT: i32 = 1 << 6;
-        const LONG: i32 = 1 << 8;
+        const INT: i32 = 1 << 8;
+        const LONG: i32 = 1 << 10;
         const LONG_INT: i32 = LONG + INT;
         const LONG_LONG: i32 = LONG + LONG;
         const LONG_LONG_INT: i32 = LONG + LONG + INT;
-        const OTHER: i32 = 1 << 10;
+        const OTHER: i32 = 1 << 12;
 
         let mut ty = Type::Int;
         let mut counter = 0i32;
@@ -135,6 +136,8 @@ impl<'a> Parser<'a> {
             let location = self.peek().location;
             if self.consume_keyword(Keyword::Void) {
                 counter += VOID;
+            } else if self.consume_keyword(Keyword::Bool) {
+                counter += BOOL;
             } else if self.consume_keyword(Keyword::Char) {
                 counter += CHAR;
             } else if self.consume_keyword(Keyword::Short) {
@@ -149,6 +152,7 @@ impl<'a> Parser<'a> {
 
             ty = match counter {
                 VOID => Type::Void,
+                BOOL => Type::Bool,
                 CHAR => Type::Char,
                 SHORT | SHORT_INT => Type::Short,
                 INT => Type::Int,
@@ -172,6 +176,7 @@ impl<'a> Parser<'a> {
         match token.kind {
             TokenKind::Keyword(
                 Keyword::Void
+                | Keyword::Bool
                 | Keyword::Char
                 | Keyword::Short
                 | Keyword::Int
@@ -1246,7 +1251,7 @@ impl<'a> Parser<'a> {
     }
 
     fn find_global(&self, name: &str) -> Option<&Obj> {
-        self.globals.iter().find(|obj| obj.name == name)
+        self.globals.iter().rfind(|obj| obj.name == name)
     }
 
     fn find_typedef(&self, tok: &Token) -> Option<Type> {

@@ -275,6 +275,7 @@ impl Codegen {
 
     fn type_id(&self, ty: &Type) -> usize {
         match ty {
+            Type::Bool => 0,
             Type::Char => 0,
             Type::Short => 1,
             Type::Int => 2,
@@ -284,6 +285,13 @@ impl Codegen {
 
     fn cast(&mut self, from: &Type, to: &Type) {
         if matches!(to, Type::Void) {
+            return;
+        }
+
+        if matches!(to, Type::Bool) {
+            self.cmp_zero(from);
+            self.emit_line("  setne %al");
+            self.emit_line("  movzx %al, %eax");
             return;
         }
 
@@ -302,6 +310,14 @@ impl Codegen {
         let t2 = self.type_id(to);
         if let Some(insn) = CAST_TABLE[t1][t2] {
             self.emit_line(&format!("  {}", insn));
+        }
+    }
+
+    fn cmp_zero(&mut self, ty: &Type) {
+        if ty.is_integer() && ty.size() <= 4 {
+            self.emit_line("  cmp $0, %eax");
+        } else {
+            self.emit_line("  cmp $0, %rax");
         }
     }
 

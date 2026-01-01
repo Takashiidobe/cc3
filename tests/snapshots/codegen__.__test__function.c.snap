@@ -2,5 +2,5 @@
 source: tests/codegen.rs
 expression: "&mine"
 ---
-stdout: "ret3() => 3\nadd2(3, 5) => 8\nsub2(5, 3) => 2\nadd6(1,2,3,4,5,6) => 21\nadd6(1,2,add6(3,4,5,6,7,8),9,10,11) => 66\nadd6(1,2,add6(3,add6(4,5,6,7,8,9),10,11,12,13),14,15,16) => 136\nadd2(3,4) => 7\nsub2(4,3) => 1\nfib(9) => 55\n({ sub_char(7, 3, 3); }) => 1\nsub_long(7, 3, 3) => 1\nsub_short(7, 3, 3) => 1\n*(int *)g1_addr() => 3\nint_to_char(261) => 5\ndiv_long(-10, 2) => -5\nOK\n"
+stdout: "ret3() => 3\nadd2(3, 5) => 8\nsub2(5, 3) => 2\nadd6(1,2,3,4,5,6) => 21\nadd6(1,2,add6(3,4,5,6,7,8),9,10,11) => 66\nadd6(1,2,add6(3,add6(4,5,6,7,8,9),10,11,12,13),14,15,16) => 136\nadd2(3,4) => 7\nsub2(4,3) => 1\nfib(9) => 55\n({ sub_char(7, 3, 3); }) => 1\nsub_long(7, 3, 3) => 1\nsub_short(7, 3, 3) => 1\n*(int *)g1_addr() => 3\nint_to_char(261) => 5\ndiv_long(-10, 2) => -5\nbool_fn_add(3) => 1\nbool_fn_sub(3) => 0\nbool_fn_add(-3) => 1\nbool_fn_sub(-3) => 0\nbool_fn_add(0) => 1\nbool_fn_sub(0) => 1\nOK\n"
 status: 0

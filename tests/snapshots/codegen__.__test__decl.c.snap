@@ -2,5 +2,5 @@
 source: tests/codegen.rs
 expression: "&mine"
 ---
-stdout: "({ char x; sizeof(x); }) => 1\n({ short int x; sizeof(x); }) => 2\n({ int short x; sizeof(x); }) => 2\n({ int x; sizeof(x); }) => 4\n({ long int x; sizeof(x); }) => 8\n({ int long x; sizeof(x); }) => 8\n({ long long x; sizeof(x); }) => 8\nOK\n"
+stdout: "({ char x; sizeof(x); }) => 1\n({ short int x; sizeof(x); }) => 2\n({ int short x; sizeof(x); }) => 2\n({ int x; sizeof(x); }) => 4\n({ long int x; sizeof(x); }) => 8\n({ int long x; sizeof(x); }) => 8\n({ long long x; sizeof(x); }) => 8\n({ _Bool x=0; x; }) => 0\n({ _Bool x=1; x; }) => 1\n({ _Bool x=2; x; }) => 1\n(_Bool)1 => 1\n(_Bool)2 => 1\n(_Bool)(char)256 => 0\nOK\n"
 status: 0

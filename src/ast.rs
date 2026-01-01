@@ -128,6 +128,7 @@ pub struct Obj {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Void,
+    Bool,
     Char,
     Short,
     Int,
@@ -149,7 +150,10 @@ pub enum Type {
 
 impl Type {
     pub fn is_integer(&self) -> bool {
-        matches!(self, Type::Char | Type::Short | Type::Int | Type::Long)
+        matches!(
+            self,
+            Type::Bool | Type::Char | Type::Short | Type::Int | Type::Long
+        )
     }
 
     pub fn is_array(&self) -> bool {
@@ -167,6 +171,7 @@ impl Type {
     pub fn size(&self) -> i64 {
         match self {
             Type::Void => 1,
+            Type::Bool => 1,
             Type::Char => 1,
             Type::Short => 2,
             Type::Int => 4,
@@ -199,6 +204,7 @@ impl Type {
     pub fn align(&self) -> i64 {
         match self {
             Type::Void => 1,
+            Type::Bool => 1,
             Type::Char => 1,
             Type::Short => 2,
             Type::Int => 4,
