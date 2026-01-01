@@ -565,6 +565,19 @@ impl<'a> Parser<'a> {
     fn parse_primary(&mut self) -> CompileResult<Expr> {
         let token = self.peek().clone();
         match token.kind {
+            TokenKind::Punct(Punct::LParen)
+                if matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LBrace)) =>
+            {
+                let location = token.location;
+                self.pos += 2;
+                let mut stmts = Vec::new();
+                while !self.check_punct(Punct::RBrace) {
+                    stmts.push(self.parse_stmt()?);
+                }
+                self.expect_punct(Punct::RBrace)?;
+                self.expect_punct(Punct::RParen)?;
+                Ok(self.expr_at(ExprKind::StmtExpr(stmts), location))
+            }
             TokenKind::Punct(Punct::LParen) => {
                 self.pos += 1;
                 let expr = self.parse_expr()?;
@@ -1075,6 +1088,30 @@ impl<'a> Parser<'a> {
                     Some(base) => base.clone(),
                     None => {
                         return Err(self.error_at(expr.location, "invalid pointer dereference"));
+                    }
+                }
+            }
+            ExprKind::StmtExpr(stmts) => {
+                if stmts.is_empty() {
+                    return Err(self.error_at(
+                        expr.location,
+                        "statement expression returning void is not supported",
+                    ));
+                }
+                for stmt in stmts.iter_mut() {
+                    self.add_type_stmt(stmt)?;
+                }
+                let last = stmts.last_mut().unwrap();
+                match &mut last.kind {
+                    StmtKind::Expr(expr) => {
+                        self.add_type_expr(expr)?;
+                        expr.ty.clone().unwrap_or(Type::Int)
+                    }
+                    _ => {
+                        return Err(self.error_at(
+                            expr.location,
+                            "statement expression returning void is not supported",
+                        ));
                     }
                 }
             }

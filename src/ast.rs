@@ -54,6 +54,7 @@ pub enum ExprKind {
         idx: usize,
         is_local: bool,
     },
+    StmtExpr(Vec<Stmt>),
     Assign {
         lhs: Box<Expr>,
         rhs: Box<Expr>,

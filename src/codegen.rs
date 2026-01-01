@@ -191,6 +191,11 @@ impl Codegen {
                 self.gen_addr(*idx, *is_local, function, globals);
                 self.load(expr.ty.as_ref());
             }
+            ExprKind::StmtExpr(stmts) => {
+                for stmt in stmts {
+                    self.gen_stmt(stmt, function, globals);
+                }
+            }
             ExprKind::Assign { lhs, rhs } => {
                 self.gen_lvalue(lhs, function, globals);
                 self.emit_line("  push %rax");
