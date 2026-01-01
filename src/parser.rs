@@ -1293,6 +1293,7 @@ fn assign_lvar_offsets(locals: &mut [Obj]) -> i32 {
     let mut offset = 0i32;
     for var in locals.iter_mut().rev() {
         offset += var.ty.size() as i32;
+        offset = align_to(offset, var.ty.align() as i32);
         var.offset = -offset;
     }
     align_to(offset, 16)
