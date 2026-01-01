@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, ExprKind, Function, Program, Stmt, StmtKind, UnaryOp};
+use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, UnaryOp};
 
 const ARG_REGS: [&str; 6] = ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"];
 
@@ -18,16 +18,19 @@ impl Codegen {
     }
 
     pub fn generate(mut self, program: &Program) -> String {
-        for function in &program.functions {
-            self.generate_function(function);
+        for obj in &program.globals {
+            if obj.is_function {
+                self.generate_function(obj);
+            }
         }
         self.buffer
     }
 
-    fn generate_function(&mut self, function: &Function) {
+    fn generate_function(&mut self, function: &Obj) {
         self.current_fn = Some(function.name.clone());
 
         self.emit_line(&format!("  .globl {}", function.name));
+        self.emit_line("  .text");
         self.emit_line(&format!("{}:", function.name));
         self.emit_line("  push %rbp");
         self.emit_line("  mov %rsp, %rbp");
@@ -61,7 +64,7 @@ impl Codegen {
         self.label_counter
     }
 
-    fn gen_stmt(&mut self, stmt: &Stmt, function: &Function) {
+    fn gen_stmt(&mut self, stmt: &Stmt, function: &Obj) {
         match &stmt.kind {
             StmtKind::Return(expr) => {
                 self.gen_expr(expr, function);
@@ -120,7 +123,7 @@ impl Codegen {
         }
     }
 
-    fn gen_expr(&mut self, expr: &Expr, function: &Function) {
+    fn gen_expr(&mut self, expr: &Expr, function: &Obj) {
         match &expr.kind {
             ExprKind::Num(value) => {
                 self.emit_line(&format!("  mov ${}, %rax", value));
@@ -223,12 +226,12 @@ impl Codegen {
         self.emit_line("  pop %rbp");
     }
 
-    fn gen_addr(&mut self, idx: usize, function: &Function) {
+    fn gen_addr(&mut self, idx: usize, function: &Obj) {
         let offset = function.locals[idx].offset;
         self.emit_line(&format!("  lea {}(%rbp), %rax", offset));
     }
 
-    fn gen_lvalue(&mut self, expr: &Expr, function: &Function) {
+    fn gen_lvalue(&mut self, expr: &Expr, function: &Obj) {
         match &expr.kind {
             ExprKind::Var(idx) => self.gen_addr(*idx, function),
             ExprKind::Deref(expr) => self.gen_expr(expr, function),

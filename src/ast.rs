@@ -2,16 +2,7 @@ use crate::error::SourceLocation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    pub functions: Vec<Function>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Function {
-    pub name: String,
-    pub params: Vec<Obj>,
-    pub body: Vec<Stmt>,
-    pub locals: Vec<Obj>,
-    pub stack_size: i32,
+    pub globals: Vec<Obj>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,7 +83,19 @@ pub enum BinaryOp {
 pub struct Obj {
     pub name: String,
     pub ty: Type,
+    pub is_local: bool,
+
+    // Local variable
     pub offset: i32,
+
+    // Global variable or function
+    pub is_function: bool,
+
+    // Function
+    pub params: Vec<Obj>,
+    pub body: Vec<Stmt>,
+    pub locals: Vec<Obj>,
+    pub stack_size: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

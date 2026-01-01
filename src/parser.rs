@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, ExprKind, Function, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
+use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
 use crate::error::{CompileError, CompileResult};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
 
@@ -11,6 +11,7 @@ struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
     locals: Vec<Obj>,
+    globals: Vec<Obj>,
 }
 
 impl<'a> Parser<'a> {
@@ -19,18 +20,20 @@ impl<'a> Parser<'a> {
             tokens,
             pos: 0,
             locals: Vec::new(),
+            globals: Vec::new(),
         }
     }
 
     fn parse_program(&mut self) -> CompileResult<Program> {
-        let mut functions = Vec::new();
         while !self.check_eof() {
-            functions.push(self.parse_function()?);
+            self.parse_function()?;
         }
-        Ok(Program { functions })
+        Ok(Program {
+            globals: std::mem::take(&mut self.globals),
+        })
     }
 
-    fn parse_function(&mut self) -> CompileResult<Function> {
+    fn parse_function(&mut self) -> CompileResult<()> {
         self.expect_keyword(Keyword::Int)?;
         let name = self.expect_ident()?;
 
@@ -79,13 +82,21 @@ impl<'a> Parser<'a> {
         };
         let stack_size = align_to(total_size, 16);
         let locals = std::mem::take(&mut self.locals);
-        Ok(Function {
+
+        // Create function object
+        let func = Obj {
             name,
+            ty: Type::Func(Box::new(Type::Int)),
+            is_local: false,
+            offset: 0,
+            is_function: true,
             params,
             body,
             locals,
             stack_size,
-        })
+        };
+        self.globals.push(func);
+        Ok(())
     }
 
     fn parse_stmt(&mut self) -> CompileResult<Stmt> {
@@ -669,7 +680,17 @@ impl<'a> Parser<'a> {
             let last_offset = self.locals.last().unwrap().offset;
             last_offset - ty.size() as i32
         };
-        self.locals.push(Obj { name, ty, offset });
+        self.locals.push(Obj {
+            name,
+            ty,
+            is_local: true,
+            offset,
+            is_function: false,
+            params: Vec::new(),
+            body: Vec::new(),
+            locals: Vec::new(),
+            stack_size: 0,
+        });
         self.locals.len() - 1
     }
 
