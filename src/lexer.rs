@@ -65,6 +65,8 @@ pub enum Punct {
     Dec,
     Not,
     BitNot,
+    LogAnd,
+    LogOr,
     EqEq,
     NotEq,
     Less,
@@ -107,6 +109,8 @@ impl std::fmt::Display for Punct {
             Punct::Dec => "--",
             Punct::Not => "!",
             Punct::BitNot => "~",
+            Punct::LogAnd => "&&",
+            Punct::LogOr => "||",
             Punct::EqEq => "==",
             Punct::NotEq => "!=",
             Punct::Less => "<",
@@ -525,8 +529,14 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
     if input.starts_with("%=") {
         return Some((Punct::ModAssign, 2));
     }
+    if input.starts_with("&&") {
+        return Some((Punct::LogAnd, 2));
+    }
     if input.starts_with("&=") {
         return Some((Punct::AndAssign, 2));
+    }
+    if input.starts_with("||") {
+        return Some((Punct::LogOr, 2));
     }
     if input.starts_with("|=") {
         return Some((Punct::OrAssign, 2));

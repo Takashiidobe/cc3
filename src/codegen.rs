@@ -238,6 +238,40 @@ impl Codegen {
                 self.gen_expr(rhs, function, globals);
             }
             ExprKind::Binary { op, lhs, rhs } => {
+                // Handle short-circuit operators specially
+                if matches!(op, BinaryOp::LogAnd | BinaryOp::LogOr) {
+                    let c = self.next_label();
+                    if matches!(op, BinaryOp::LogAnd) {
+                        // Logical AND: false if either operand is false
+                        self.gen_expr(lhs, function, globals);
+                        self.emit_line("  cmp $0, %rax");
+                        self.emit_line(&format!("  je .L.false.{}", c));
+                        self.gen_expr(rhs, function, globals);
+                        self.emit_line("  cmp $0, %rax");
+                        self.emit_line(&format!("  je .L.false.{}", c));
+                        self.emit_line("  mov $1, %rax");
+                        self.emit_line(&format!("  jmp .L.end.{}", c));
+                        self.emit_line(&format!(".L.false.{}:", c));
+                        self.emit_line("  mov $0, %rax");
+                        self.emit_line(&format!(".L.end.{}:", c));
+                    } else {
+                        // Logical OR: true if either operand is true
+                        self.gen_expr(lhs, function, globals);
+                        self.emit_line("  cmp $0, %rax");
+                        self.emit_line(&format!("  jne .L.true.{}", c));
+                        self.gen_expr(rhs, function, globals);
+                        self.emit_line("  cmp $0, %rax");
+                        self.emit_line(&format!("  jne .L.true.{}", c));
+                        self.emit_line("  mov $0, %rax");
+                        self.emit_line(&format!("  jmp .L.end.{}", c));
+                        self.emit_line(&format!(".L.true.{}:", c));
+                        self.emit_line("  mov $1, %rax");
+                        self.emit_line(&format!(".L.end.{}:", c));
+                    }
+                    return;
+                }
+
+                // Handle other binary operators
                 self.gen_expr(rhs, function, globals);
                 self.emit_line("  push %rax");
                 self.gen_expr(lhs, function, globals);
@@ -291,6 +325,9 @@ impl Codegen {
                             _ => {}
                         }
                         self.emit_line("  movzb %al, %rax");
+                    }
+                    BinaryOp::LogAnd | BinaryOp::LogOr => {
+                        unreachable!("LogAnd and LogOr should be handled earlier")
                     }
                 }
             }

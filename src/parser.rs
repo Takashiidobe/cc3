@@ -117,9 +117,7 @@ impl<'a> Parser<'a> {
                     }
 
                     if attr.is_typedef && attr.is_static {
-                        return Err(
-                            self.error_here("typedef and static may not be used together")
-                        );
+                        return Err(self.error_here("typedef and static may not be used together"));
                     }
                 } else {
                     return Err(
@@ -254,7 +252,11 @@ impl<'a> Parser<'a> {
         }
 
         // Ensure the function is visible for recursive calls.
-        self.new_function_decl(name.clone(), Type::Func(Box::new(basety.clone())), attr.is_static);
+        self.new_function_decl(
+            name.clone(),
+            Type::Func(Box::new(basety.clone())),
+            attr.is_static,
+        );
 
         let prev_return = self.current_fn_return.clone();
         self.current_fn_return = Some(basety.clone());
@@ -775,7 +777,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_assign(&mut self) -> CompileResult<Expr> {
-        let expr = self.parse_bitor()?;
+        let expr = self.parse_logor()?;
 
         if self.consume_punct(Punct::Assign) {
             if !self.is_lvalue(&expr) {
@@ -828,7 +830,10 @@ impl<'a> Parser<'a> {
         self.add_type_expr(&mut lhs)?;
         self.add_type_expr(&mut rhs)?;
 
-        let lhs_ty = lhs.ty.clone().ok_or_else(|| self.error_at(location, "lhs has no type"))?;
+        let lhs_ty = lhs
+            .ty
+            .clone()
+            .ok_or_else(|| self.error_at(location, "lhs has no type"))?;
         let ptr_ty = Type::Ptr(Box::new(lhs_ty));
 
         // Create temporary pointer variable
@@ -978,6 +983,14 @@ impl<'a> Parser<'a> {
         }
 
         Ok(expr)
+    }
+
+    fn parse_logor(&mut self) -> CompileResult<Expr> {
+        self.parse_binary_op(Self::parse_logand, Punct::LogOr, BinaryOp::LogOr)
+    }
+
+    fn parse_logand(&mut self) -> CompileResult<Expr> {
+        self.parse_binary_op(Self::parse_bitor, Punct::LogAnd, BinaryOp::LogAnd)
     }
 
     fn parse_bitor(&mut self) -> CompileResult<Expr> {
@@ -1149,7 +1162,10 @@ impl<'a> Parser<'a> {
         location: crate::error::SourceLocation,
     ) -> CompileResult<Expr> {
         self.add_type_expr(&mut node)?;
-        let node_ty = node.ty.clone().ok_or_else(|| self.error_at(location, "node has no type"))?;
+        let node_ty = node
+            .ty
+            .clone()
+            .ok_or_else(|| self.error_at(location, "node has no type"))?;
 
         // Convert to assignment using the binary add expression
         // This transforms: (i + 1) or (i + (-1))
@@ -2028,11 +2044,10 @@ impl<'a> Parser<'a> {
                 self.add_type_expr(expr)?;
                 match op {
                     UnaryOp::Not => Type::Int,
-                    UnaryOp::BitNot => {
-                        expr.ty.clone().unwrap_or(Type::Int)
-                    }
+                    UnaryOp::BitNot => expr.ty.clone().unwrap_or(Type::Int),
                     UnaryOp::Neg => {
-                        let ty = self.get_common_type(&Type::Int, expr.ty.as_ref().unwrap_or(&Type::Int));
+                        let ty = self
+                            .get_common_type(&Type::Int, expr.ty.as_ref().unwrap_or(&Type::Int));
                         self.cast_expr_in_place(expr, ty.clone());
                         ty
                     }
@@ -2119,10 +2134,19 @@ impl<'a> Parser<'a> {
                     self.usual_arith_conv(lhs, rhs)?;
                     Type::Int
                 }
-                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
-                | BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor => {
-                    self.usual_arith_conv(lhs, rhs)?
+                BinaryOp::LogAnd | BinaryOp::LogOr => {
+                    self.add_type_expr(lhs)?;
+                    self.add_type_expr(rhs)?;
+                    Type::Int
                 }
+                BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Mod
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor => self.usual_arith_conv(lhs, rhs)?,
             },
         };
 
