@@ -149,20 +149,19 @@ impl Codegen {
             ExprKind::Addr(expr) => {
                 self.gen_lvalue(expr, function);
             }
-            ExprKind::Deref(expr) => {
-                self.gen_expr(expr, function);
-                self.emit_line("  mov (%rax), %rax");
+            ExprKind::Deref(inner) => {
+                self.gen_expr(inner, function);
+                self.load(expr.ty.as_ref());
             }
             ExprKind::Var(idx) => {
                 self.gen_addr(*idx, function);
-                self.emit_line("  mov (%rax), %rax");
+                self.load(expr.ty.as_ref());
             }
             ExprKind::Assign { lhs, rhs } => {
                 self.gen_lvalue(lhs, function);
                 self.emit_line("  push %rax");
                 self.gen_expr(rhs, function);
-                self.emit_line("  pop %rdi");
-                self.emit_line("  mov %rax, (%rdi)");
+                self.store();
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 self.gen_expr(rhs, function);
@@ -197,6 +196,26 @@ impl Codegen {
                 }
             }
         }
+    }
+
+    fn load(&mut self, ty: Option<&crate::ast::Type>) {
+        // If it is an array, do not attempt to load a value to the
+        // register because in general we can't load an entire array to a
+        // register. As a result, the result of an evaluation of an array
+        // becomes not the array itself but the address of the array.
+        // This is where "array is automatically converted to a pointer to
+        // the first element of the array in C" occurs.
+        if let Some(ty) = ty {
+            if ty.is_array() {
+                return;
+            }
+        }
+        self.emit_line("  mov (%rax), %rax");
+    }
+
+    fn store(&mut self) {
+        self.emit_line("  pop %rdi");
+        self.emit_line("  mov %rax, (%rdi)");
     }
 
     fn emit_epilogue(&mut self) {

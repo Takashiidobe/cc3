@@ -71,7 +71,13 @@ impl<'a> Parser<'a> {
             self.add_type_stmt(stmt)?;
         }
 
-        let stack_size = align_to(self.locals.len() as i32 * 8, 16);
+        // Calculate stack size based on the total size of all locals
+        let total_size = if self.locals.is_empty() {
+            0
+        } else {
+            -self.locals.last().unwrap().offset
+        };
+        let stack_size = align_to(total_size, 16);
         let locals = std::mem::take(&mut self.locals);
         Ok(Function {
             name,
@@ -207,6 +213,25 @@ impl<'a> Parser<'a> {
         }
 
         let token = self.expect_ident_token()?;
+
+        // Parse array suffixes
+        while self.consume_punct(Punct::LBracket) {
+            let size_token = self.peek().clone();
+            match size_token.kind {
+                TokenKind::Num(len) => {
+                    self.pos += 1;
+                    self.expect_punct(Punct::RBracket)?;
+                    ty = Type::Array {
+                        base: Box::new(ty),
+                        len: len as i32,
+                    };
+                }
+                _ => {
+                    return Err(self.error_expected("array size"));
+                }
+            }
+        }
+
         Ok((ty, token))
     }
 
@@ -600,7 +625,12 @@ impl<'a> Parser<'a> {
     }
 
     fn new_lvar(&mut self, name: String, ty: Type) -> usize {
-        let offset = -8 * (self.locals.len() as i32 + 1);
+        let offset = if self.locals.is_empty() {
+            -(ty.size() as i32)
+        } else {
+            let last_offset = self.locals.last().unwrap().offset;
+            last_offset - ty.size() as i32
+        };
         self.locals.push(Obj { name, ty, offset });
         self.locals.len() - 1
     }
@@ -825,13 +855,22 @@ impl<'a> Parser<'a> {
             }
             ExprKind::Addr(expr) => {
                 self.add_type_expr(expr)?;
-                Type::Ptr(Box::new(expr.ty.clone().unwrap_or(Type::Int)))
+                let expr_ty = expr.ty.clone().unwrap_or(Type::Int);
+                // If taking address of array, return pointer to base type
+                // since &array[10] should give int*, not int(*)[10]
+                if let Type::Array { base, .. } = expr_ty {
+                    Type::Ptr(base)
+                } else {
+                    Type::Ptr(Box::new(expr_ty))
+                }
             }
             ExprKind::Deref(expr) => {
                 self.add_type_expr(expr)?;
-                match expr.ty.clone().unwrap_or(Type::Int) {
-                    Type::Ptr(base) => *base,
-                    _ => {
+                let expr_ty = expr.ty.clone().unwrap_or(Type::Int);
+                // Dereference works on pointers and arrays
+                match expr_ty.base() {
+                    Some(base) => base.clone(),
+                    None => {
                         return Err(self.error_at(expr.location, "invalid pointer dereference"));
                     }
                 }
@@ -839,7 +878,12 @@ impl<'a> Parser<'a> {
             ExprKind::Assign { lhs, rhs } => {
                 self.add_type_expr(lhs)?;
                 self.add_type_expr(rhs)?;
-                lhs.ty.clone().unwrap_or(Type::Int)
+                let lhs_ty = lhs.ty.clone().unwrap_or(Type::Int);
+                // Arrays are not assignable
+                if lhs_ty.is_array() {
+                    return Err(self.error_at(lhs.location, "not an lvalue"));
+                }
+                lhs_ty
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 self.add_type_expr(lhs)?;

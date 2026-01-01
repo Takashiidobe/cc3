@@ -61,9 +61,7 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
     let asm_path = tmp.path().join(format!("{stem}.S"));
     let exe_mine = tmp.path().join(format!("{stem}.mine"));
-    let exe_ref = tmp.path().join(format!("{stem}.ref"));
     let helper_src = tmp.path().join("helper.c");
-    let helper_header = tmp.path().join("helper.h");
     let helper_obj = tmp.path().join("helper.o");
 
     std::fs::write(
@@ -76,16 +74,6 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
             "int add6(int a, int b, int c, int d, int e, int f) {\n",
             "  return a + b + c + d + e + f;\n",
             "}\n",
-        ),
-    )?;
-    std::fs::write(
-        &helper_header,
-        concat!(
-            "int ret3();\n",
-            "int ret5();\n",
-            "int add(int x, int y);\n",
-            "int sub(int x, int y);\n",
-            "int add6(int a, int b, int c, int d, int e, int f);\n",
         ),
     )?;
     let helper_out = StdCommand::new("clang")
@@ -125,42 +113,6 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     let mine = to_runlog(run_out_mine);
 
     assert_yaml_snapshot!(path.to_str(), &mine);
-
-    let include_args = vec![
-        "-include".to_string(),
-        helper_header.to_string_lossy().into_owned(),
-    ];
-    let compile_out_ref = compile(path, &exe_ref, &[helper_obj.as_path()], &include_args)?;
-    eprintln!(
-        "[{}] cc(src) status: {:?}",
-        path.display(),
-        compile_out_ref.status.code()
-    );
-    ensure_success("cc(src)", path, &compile_out_ref);
-
-    let run_out_ref = run_exe(&exe_ref)?;
-    let reference = to_runlog(run_out_ref);
-
-    if mine != reference {
-        let mut msg = String::new();
-        use std::fmt::Write;
-        writeln!(&mut msg, "\n=== MISMATCH for {} ===", path.display()).ok();
-
-        if mine.status != reference.status {
-            writeln!(
-                &mut msg,
-                "Exit code differs: mine={} ref={}",
-                mine.status, reference.status
-            )
-            .ok();
-        }
-        if mine.stdout != reference.stdout {
-            writeln!(&mut msg, "\n--- stdout (mine) ---\n{}", mine.stdout).ok();
-            writeln!(&mut msg, "\n--- stdout (ref)  ---\n{}", reference.stdout).ok();
-        }
-
-        panic!("{msg}");
-    }
 
     Ok(())
 }

@@ -101,6 +101,7 @@ pub enum Type {
     Ptr(Box<Type>),
     #[allow(dead_code)]
     Func(Box<Type>),
+    Array { base: Box<Type>, len: i32 },
 }
 
 impl Type {
@@ -112,9 +113,14 @@ impl Type {
         matches!(self, Type::Ptr(_))
     }
 
+    pub fn is_array(&self) -> bool {
+        matches!(self, Type::Array { .. })
+    }
+
     pub fn base(&self) -> Option<&Type> {
         match self {
             Type::Ptr(base) => Some(base),
+            Type::Array { base, .. } => Some(base),
             _ => None,
         }
     }
@@ -124,6 +130,7 @@ impl Type {
             Type::Int => 8,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
+            Type::Array { base, len } => base.size() * (*len as i64),
         }
     }
 }
