@@ -54,6 +54,8 @@ pub enum Punct {
     SubAssign,
     MulAssign,
     DivAssign,
+    Inc,
+    Dec,
     EqEq,
     NotEq,
     Less,
@@ -85,6 +87,8 @@ impl std::fmt::Display for Punct {
             Punct::SubAssign => "-=",
             Punct::MulAssign => "*=",
             Punct::DivAssign => "/=",
+            Punct::Inc => "++",
+            Punct::Dec => "--",
             Punct::EqEq => "==",
             Punct::NotEq => "!=",
             Punct::Less => "<",
@@ -448,6 +452,12 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
     }
     if input.starts_with("/=") {
         return Some((Punct::DivAssign, 2));
+    }
+    if input.starts_with("++") {
+        return Some((Punct::Inc, 2));
+    }
+    if input.starts_with("--") {
+        return Some((Punct::Dec, 2));
     }
     if input.starts_with("=") {
         return Some((Punct::Assign, 1));

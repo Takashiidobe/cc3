@@ -1090,6 +1090,22 @@ impl<'a> Parser<'a> {
             return Ok(self.expr_at(ExprKind::Deref(Box::new(expr)), location));
         }
 
+        // ++i => i+=1
+        if self.consume_punct(Punct::Inc) {
+            let location = self.last_location();
+            let expr = self.parse_unary()?;
+            let one = self.expr_at(ExprKind::Num(1), location);
+            return self.to_assign(expr, one, BinaryOp::Add, location);
+        }
+
+        // --i => i-=1
+        if self.consume_punct(Punct::Dec) {
+            let location = self.last_location();
+            let expr = self.parse_unary()?;
+            let one = self.expr_at(ExprKind::Num(1), location);
+            return self.to_assign(expr, one, BinaryOp::Sub, location);
+        }
+
         self.parse_postfix()
     }
 
