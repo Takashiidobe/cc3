@@ -124,21 +124,8 @@ impl<'a> Parser<'a> {
 
         if !is_definition {
             // Function declaration - no body
-            let func = Obj {
-                name,
-                ty: Type::Func(Box::new(basety)),
-                is_local: false,
-                offset: 0,
-                is_function: true,
-                is_definition: false,
-                init_data: None,
-                params: vec![],
-                body: vec![],
-                locals: vec![],
-                stack_size: 0,
-            };
+            self.new_function_decl(name, Type::Func(Box::new(basety)));
             self.leave_scope();
-            self.globals.push(func);
             return Ok(());
         }
 
@@ -161,24 +148,20 @@ impl<'a> Parser<'a> {
         let stack_size = assign_lvar_offsets(&mut locals);
 
         // Create function object
-        let func = Obj {
+        let params = param_indices
+            .iter()
+            .map(|idx| locals[*idx].clone())
+            .collect();
+
+        self.new_function_def(
             name,
-            ty: Type::Func(Box::new(basety)),
-            is_local: false,
-            offset: 0,
-            is_function: true,
-            is_definition: true,
-            init_data: None,
-            params: param_indices
-                .iter()
-                .map(|idx| locals[*idx].clone())
-                .collect(),
+            Type::Func(Box::new(basety)),
+            params,
             body,
             locals,
             stack_size,
-        };
+        );
         self.leave_scope();
-        self.globals.push(func);
         Ok(())
     }
 
@@ -1083,6 +1066,38 @@ impl<'a> Parser<'a> {
         });
         self.push_scope(idx, false);
         idx
+    }
+
+    fn new_function_decl(&mut self, name: String, ty: Type) {
+        self.globals.push(Obj {
+            name,
+            ty,
+            is_local: false,
+            offset: 0,
+            is_function: true,
+            is_definition: false,
+            init_data: None,
+            params: vec![],
+            body: vec![],
+            locals: vec![],
+            stack_size: 0,
+        });
+    }
+
+    fn new_function_def(&mut self, name: String, ty: Type, params: Vec<Obj>, body: Vec<Stmt>, locals: Vec<Obj>, stack_size: i32) {
+        self.globals.push(Obj {
+            name,
+            ty,
+            is_local: false,
+            offset: 0,
+            is_function: true,
+            is_definition: true,
+            init_data: None,
+            params,
+            body,
+            locals,
+            stack_size,
+        });
     }
 
     fn new_unique_name(&mut self) -> String {
