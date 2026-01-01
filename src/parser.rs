@@ -321,6 +321,33 @@ impl<'a> Parser<'a> {
             ty = Type::Ptr(Box::new(ty));
         }
 
+        // Handle nested declarators: "(" declarator ")"
+        if self.check_punct(Punct::LParen) {
+            let start_pos = self.pos;
+            self.pos += 1; // consume '('
+
+            // First pass: parse declarator with dummy type to find where it ends
+            let dummy = Type::Char;
+            let _ = self.parse_declarator(dummy)?;
+
+            // Skip ')'
+            self.expect_punct(Punct::RParen)?;
+
+            // Parse the suffix (arrays, etc.) and apply to current type
+            // Save position after suffix - this is where the caller should continue
+            ty = self.parse_array_suffix(ty)?;
+            let final_pos = self.pos;
+
+            // Second pass: re-parse the declarator with the suffix-applied type
+            self.pos = start_pos + 1; // reset to after '('
+            let (final_ty, ident_token) = self.parse_declarator(ty)?;
+
+            // Restore position to after the suffix (where the caller should continue)
+            self.pos = final_pos;
+
+            return Ok((final_ty, ident_token));
+        }
+
         let token = self.expect_ident_token()?;
 
         // Parse array suffixes recursively to get correct nesting order
