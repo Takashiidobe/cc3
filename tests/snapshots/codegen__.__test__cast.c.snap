@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "(int)8590066177 => 131585\n(short)8590066177 => 513\n(char)8590066177 => 1\n(long)1 => 1\n(long)&*(int *)0 => 0\n({ int x=512; *(char *)&x=1; x; }) => 513\n({ int x=5; long y=(long)&x; *(int*)y; }) => 5\nOK\n"
+status: 0

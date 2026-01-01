@@ -798,7 +798,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_mul(&mut self) -> CompileResult<Expr> {
-        let mut expr = self.parse_unary()?;
+        let mut expr = self.parse_cast()?;
 
         loop {
             let op = if self.consume_punct(Punct::Star) {
@@ -810,7 +810,7 @@ impl<'a> Parser<'a> {
             };
 
             let location = self.last_location();
-            let rhs = self.parse_unary()?;
+            let rhs = self.parse_cast()?;
             expr = self.expr_at(
                 ExprKind::Binary {
                     op,
@@ -824,13 +824,32 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    fn parse_cast(&mut self) -> CompileResult<Expr> {
+        if self.check_punct(Punct::LParen) && self.is_typename_token(self.peek_n(1)) {
+            self.expect_punct(Punct::LParen)?;
+            let location = self.last_location();
+            let ty = self.parse_typename()?;
+            self.expect_punct(Punct::RParen)?;
+            let expr = self.parse_cast()?;
+            return Ok(self.expr_at(
+                ExprKind::Cast {
+                    expr: Box::new(expr),
+                    ty,
+                },
+                location,
+            ));
+        }
+
+        self.parse_unary()
+    }
+
     fn parse_unary(&mut self) -> CompileResult<Expr> {
         if self.consume_punct(Punct::Plus) {
-            return self.parse_unary();
+            return self.parse_cast();
         }
         if self.consume_punct(Punct::Minus) {
             let location = self.last_location();
-            let expr = self.parse_unary()?;
+            let expr = self.parse_cast()?;
             return Ok(self.expr_at(
                 ExprKind::Unary {
                     op: UnaryOp::Neg,
@@ -842,13 +861,13 @@ impl<'a> Parser<'a> {
 
         if self.consume_punct(Punct::Amp) {
             let location = self.last_location();
-            let expr = self.parse_unary()?;
+            let expr = self.parse_cast()?;
             return Ok(self.expr_at(ExprKind::Addr(Box::new(expr)), location));
         }
 
         if self.consume_punct(Punct::Star) {
             let location = self.last_location();
-            let expr = self.parse_unary()?;
+            let expr = self.parse_cast()?;
             return Ok(self.expr_at(ExprKind::Deref(Box::new(expr)), location));
         }
 
@@ -1644,6 +1663,10 @@ impl<'a> Parser<'a> {
                 lhs_ty
             }
             ExprKind::Member { member, .. } => member.ty.clone(),
+            ExprKind::Cast { expr, ty } => {
+                self.add_type_expr(expr)?;
+                ty.clone()
+            }
             ExprKind::Comma { lhs, rhs } => {
                 self.add_type_expr(lhs)?;
                 self.add_type_expr(rhs)?;

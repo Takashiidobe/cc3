@@ -177,6 +177,11 @@ impl Codegen {
                     }
                 }
             }
+            ExprKind::Cast { expr, ty } => {
+                self.gen_expr(expr, function, globals);
+                let from = expr.ty.as_ref().unwrap_or(&Type::Int);
+                self.cast(from, ty);
+            }
             ExprKind::Call { name, args } => {
                 let mut nargs = 0;
                 for arg in args {
@@ -265,6 +270,38 @@ impl Codegen {
                     }
                 }
             }
+        }
+    }
+
+    fn type_id(&self, ty: &Type) -> usize {
+        match ty {
+            Type::Char => 0,
+            Type::Short => 1,
+            Type::Int => 2,
+            _ => 3,
+        }
+    }
+
+    fn cast(&mut self, from: &Type, to: &Type) {
+        if matches!(to, Type::Void) {
+            return;
+        }
+
+        const I32I8: &str = "movsbl %al, %eax";
+        const I32I16: &str = "movswl %ax, %eax";
+        const I32I64: &str = "movslq %eax, %rax";
+
+        const CAST_TABLE: [[Option<&str>; 4]; 4] = [
+            [None, None, None, Some(I32I64)],
+            [Some(I32I8), None, None, Some(I32I64)],
+            [Some(I32I8), Some(I32I16), None, Some(I32I64)],
+            [Some(I32I8), Some(I32I16), None, None],
+        ];
+
+        let t1 = self.type_id(from);
+        let t2 = self.type_id(to);
+        if let Some(insn) = CAST_TABLE[t1][t2] {
+            self.emit_line(&format!("  {}", insn));
         }
     }
 

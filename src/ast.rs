@@ -74,6 +74,10 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         member: Member,
     },
+    Cast {
+        expr: Box<Expr>,
+        ty: Type,
+    },
     Binary {
         op: BinaryOp,
         lhs: Box<Expr>,
