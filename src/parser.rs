@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
+use crate::ast::{BinaryOp, Expr, ExprKind, Function, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
 use crate::error::{CompileError, CompileResult};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
 
@@ -23,15 +23,22 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_program(&mut self) -> CompileResult<Program> {
+        let mut functions = Vec::new();
+        while !self.check_eof() {
+            functions.push(self.parse_function()?);
+        }
+        Ok(Program { functions })
+    }
+
+    fn parse_function(&mut self) -> CompileResult<Function> {
         self.expect_keyword(Keyword::Int)?;
         let name = self.expect_ident()?;
-        if name != "main" {
-            return Err(self.error_here(format!("expected function name 'main', got '{name}'")));
-        }
 
         self.expect_punct(Punct::LParen)?;
         self.expect_punct(Punct::RParen)?;
         self.expect_punct(Punct::LBrace)?;
+
+        self.locals.clear();
 
         let mut body = Vec::new();
         while !self.check_punct(Punct::RBrace) {
@@ -39,7 +46,6 @@ impl<'a> Parser<'a> {
         }
 
         self.expect_punct(Punct::RBrace)?;
-        self.expect_eof()?;
 
         for stmt in &mut body {
             self.add_type_stmt(stmt)?;
@@ -47,7 +53,8 @@ impl<'a> Parser<'a> {
 
         let stack_size = align_to(self.locals.len() as i32 * 8, 16);
         let locals = std::mem::take(&mut self.locals);
-        Ok(Program {
+        Ok(Function {
+            name,
             body,
             locals,
             stack_size,
@@ -490,12 +497,17 @@ impl<'a> Parser<'a> {
         matches!(self.peek().kind, TokenKind::Punct(found) if found == punct)
     }
 
+    #[allow(dead_code)]
     fn expect_eof(&mut self) -> CompileResult<()> {
         let token = self.peek().clone();
         match token.kind {
             TokenKind::Eof => Ok(()),
             _ => Err(self.error_expected("end of file")),
         }
+    }
+
+    fn check_eof(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::Eof)
     }
 
     fn peek(&self) -> &Token {

@@ -2,6 +2,12 @@ use crate::error::SourceLocation;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
+    pub functions: Vec<Function>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Function {
+    pub name: String,
     pub body: Vec<Stmt>,
     pub locals: Vec<Obj>,
     pub stack_size: i32,
@@ -92,6 +98,8 @@ pub struct Obj {
 pub enum Type {
     Int,
     Ptr(Box<Type>),
+    #[allow(dead_code)]
+    Func(Box<Type>),
 }
 
 impl Type {
@@ -114,6 +122,7 @@ impl Type {
         match self {
             Type::Int => 8,
             Type::Ptr(_) => 8,
+            Type::Func(_) => 8,
         }
     }
 }

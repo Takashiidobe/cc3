@@ -1,10 +1,11 @@
-use crate::ast::{BinaryOp, Expr, ExprKind, Program, Stmt, StmtKind, UnaryOp};
+use crate::ast::{BinaryOp, Expr, ExprKind, Function, Program, Stmt, StmtKind, UnaryOp};
 
 const ARG_REGS: [&str; 6] = ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"];
 
 pub struct Codegen {
     buffer: String,
     label_counter: usize,
+    current_fn: Option<String>,
 }
 
 impl Codegen {
@@ -12,20 +13,30 @@ impl Codegen {
         Self {
             buffer: String::new(),
             label_counter: 0,
+            current_fn: None,
         }
     }
 
     pub fn generate(mut self, program: &Program) -> String {
-        self.emit_line("  .globl main");
-        self.emit_line("main:");
+        for function in &program.functions {
+            self.generate_function(function);
+        }
+        self.buffer
+    }
+
+    fn generate_function(&mut self, function: &Function) {
+        self.current_fn = Some(function.name.clone());
+
+        self.emit_line(&format!("  .globl {}", function.name));
+        self.emit_line(&format!("{}:", function.name));
         self.emit_line("  push %rbp");
         self.emit_line("  mov %rsp, %rbp");
-        self.emit_line(&format!("  sub ${}, %rsp", program.stack_size));
+        self.emit_line(&format!("  sub ${}, %rsp", function.stack_size));
 
         let mut last_was_return = false;
-        for stmt in &program.body {
+        for stmt in &function.body {
             last_was_return = matches!(stmt.kind, StmtKind::Return(_));
-            self.gen_stmt(stmt, program);
+            self.gen_stmt(stmt, function);
         }
 
         if !last_was_return {
@@ -33,8 +44,6 @@ impl Codegen {
             self.emit_epilogue();
             self.emit_line("  ret");
         }
-
-        self.buffer
     }
 
     fn emit_line(&mut self, line: &str) {
@@ -47,27 +56,27 @@ impl Codegen {
         self.label_counter
     }
 
-    fn gen_stmt(&mut self, stmt: &Stmt, program: &Program) {
+    fn gen_stmt(&mut self, stmt: &Stmt, function: &Function) {
         match &stmt.kind {
             StmtKind::Return(expr) => {
-                self.gen_expr(expr, program);
+                self.gen_expr(expr, function);
                 self.emit_epilogue();
                 self.emit_line("  ret");
             }
             StmtKind::If { cond, then, els } => {
                 let label = self.next_label();
-                self.gen_expr(cond, program);
+                self.gen_expr(cond, function);
                 self.emit_line("  cmp $0, %rax");
                 if let Some(els) = els {
                     self.emit_line(&format!("  je .L.else.{}", label));
-                    self.gen_stmt(then, program);
+                    self.gen_stmt(then, function);
                     self.emit_line(&format!("  jmp .L.end.{}", label));
                     self.emit_line(&format!(".L.else.{}:", label));
-                    self.gen_stmt(els, program);
+                    self.gen_stmt(els, function);
                     self.emit_line(&format!(".L.end.{}:", label));
                 } else {
                     self.emit_line(&format!("  je .L.end.{}", label));
-                    self.gen_stmt(then, program);
+                    self.gen_stmt(then, function);
                     self.emit_line(&format!(".L.end.{}:", label));
                 }
             }
@@ -79,40 +88,40 @@ impl Codegen {
             } => {
                 let label = self.next_label();
                 if let Some(init) = init {
-                    self.gen_stmt(init, program);
+                    self.gen_stmt(init, function);
                 }
                 self.emit_line(&format!(".L.begin.{}:", label));
                 if let Some(cond) = cond {
-                    self.gen_expr(cond, program);
+                    self.gen_expr(cond, function);
                     self.emit_line("  cmp $0, %rax");
                     self.emit_line(&format!("  je .L.end.{}", label));
                 }
-                self.gen_stmt(body, program);
+                self.gen_stmt(body, function);
                 if let Some(inc) = inc {
-                    self.gen_expr(inc, program);
+                    self.gen_expr(inc, function);
                 }
                 self.emit_line(&format!("  jmp .L.begin.{}", label));
                 self.emit_line(&format!(".L.end.{}:", label));
             }
             StmtKind::Block(stmts) => {
                 for stmt in stmts {
-                    self.gen_stmt(stmt, program);
+                    self.gen_stmt(stmt, function);
                 }
             }
             StmtKind::Expr(expr) => {
-                self.gen_expr(expr, program);
+                self.gen_expr(expr, function);
             }
             StmtKind::Decl(_) => {}
         }
     }
 
-    fn gen_expr(&mut self, expr: &Expr, program: &Program) {
+    fn gen_expr(&mut self, expr: &Expr, function: &Function) {
         match &expr.kind {
             ExprKind::Num(value) => {
                 self.emit_line(&format!("  mov ${}, %rax", value));
             }
             ExprKind::Unary { op, expr } => {
-                self.gen_expr(expr, program);
+                self.gen_expr(expr, function);
                 match op {
                     UnaryOp::Neg => {
                         self.emit_line("  neg %rax");
@@ -122,7 +131,7 @@ impl Codegen {
             ExprKind::Call { name, args } => {
                 let mut nargs = 0;
                 for arg in args {
-                    self.gen_expr(arg, program);
+                    self.gen_expr(arg, function);
                     self.emit_line("  push %rax");
                     nargs += 1;
                 }
@@ -133,27 +142,27 @@ impl Codegen {
                 self.emit_line(&format!("  call {}", name));
             }
             ExprKind::Addr(expr) => {
-                self.gen_lvalue(expr, program);
+                self.gen_lvalue(expr, function);
             }
             ExprKind::Deref(expr) => {
-                self.gen_expr(expr, program);
+                self.gen_expr(expr, function);
                 self.emit_line("  mov (%rax), %rax");
             }
             ExprKind::Var(idx) => {
-                self.gen_addr(*idx, program);
+                self.gen_addr(*idx, function);
                 self.emit_line("  mov (%rax), %rax");
             }
             ExprKind::Assign { lhs, rhs } => {
-                self.gen_lvalue(lhs, program);
+                self.gen_lvalue(lhs, function);
                 self.emit_line("  push %rax");
-                self.gen_expr(rhs, program);
+                self.gen_expr(rhs, function);
                 self.emit_line("  pop %rdi");
                 self.emit_line("  mov %rax, (%rdi)");
             }
             ExprKind::Binary { op, lhs, rhs } => {
-                self.gen_expr(rhs, program);
+                self.gen_expr(rhs, function);
                 self.emit_line("  push %rax");
-                self.gen_expr(lhs, program);
+                self.gen_expr(lhs, function);
                 self.emit_line("  pop %rdi");
                 match op {
                     BinaryOp::Add => {
@@ -190,15 +199,15 @@ impl Codegen {
         self.emit_line("  pop %rbp");
     }
 
-    fn gen_addr(&mut self, idx: usize, program: &Program) {
-        let offset = program.locals[idx].offset;
+    fn gen_addr(&mut self, idx: usize, function: &Function) {
+        let offset = function.locals[idx].offset;
         self.emit_line(&format!("  lea {}(%rbp), %rax", offset));
     }
 
-    fn gen_lvalue(&mut self, expr: &Expr, program: &Program) {
+    fn gen_lvalue(&mut self, expr: &Expr, function: &Function) {
         match &expr.kind {
-            ExprKind::Var(idx) => self.gen_addr(*idx, program),
-            ExprKind::Deref(expr) => self.gen_expr(expr, program),
+            ExprKind::Var(idx) => self.gen_addr(*idx, function),
+            ExprKind::Deref(expr) => self.gen_expr(expr, function),
             _ => self.emit_line("  mov $0, %rax"),
         }
     }
