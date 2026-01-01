@@ -6,6 +6,13 @@ pub struct Program {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Member {
+    pub name: String,
+    pub ty: Type,
+    pub offset: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Stmt {
     pub kind: StmtKind,
     pub location: SourceLocation,
@@ -63,6 +70,10 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    Member {
+        lhs: Box<Expr>,
+        member: Member,
+    },
     Binary {
         op: BinaryOp,
         lhs: Box<Expr>,
@@ -116,6 +127,9 @@ pub enum Type {
     Ptr(Box<Type>),
     #[allow(dead_code)]
     Func(Box<Type>),
+    Struct {
+        members: Vec<Member>,
+    },
     Array {
         base: Box<Type>,
         len: i32,
@@ -149,6 +163,7 @@ impl Type {
             Type::Int => 8,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
+            Type::Struct { members } => members.iter().map(|member| member.ty.size()).sum(),
             Type::Array { base, len } => base.size() * (*len as i64),
         }
     }

@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
+use crate::ast::{BinaryOp, Expr, ExprKind, Member, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
 use crate::error::{CompileError, CompileResult};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
 
@@ -59,6 +59,8 @@ impl<'a> Parser<'a> {
     fn parse_declspec(&mut self) -> CompileResult<Type> {
         if self.consume_keyword(Keyword::Char) {
             Ok(Type::Char)
+        } else if self.consume_keyword(Keyword::Struct) {
+            self.parse_struct_decl()
         } else {
             self.expect_keyword(Keyword::Int)?;
             Ok(Type::Int)
@@ -68,7 +70,7 @@ impl<'a> Parser<'a> {
     fn is_typename(&self) -> bool {
         matches!(
             self.peek().kind,
-            TokenKind::Keyword(Keyword::Char | Keyword::Int)
+            TokenKind::Keyword(Keyword::Char | Keyword::Int | Keyword::Struct)
         )
     }
 
@@ -312,6 +314,47 @@ impl<'a> Parser<'a> {
         Ok((ty, token))
     }
 
+    fn parse_struct_decl(&mut self) -> CompileResult<Type> {
+        self.expect_punct(Punct::LBrace)?;
+        let mut members = self.parse_struct_members()?;
+        let mut offset = 0i32;
+        for member in &mut members {
+            member.offset = offset;
+            offset += member.ty.size() as i32;
+        }
+        Ok(Type::Struct { members })
+    }
+
+    fn parse_struct_members(&mut self) -> CompileResult<Vec<Member>> {
+        let mut members = Vec::new();
+        while !self.check_punct(Punct::RBrace) {
+            let basety = self.parse_declspec()?;
+            let mut first = true;
+
+            while !self.check_punct(Punct::Semicolon) {
+                if !first {
+                    self.expect_punct(Punct::Comma)?;
+                }
+                first = false;
+                let (ty, name_token) = self.parse_declarator(basety.clone())?;
+                let name = match name_token.kind {
+                    TokenKind::Ident(name) => name,
+                    _ => return Err(self.error_at(name_token.location, "member name expected")),
+                };
+                members.push(Member {
+                    name,
+                    ty,
+                    offset: 0,
+                });
+            }
+
+            self.expect_punct(Punct::Semicolon)?;
+        }
+
+        self.expect_punct(Punct::RBrace)?;
+        Ok(members)
+    }
+
     fn parse_array_suffix(&mut self, ty: Type) -> CompileResult<Type> {
         if !self.consume_punct(Punct::LBracket) {
             return Ok(ty);
@@ -388,7 +431,7 @@ impl<'a> Parser<'a> {
 
     fn is_lvalue(&self, expr: &Expr) -> bool {
         match &expr.kind {
-            ExprKind::Var { .. } | ExprKind::Deref(_) => true,
+            ExprKind::Var { .. } | ExprKind::Deref(_) | ExprKind::Member { .. } => true,
             ExprKind::Comma { rhs, .. } => self.is_lvalue(rhs),
             _ => false,
         }
@@ -574,17 +617,51 @@ impl<'a> Parser<'a> {
         let mut expr = self.parse_primary()?;
 
         // Handle array subscript: x[y] is equivalent to *(x+y)
-        while self.consume_punct(Punct::LBracket) {
-            let location = self.last_location();
-            let index = self.parse_expr()?;
-            self.expect_punct(Punct::RBracket)?;
+        loop {
+            if self.consume_punct(Punct::LBracket) {
+                let location = self.last_location();
+                let index = self.parse_expr()?;
+                self.expect_punct(Punct::RBracket)?;
 
-            // Transform x[y] to *(x+y)
-            let add_expr = self.new_add(expr, index, location)?;
-            expr = self.expr_at(ExprKind::Deref(Box::new(add_expr)), location);
+                // Transform x[y] to *(x+y)
+                let add_expr = self.new_add(expr, index, location)?;
+                expr = self.expr_at(ExprKind::Deref(Box::new(add_expr)), location);
+                continue;
+            }
+
+            if self.consume_punct(Punct::Dot) {
+                let name_token = self.expect_ident_token()?;
+                expr = self.struct_ref(expr, name_token)?;
+                continue;
+            }
+
+            break;
         }
 
         Ok(expr)
+    }
+
+    fn struct_ref(&self, mut lhs: Expr, name_token: Token) -> CompileResult<Expr> {
+        self.add_type_expr(&mut lhs)?;
+        let Type::Struct { members } = lhs.ty.clone().unwrap_or(Type::Int) else {
+            return Err(self.error_at(lhs.location, "not a struct"));
+        };
+        let name = match name_token.kind {
+            TokenKind::Ident(name) => name,
+            _ => return Err(self.error_at(name_token.location, "member name expected")),
+        };
+        let member = members
+            .iter()
+            .find(|member| member.name == name)
+            .cloned()
+            .ok_or_else(|| self.error_at(name_token.location, "no such member"))?;
+        Ok(self.expr_at(
+            ExprKind::Member {
+                lhs: Box::new(lhs),
+                member,
+            },
+            name_token.location,
+        ))
     }
 
     fn parse_primary(&mut self) -> CompileResult<Expr> {
@@ -1183,6 +1260,7 @@ impl<'a> Parser<'a> {
                 }
                 lhs_ty
             }
+            ExprKind::Member { member, .. } => member.ty.clone(),
             ExprKind::Comma { lhs, rhs } => {
                 self.add_type_expr(lhs)?;
                 self.add_type_expr(rhs)?;

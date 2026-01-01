@@ -193,6 +193,10 @@ impl Codegen {
                 self.gen_addr(*idx, *is_local, function, globals);
                 self.load(expr.ty.as_ref());
             }
+            ExprKind::Member { .. } => {
+                self.gen_lvalue(expr, function, globals);
+                self.load(expr.ty.as_ref());
+            }
             ExprKind::StmtExpr(stmts) => {
                 for stmt in stmts {
                     self.gen_stmt(stmt, function, globals);
@@ -297,6 +301,10 @@ impl Codegen {
             ExprKind::Comma { lhs, rhs } => {
                 self.gen_expr(lhs, function, globals);
                 self.gen_lvalue(rhs, function, globals);
+            }
+            ExprKind::Member { lhs, member } => {
+                self.gen_lvalue(lhs, function, globals);
+                self.emit_line(&format!("  add ${}, %rax", member.offset));
             }
             _ => self.emit_line("  mov $0, %rax"),
         }
