@@ -130,6 +130,9 @@ pub enum Type {
     Struct {
         members: Vec<Member>,
     },
+    Union {
+        members: Vec<Member>,
+    },
     Array {
         base: Box<Type>,
         len: i32,
@@ -173,6 +176,15 @@ impl Type {
                 // Round up to alignment
                 ((size + align - 1) / align) * align
             }
+            Type::Union { members } => {
+                if members.is_empty() {
+                    return 0;
+                }
+                let align = self.align();
+                let max_size = members.iter().map(|m| m.ty.size()).max().unwrap_or(0);
+                // Round up to alignment
+                ((max_size + align - 1) / align) * align
+            }
             Type::Array { base, len } => base.size() * (*len as i64),
         }
     }
@@ -183,7 +195,7 @@ impl Type {
             Type::Int => 8,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
-            Type::Struct { members } => {
+            Type::Struct { members } | Type::Union { members } => {
                 if members.is_empty() {
                     return 1;
                 }

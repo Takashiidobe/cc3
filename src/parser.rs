@@ -70,6 +70,8 @@ impl<'a> Parser<'a> {
             Ok(Type::Char)
         } else if self.consume_keyword(Keyword::Struct) {
             self.parse_struct_decl()
+        } else if self.consume_keyword(Keyword::Union) {
+            self.parse_union_decl()
         } else {
             self.expect_keyword(Keyword::Int)?;
             Ok(Type::Int)
@@ -79,7 +81,7 @@ impl<'a> Parser<'a> {
     fn is_typename(&self) -> bool {
         matches!(
             self.peek().kind,
-            TokenKind::Keyword(Keyword::Char | Keyword::Int | Keyword::Struct)
+            TokenKind::Keyword(Keyword::Char | Keyword::Int | Keyword::Struct | Keyword::Union)
         )
     }
 
@@ -323,8 +325,9 @@ impl<'a> Parser<'a> {
         Ok((ty, token))
     }
 
-    fn parse_struct_decl(&mut self) -> CompileResult<Type> {
-        // Read a struct tag (optional identifier)
+    // Shared parsing logic for struct/union declarations
+    fn parse_struct_union_decl(&mut self) -> CompileResult<(Option<Token>, Vec<Member>)> {
+        // Read a tag (optional identifier)
         let tag = if matches!(self.peek().kind, TokenKind::Ident(_)) {
             let tag_token = self.peek().clone();
             self.pos += 1;
@@ -333,7 +336,7 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // If we have a tag but no opening brace, look up the existing struct type
+        // If we have a tag but no opening brace, look up the existing type
         if tag.is_some() && !self.check_punct(Punct::LBrace) {
             let tag_token = tag.as_ref().unwrap();
             let name = match &tag_token.kind {
@@ -341,16 +344,25 @@ impl<'a> Parser<'a> {
                 _ => unreachable!(),
             };
             match self.find_tag(name) {
-                Some(ty) => return Ok(ty),
-                None => {
-                    return Err(self.error_at(tag_token.location, "unknown struct type"));
+                Some(Type::Struct { members }) | Some(Type::Union { members }) => {
+                    return Ok((None, members));
+                }
+                _ => {
+                    return Err(self.error_at(tag_token.location, "unknown struct/union type"));
                 }
             }
         }
 
-        // Parse struct members
+        // Parse members
         self.expect_punct(Punct::LBrace)?;
-        let mut members = self.parse_struct_members()?;
+        let members = self.parse_struct_members()?;
+        Ok((tag, members))
+    }
+
+    fn parse_struct_decl(&mut self) -> CompileResult<Type> {
+        let (tag, mut members) = self.parse_struct_union_decl()?;
+
+        // Assign offsets within the struct to members
         let mut offset = 0i32;
         for member in &mut members {
             // Align offset to member's type alignment
@@ -362,6 +374,25 @@ impl<'a> Parser<'a> {
         let ty = Type::Struct { members };
 
         // Register the struct type if a tag was given
+        if let Some(tag_token) = tag {
+            let name = match tag_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => unreachable!(),
+            };
+            self.push_tag_scope(name, ty.clone());
+        }
+
+        Ok(ty)
+    }
+
+    fn parse_union_decl(&mut self) -> CompileResult<Type> {
+        let (tag, members) = self.parse_struct_union_decl()?;
+
+        // All union members start at offset 0 (already initialized to 0)
+
+        let ty = Type::Union { members };
+
+        // Register the union type if a tag was given
         if let Some(tag_token) = tag {
             let name = match tag_token.kind {
                 TokenKind::Ident(name) => name,
@@ -700,8 +731,9 @@ impl<'a> Parser<'a> {
 
     fn struct_ref(&self, mut lhs: Expr, name_token: Token) -> CompileResult<Expr> {
         self.add_type_expr(&mut lhs)?;
-        let Type::Struct { members } = lhs.ty.clone().unwrap_or(Type::Int) else {
-            return Err(self.error_at(lhs.location, "not a struct"));
+        let members = match lhs.ty.clone().unwrap_or(Type::Int) {
+            Type::Struct { members } | Type::Union { members } => members,
+            _ => return Err(self.error_at(lhs.location, "not a struct nor a union")),
         };
         let name = match name_token.kind {
             TokenKind::Ident(name) => name,
