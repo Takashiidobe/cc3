@@ -165,7 +165,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             while p < end {
                 if bytes[p] == b'\\' {
                     let mut escaped_pos = p + 1;
-                    let escaped = read_escaped_char(bytes, &mut escaped_pos);
+                    let escaped = read_escaped_char(bytes, &mut escaped_pos, location)?;
                     str_bytes.push(escaped);
                     p = escaped_pos;
                 } else {
@@ -226,9 +226,9 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
     Ok(tokens)
 }
 
-fn read_escaped_char(input: &[u8], pos: &mut usize) -> u8 {
+fn read_escaped_char(input: &[u8], pos: &mut usize, location: SourceLocation) -> CompileResult<u8> {
     if *pos >= input.len() {
-        return 0;
+        return Ok(0);
     }
 
     let b = input[*pos];
@@ -243,11 +243,24 @@ fn read_escaped_char(input: &[u8], pos: &mut usize) -> u8 {
                 *pos += 1;
             }
         }
-        return value;
+        return Ok(value);
+    }
+
+    if b == b'x' {
+        *pos += 1;
+        if *pos >= input.len() || !is_hex_digit(input[*pos]) {
+            return Err(CompileError::at("invalid hex escape sequence", location));
+        }
+        let mut value: u32 = 0;
+        while *pos < input.len() && is_hex_digit(input[*pos]) {
+            value = (value << 4) + from_hex(input[*pos]);
+            *pos += 1;
+        }
+        return Ok(value as u8);
     }
 
     *pos += 1;
-    match b {
+    Ok(match b {
         b'a' => b'\x07',
         b'b' => b'\x08',
         b't' => b'\t',
@@ -257,7 +270,7 @@ fn read_escaped_char(input: &[u8], pos: &mut usize) -> u8 {
         b'r' => b'\r',
         b'e' => 27,
         _ => b,
-    }
+    })
 }
 
 fn string_literal_end(
@@ -279,6 +292,18 @@ fn string_literal_end(
         pos += 1;
     }
     Err(CompileError::at("unclosed string literal", start_location))
+}
+
+fn is_hex_digit(b: u8) -> bool {
+    b.is_ascii_hexdigit()
+}
+
+fn from_hex(b: u8) -> u32 {
+    match b {
+        b'0'..=b'9' => (b - b'0') as u32,
+        b'a'..=b'f' => (b - b'a' + 10) as u32,
+        _ => (b - b'A' + 10) as u32,
+    }
 }
 
 fn is_ident_start(b: u8) -> bool {
