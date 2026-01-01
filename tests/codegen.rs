@@ -100,23 +100,13 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
         .arg(&asm_path)
         .stderr(Stdio::piped())
         .output()?;
-    eprintln!(
-        "[{}] codegen status: {:?}",
-        path.display(),
-        codegen_out.status.code()
-    );
     ensure_success("codegen", path, &codegen_out);
 
     let compile_out_mine = compile(&asm_path, &exe_mine, &[common_obj.as_path()], &[])?;
-    eprintln!(
-        "[{}] cc(asm) status: {:?}",
-        path.display(),
-        compile_out_mine.status.code()
-    );
     ensure_success("cc(asm)", path, &compile_out_mine);
 
     let run_out_mine = run_exe(&exe_mine)?;
-    let mine = to_runlog(run_out_mine);
+    let mine = to_runlog(run_out_mine.clone());
 
     // Only persist snapshot if test passed (status 0)
     // This prevents accepting incorrect tests and shows what failed

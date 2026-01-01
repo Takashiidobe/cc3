@@ -1,4 +1,4 @@
-use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, UnaryOp};
+use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
 
 const ARG_REGS_8: [&str; 6] = ["%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"];
 const ARG_REGS_16: [&str; 6] = ["%di", "%si", "%dx", "%cx", "%r8w", "%r9w"];
@@ -225,22 +225,35 @@ impl Codegen {
                 self.emit_line("  push %rax");
                 self.gen_expr(lhs, function, globals);
                 self.emit_line("  pop %rdi");
+                let lhs_ty = lhs.ty.as_ref().unwrap_or(&Type::Int);
+                let rhs_ty = rhs.ty.as_ref().unwrap_or(&Type::Int);
+                let use_64 = matches!(lhs_ty, Type::Long | Type::Ptr(_) | Type::Array { .. })
+                    || matches!(rhs_ty, Type::Long | Type::Ptr(_) | Type::Array { .. });
+                let ax = if use_64 { "%rax" } else { "%eax" };
+                let di = if use_64 { "%rdi" } else { "%edi" };
+                if use_64 && rhs_ty.size() < 8 {
+                    self.emit_line("  movslq %edi, %rdi");
+                }
                 match op {
                     BinaryOp::Add => {
-                        self.emit_line("  add %rdi, %rax");
+                        self.emit_line(&format!("  add {}, {}", di, ax));
                     }
                     BinaryOp::Sub => {
-                        self.emit_line("  sub %rdi, %rax");
+                        self.emit_line(&format!("  sub {}, {}", di, ax));
                     }
                     BinaryOp::Mul => {
-                        self.emit_line("  imul %rdi, %rax");
+                        self.emit_line(&format!("  imul {}, {}", di, ax));
                     }
                     BinaryOp::Div => {
-                        self.emit_line("  cqo");
-                        self.emit_line("  idiv %rdi");
+                        if lhs_ty.size() == 8 {
+                            self.emit_line("  cqo");
+                        } else {
+                            self.emit_line("  cdq");
+                        }
+                        self.emit_line(&format!("  idiv {}", di));
                     }
                     BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => {
-                        self.emit_line("  cmp %rdi, %rax");
+                        self.emit_line(&format!("  cmp {}, {}", di, ax));
                         match op {
                             BinaryOp::Eq => self.emit_line("  sete %al"),
                             BinaryOp::Ne => self.emit_line("  setne %al"),
