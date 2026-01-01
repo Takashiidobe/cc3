@@ -19,8 +19,9 @@ struct Parser<'a> {
 #[derive(Debug, Clone, PartialEq)]
 struct VarScope {
     name: String,
-    idx: usize,
+    idx: Option<usize>,
     is_local: bool,
+    type_def: Option<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -33,6 +34,11 @@ struct TagScope {
 struct Scope {
     vars: Vec<VarScope>,
     tags: Vec<TagScope>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct VarAttr {
+    is_typedef: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -49,7 +55,13 @@ impl<'a> Parser<'a> {
 
     fn parse_program(&mut self) -> CompileResult<Program> {
         while !self.check_eof() {
-            let basety = self.parse_declspec()?;
+            let mut attr = VarAttr::default();
+            let basety = self.parse_declspec(Some(&mut attr))?;
+
+            if attr.is_typedef {
+                self.parse_typedef(basety)?;
+                continue;
+            }
 
             // Function
             if self.is_function()? {
@@ -65,7 +77,7 @@ impl<'a> Parser<'a> {
         })
     }
 
-    fn parse_declspec(&mut self) -> CompileResult<Type> {
+    fn parse_declspec(&mut self, mut attr: Option<&mut VarAttr>) -> CompileResult<Type> {
         const VOID: i32 = 1 << 0;
         const CHAR: i32 = 1 << 2;
         const SHORT: i32 = 1 << 4;
@@ -84,14 +96,36 @@ impl<'a> Parser<'a> {
         while self.is_typename() {
             saw_typename = true;
 
-            if self.consume_keyword(Keyword::Struct) {
-                ty = self.parse_struct_decl()?;
-                counter += OTHER;
+            if self.consume_keyword(Keyword::Typedef) {
+                if let Some(attr) = attr.as_deref_mut() {
+                    attr.is_typedef = true;
+                } else {
+                    return Err(
+                        self.error_here("storage class specifier is not allowed in this context")
+                    );
+                }
                 continue;
             }
 
-            if self.consume_keyword(Keyword::Union) {
-                ty = self.parse_union_decl()?;
+            let token = self.peek().clone();
+            let typedef_ty = self.find_typedef(&token);
+            let is_struct_union = matches!(
+                token.kind,
+                TokenKind::Keyword(Keyword::Struct | Keyword::Union)
+            );
+            if is_struct_union || typedef_ty.is_some() {
+                if counter != 0 {
+                    break;
+                }
+
+                if self.consume_keyword(Keyword::Struct) {
+                    ty = self.parse_struct_decl()?;
+                } else if self.consume_keyword(Keyword::Union) {
+                    ty = self.parse_union_decl()?;
+                } else if let Some(ty2) = typedef_ty {
+                    self.pos += 1;
+                    ty = ty2;
+                }
                 counter += OTHER;
                 continue;
             }
@@ -129,18 +163,20 @@ impl<'a> Parser<'a> {
     }
 
     fn is_typename(&self) -> bool {
-        matches!(
-            self.peek().kind,
+        match self.peek().kind {
             TokenKind::Keyword(
                 Keyword::Void
-                    | Keyword::Char
-                    | Keyword::Short
-                    | Keyword::Int
-                    | Keyword::Long
-                    | Keyword::Struct
-                    | Keyword::Union
-            )
-        )
+                | Keyword::Char
+                | Keyword::Short
+                | Keyword::Int
+                | Keyword::Long
+                | Keyword::Struct
+                | Keyword::Union
+                | Keyword::Typedef,
+            ) => true,
+            TokenKind::Ident(_) => self.find_typedef(self.peek()).is_some(),
+            _ => false,
+        }
     }
 
     fn parse_function_with_basety(&mut self, basety: Type) -> CompileResult<()> {
@@ -155,7 +191,7 @@ impl<'a> Parser<'a> {
         let mut param_indices = Vec::new();
         if !self.check_punct(Punct::RParen) {
             loop {
-                let param_basety = self.parse_declspec()?;
+                let param_basety = self.parse_declspec(None)?;
                 let (param_ty, param_token) = self.parse_declarator(param_basety)?;
                 let param_name = match param_token.kind {
                     TokenKind::Ident(name) => name,
@@ -259,10 +295,6 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_stmt(&mut self) -> CompileResult<Stmt> {
-        if self.is_typename() {
-            return self.parse_declaration();
-        }
-
         if self.consume_keyword(Keyword::Return) {
             let expr = self.parse_expr()?;
             self.expect_punct(Punct::Semicolon)?;
@@ -332,9 +364,8 @@ impl<'a> Parser<'a> {
         self.parse_expr_stmt()
     }
 
-    fn parse_declaration(&mut self) -> CompileResult<Stmt> {
+    fn parse_declaration(&mut self, basety: Type) -> CompileResult<Stmt> {
         let location = self.peek().location;
-        let basety = self.parse_declspec()?;
 
         let mut stmts = Vec::new();
         let mut first = true;
@@ -505,7 +536,7 @@ impl<'a> Parser<'a> {
     fn parse_struct_members(&mut self) -> CompileResult<Vec<Member>> {
         let mut members = Vec::new();
         while !self.check_punct(Punct::RBrace) {
-            let basety = self.parse_declspec()?;
+            let basety = self.parse_declspec(None)?;
             let mut first = true;
 
             while !self.check_punct(Punct::Semicolon) {
@@ -862,6 +893,16 @@ impl<'a> Parser<'a> {
                 self.enter_scope();
                 let mut stmts = Vec::new();
                 while !self.check_punct(Punct::RBrace) {
+                    if self.is_typename() {
+                        let mut attr = VarAttr::default();
+                        let basety = self.parse_declspec(Some(&mut attr))?;
+                        if attr.is_typedef {
+                            self.parse_typedef(basety)?;
+                            continue;
+                        }
+                        stmts.push(self.parse_declaration(basety)?);
+                        continue;
+                    }
                     stmts.push(self.parse_stmt()?);
                 }
                 self.expect_punct(Punct::RBrace)?;
@@ -913,6 +954,23 @@ impl<'a> Parser<'a> {
             }
             _ => Err(self.error_expected("a primary expression")),
         }
+    }
+
+    fn parse_typedef(&mut self, basety: Type) -> CompileResult<()> {
+        let mut first = true;
+        while !self.consume_punct(Punct::Semicolon) {
+            if !first {
+                self.expect_punct(Punct::Comma)?;
+            }
+            first = false;
+            let (ty, name_token) = self.parse_declarator(basety.clone())?;
+            let name = match name_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => unreachable!("parse_declarator only returns identifiers"),
+            };
+            self.push_scope_typedef(name, ty);
+        }
+        Ok(())
     }
 
     fn consume_keyword(&mut self, kw: Keyword) -> bool {
@@ -1054,7 +1112,23 @@ impl<'a> Parser<'a> {
         for scope in self.scopes.iter().rev() {
             for var in scope.vars.iter().rev() {
                 if var.name == name {
-                    return Some((var.idx, var.is_local));
+                    if let Some(idx) = var.idx {
+                        return Some((idx, var.is_local));
+                    }
+                    return None;
+                }
+            }
+        }
+        None
+    }
+
+    fn find_typedef(&self, tok: &Token) -> Option<Type> {
+        if let TokenKind::Ident(name) = &tok.kind {
+            for scope in self.scopes.iter().rev() {
+                for var in scope.vars.iter().rev() {
+                    if var.name == *name {
+                        return var.type_def.clone();
+                    }
                 }
             }
         }
@@ -1093,7 +1167,7 @@ impl<'a> Parser<'a> {
             locals: Vec::new(),
             stack_size: 0,
         });
-        self.push_scope(idx, true);
+        self.push_scope_var(idx, true);
         idx
     }
 
@@ -1112,7 +1186,7 @@ impl<'a> Parser<'a> {
             locals: Vec::new(),
             stack_size: 0,
         });
-        self.push_scope(idx, false);
+        self.push_scope_var(idx, false);
         idx
     }
 
@@ -1183,7 +1257,7 @@ impl<'a> Parser<'a> {
         self.scopes.pop();
     }
 
-    fn push_scope(&mut self, idx: usize, is_local: bool) {
+    fn push_scope_var(&mut self, idx: usize, is_local: bool) {
         let name = if is_local {
             self.locals[idx].name.clone()
         } else {
@@ -1192,8 +1266,20 @@ impl<'a> Parser<'a> {
         if let Some(scope) = self.scopes.last_mut() {
             scope.vars.push(VarScope {
                 name,
-                idx,
+                idx: Some(idx),
                 is_local,
+                type_def: None,
+            });
+        }
+    }
+
+    fn push_scope_typedef(&mut self, name: String, ty: Type) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.vars.push(VarScope {
+                name,
+                idx: None,
+                is_local: false,
+                type_def: Some(ty),
             });
         }
     }
@@ -1202,6 +1288,17 @@ impl<'a> Parser<'a> {
         self.enter_scope();
         let mut stmts = Vec::new();
         while !self.check_punct(Punct::RBrace) {
+            if self.is_typename() {
+                let mut attr = VarAttr::default();
+                let basety = self.parse_declspec(Some(&mut attr))?;
+                if attr.is_typedef {
+                    self.parse_typedef(basety)?;
+                    continue;
+                }
+                stmts.push(self.parse_declaration(basety)?);
+                continue;
+            }
+
             stmts.push(self.parse_stmt()?);
         }
         self.expect_punct(Punct::RBrace)?;

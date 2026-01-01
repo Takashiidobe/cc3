@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "({ typedef int t; t x=1; x; }) => 1\n({ typedef struct {int a;} t; t x; x.a=1; x.a; }) => 1\n({ typedef int t; t t=1; t; }) => 1\n({ typedef struct {int a;} t; { typedef int t; } t x; x.a=2; x.a; }) => 2\n({ typedef t; t x; sizeof(x); }) => 4\n({ MyInt x=3; x; }) => 3\n({ MyInt2 x; sizeof(x); }) => 16\nOK\n"
+status: 0
