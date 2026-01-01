@@ -1120,10 +1120,6 @@ impl<'a> Parser<'a> {
         self.add_type_expr(&mut node)?;
         let node_ty = node.ty.clone().ok_or_else(|| self.error_at(location, "node has no type"))?;
 
-        // Create node + addend (for both ++ and --)
-        let addend_expr = self.expr_at(ExprKind::Num(addend), location);
-        let add_expr = self.new_add(node.clone(), addend_expr, location)?;
-
         // Convert to assignment using the binary add expression
         // This transforms: (i + 1) or (i + (-1))
         // Into: (tmp = &i, *tmp = *tmp + addend)

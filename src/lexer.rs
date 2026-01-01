@@ -174,14 +174,65 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 column,
                 byte: start,
             };
-            i += 1;
-            while i < bytes.len() && bytes[i].is_ascii_digit() {
-                i += 1;
+
+            // Determine base from prefix
+            let (base, prefix_len) = if i + 1 < bytes.len() && bytes[i] == b'0' {
+                if bytes[i + 1] == b'x' || bytes[i + 1] == b'X' {
+                    // Hexadecimal: 0x or 0X
+                    if i + 2 < bytes.len() && bytes[i + 2].is_ascii_alphanumeric() {
+                        (16, 2)
+                    } else {
+                        (10, 0) // Just "0x" without digits - parse as 0
+                    }
+                } else if bytes[i + 1] == b'b' || bytes[i + 1] == b'B' {
+                    // Binary: 0b or 0B
+                    if i + 2 < bytes.len() && bytes[i + 2].is_ascii_alphanumeric() {
+                        (2, 2)
+                    } else {
+                        (10, 0) // Just "0b" without digits - parse as 0
+                    }
+                } else {
+                    // Octal: leading 0
+                    (8, 0)
+                }
+            } else {
+                // Decimal
+                (10, 0)
+            };
+
+            i += prefix_len;
+            let digits_start = i;
+
+            // Parse digits
+            while i < bytes.len() {
+                let ch = bytes[i];
+                let is_valid = match base {
+                    2 => ch == b'0' || ch == b'1',
+                    8 => ch >= b'0' && ch <= b'7',
+                    10 => ch.is_ascii_digit(),
+                    16 => ch.is_ascii_hexdigit(),
+                    _ => false,
+                };
+                if is_valid {
+                    i += 1;
+                } else {
+                    break;
+                }
             }
-            let num_str = &input[start..i];
-            let value = num_str.parse::<i64>().map_err(|err| {
-                CompileError::at(format!("invalid number literal {num_str}: {err}"), location)
+
+            // Check for invalid trailing alphanumeric
+            if i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
+                return Err(CompileError::at(
+                    format!("invalid digit in number literal"),
+                    location,
+                ));
+            }
+
+            let num_str = &input[digits_start..i];
+            let value = i64::from_str_radix(num_str, base).map_err(|err| {
+                CompileError::at(format!("invalid number literal: {err}"), location)
             })?;
+
             tokens.push(Token {
                 kind: TokenKind::Num(value),
                 location,

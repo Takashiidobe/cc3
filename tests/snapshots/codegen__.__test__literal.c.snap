@@ -2,5 +2,5 @@
 source: tests/codegen.rs
 expression: "&mine"
 ---
-stdout: "'a' => 97\n'\\n' => 10\n'\\x80' => -128\nOK\n"
+stdout: "'a' => 97\n'\\n' => 10\n'\\x80' => -128\n0777 => 511\n0x0 => 0\n0xa => 10\n0XA => 10\n0xbeef => 48879\n0xBEEF => 48879\n0XBEEF => 48879\n0b0 => 0\n0b1 => 1\n0b101111 => 47\n0B101111 => 47\nOK\n"
 status: 0
