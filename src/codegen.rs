@@ -184,6 +184,9 @@ impl Codegen {
                         self.emit_line("  sete %al");
                         self.emit_line("  movzx %al, %rax");
                     }
+                    UnaryOp::BitNot => {
+                        self.emit_line("  not %rax");
+                    }
                 }
             }
             ExprKind::Cast { expr, ty } => {

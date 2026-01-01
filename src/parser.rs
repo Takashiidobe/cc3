@@ -1102,6 +1102,18 @@ impl<'a> Parser<'a> {
             ));
         }
 
+        if self.consume_punct(Punct::BitNot) {
+            let location = self.last_location();
+            let expr = self.parse_cast()?;
+            return Ok(self.expr_at(
+                ExprKind::Unary {
+                    op: UnaryOp::BitNot,
+                    expr: Box::new(expr),
+                },
+                location,
+            ));
+        }
+
         // ++i => i+=1
         if self.consume_punct(Punct::Inc) {
             let location = self.last_location();
@@ -2009,6 +2021,9 @@ impl<'a> Parser<'a> {
                 self.add_type_expr(expr)?;
                 match op {
                     UnaryOp::Not => Type::Int,
+                    UnaryOp::BitNot => {
+                        expr.ty.clone().unwrap_or(Type::Int)
+                    }
                     UnaryOp::Neg => {
                         let ty = self.get_common_type(&Type::Int, expr.ty.as_ref().unwrap_or(&Type::Int));
                         self.cast_expr_in_place(expr, ty.clone());
