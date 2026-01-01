@@ -1090,6 +1090,18 @@ impl<'a> Parser<'a> {
             return Ok(self.expr_at(ExprKind::Deref(Box::new(expr)), location));
         }
 
+        if self.consume_punct(Punct::Not) {
+            let location = self.last_location();
+            let expr = self.parse_cast()?;
+            return Ok(self.expr_at(
+                ExprKind::Unary {
+                    op: UnaryOp::Not,
+                    expr: Box::new(expr),
+                },
+                location,
+            ));
+        }
+
         // ++i => i+=1
         if self.consume_punct(Punct::Inc) {
             let location = self.last_location();
@@ -1993,11 +2005,16 @@ impl<'a> Parser<'a> {
                     Type::Int
                 }
             }
-            ExprKind::Unary { expr, .. } => {
+            ExprKind::Unary { op, expr } => {
                 self.add_type_expr(expr)?;
-                let ty = self.get_common_type(&Type::Int, expr.ty.as_ref().unwrap_or(&Type::Int));
-                self.cast_expr_in_place(expr, ty.clone());
-                ty
+                match op {
+                    UnaryOp::Not => Type::Int,
+                    UnaryOp::Neg => {
+                        let ty = self.get_common_type(&Type::Int, expr.ty.as_ref().unwrap_or(&Type::Int));
+                        self.cast_expr_in_place(expr, ty.clone());
+                        ty
+                    }
+                }
             }
             ExprKind::Addr(expr) => {
                 self.add_type_expr(expr)?;

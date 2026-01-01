@@ -88,6 +88,7 @@ pub enum ExprKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOp {
     Neg,
+    Not,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

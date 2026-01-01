@@ -179,6 +179,11 @@ impl Codegen {
                     UnaryOp::Neg => {
                         self.emit_line("  neg %rax");
                     }
+                    UnaryOp::Not => {
+                        self.emit_line("  cmp $0, %rax");
+                        self.emit_line("  sete %al");
+                        self.emit_line("  movzx %al, %rax");
+                    }
                 }
             }
             ExprKind::Cast { expr, ty } => {
