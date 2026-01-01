@@ -1109,6 +1109,41 @@ impl<'a> Parser<'a> {
         self.parse_postfix()
     }
 
+    // Convert A++ to `(typeof A)((A += 1) - 1)`
+    // Convert A-- to `(typeof A)((A -= 1) + 1)`
+    fn new_inc_dec(
+        &mut self,
+        mut node: Expr,
+        addend: i64,
+        location: crate::error::SourceLocation,
+    ) -> CompileResult<Expr> {
+        self.add_type_expr(&mut node)?;
+        let node_ty = node.ty.clone().ok_or_else(|| self.error_at(location, "node has no type"))?;
+
+        // Create node + addend (for both ++ and --)
+        let addend_expr = self.expr_at(ExprKind::Num(addend), location);
+        let add_expr = self.new_add(node.clone(), addend_expr, location)?;
+
+        // Convert to assignment using the binary add expression
+        // This transforms: (i + 1) or (i + (-1))
+        // Into: (tmp = &i, *tmp = *tmp + addend)
+        let assign_result = self.to_assign(
+            node,
+            self.expr_at(ExprKind::Num(addend), location),
+            BinaryOp::Add,
+            location,
+        )?;
+
+        // Subtract addend from assignment result to get original value
+        // For i++: (i + 1) - 1 = i
+        // For i--: (i - 1) - (-1) = i
+        let neg_addend = self.expr_at(ExprKind::Num(-addend), location);
+        let result = self.new_add(assign_result, neg_addend, location)?;
+
+        // Cast back to original type
+        Ok(self.cast_expr(result, node_ty))
+    }
+
     fn parse_postfix(&mut self) -> CompileResult<Expr> {
         let mut expr = self.parse_primary()?;
 
@@ -1137,6 +1172,18 @@ impl<'a> Parser<'a> {
                 // x->y is short for (*x).y
                 expr = self.expr_at(ExprKind::Deref(Box::new(expr)), location);
                 expr = self.struct_ref(expr, name_token)?;
+                continue;
+            }
+
+            if self.consume_punct(Punct::Inc) {
+                let location = self.last_location();
+                expr = self.new_inc_dec(expr, 1, location)?;
+                continue;
+            }
+
+            if self.consume_punct(Punct::Dec) {
+                let location = self.last_location();
+                expr = self.new_inc_dec(expr, -1, location)?;
                 continue;
             }
 
