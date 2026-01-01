@@ -225,6 +225,10 @@ impl<'a> Parser<'a> {
             loop {
                 let param_basety = self.parse_declspec(None)?;
                 let (param_ty, param_token) = self.parse_declarator(param_basety)?;
+                let param_ty = match param_ty {
+                    Type::Array { base, .. } => Type::Ptr(base),
+                    other => other,
+                };
                 let param_name = match param_token.kind {
                     TokenKind::Ident(name) => name,
                     _ => unreachable!("parse_declarator only returns identifiers"),
