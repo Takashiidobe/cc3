@@ -319,6 +319,8 @@ impl<'a> Parser<'a> {
         let mut members = self.parse_struct_members()?;
         let mut offset = 0i32;
         for member in &mut members {
+            // Align offset to member's type alignment
+            offset = align_to(offset, member.ty.align() as i32);
             member.offset = offset;
             offset += member.ty.size() as i32;
         }

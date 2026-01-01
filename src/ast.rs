@@ -163,8 +163,33 @@ impl Type {
             Type::Int => 8,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
-            Type::Struct { members } => members.iter().map(|member| member.ty.size()).sum(),
+            Type::Struct { members } => {
+                if members.is_empty() {
+                    return 0;
+                }
+                let align = self.align();
+                let last_member = members.last().unwrap();
+                let size = last_member.offset as i64 + last_member.ty.size();
+                // Round up to alignment
+                ((size + align - 1) / align) * align
+            }
             Type::Array { base, len } => base.size() * (*len as i64),
+        }
+    }
+
+    pub fn align(&self) -> i64 {
+        match self {
+            Type::Char => 1,
+            Type::Int => 8,
+            Type::Ptr(_) => 8,
+            Type::Func(_) => 8,
+            Type::Struct { members } => {
+                if members.is_empty() {
+                    return 1;
+                }
+                members.iter().map(|member| member.ty.align()).max().unwrap_or(1)
+            }
+            Type::Array { base, .. } => base.align(),
         }
     }
 }
