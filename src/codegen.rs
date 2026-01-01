@@ -49,7 +49,7 @@ impl Codegen {
 
     fn emit_text(&mut self, program: &Program) {
         for obj in &program.globals {
-            if obj.is_function {
+            if obj.is_function && obj.is_definition {
                 self.generate_function(obj, &program.globals);
             }
         }

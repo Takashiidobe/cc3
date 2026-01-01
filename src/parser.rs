@@ -118,6 +118,30 @@ impl<'a> Parser<'a> {
         }
 
         self.expect_punct(Punct::RParen)?;
+
+        // Check if this is a declaration (;) or definition ({...})
+        let is_definition = !self.consume_punct(Punct::Semicolon);
+
+        if !is_definition {
+            // Function declaration - no body
+            let func = Obj {
+                name,
+                ty: Type::Func(Box::new(basety)),
+                is_local: false,
+                offset: 0,
+                is_function: true,
+                is_definition: false,
+                init_data: None,
+                params: vec![],
+                body: vec![],
+                locals: vec![],
+                stack_size: 0,
+            };
+            self.leave_scope();
+            self.globals.push(func);
+            return Ok(());
+        }
+
         self.expect_punct(Punct::LBrace)?;
         self.enter_scope();
 
@@ -143,6 +167,7 @@ impl<'a> Parser<'a> {
             is_local: false,
             offset: 0,
             is_function: true,
+            is_definition: true,
             init_data: None,
             params: param_indices
                 .iter()
@@ -1030,6 +1055,7 @@ impl<'a> Parser<'a> {
             is_local: true,
             offset: 0,
             is_function: false,
+            is_definition: false,
             init_data: None,
             params: Vec::new(),
             body: Vec::new(),
@@ -1048,6 +1074,7 @@ impl<'a> Parser<'a> {
             is_local: false,
             offset: 0,
             is_function: false,
+            is_definition: false,
             init_data: None,
             params: Vec::new(),
             body: Vec::new(),
