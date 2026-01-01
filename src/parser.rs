@@ -933,6 +933,53 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    fn parse_binary_ops<F>(
+        &mut self,
+        mut parse_next: F,
+        operators: &[(Punct, BinaryOp, bool)],
+    ) -> CompileResult<Expr>
+    where
+        F: FnMut(&mut Self) -> CompileResult<Expr>,
+    {
+        let mut expr = parse_next(self)?;
+
+        loop {
+            let mut matched = false;
+            for &(punct, op, swap) in operators {
+                if self.consume_punct(punct) {
+                    let location = self.last_location();
+                    let rhs = parse_next(self)?;
+                    expr = if swap {
+                        self.expr_at(
+                            ExprKind::Binary {
+                                op,
+                                lhs: Box::new(rhs),
+                                rhs: Box::new(expr),
+                            },
+                            location,
+                        )
+                    } else {
+                        self.expr_at(
+                            ExprKind::Binary {
+                                op,
+                                lhs: Box::new(expr),
+                                rhs: Box::new(rhs),
+                            },
+                            location,
+                        )
+                    };
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
+                break;
+            }
+        }
+
+        Ok(expr)
+    }
+
     fn parse_bitor(&mut self) -> CompileResult<Expr> {
         self.parse_binary_op(Self::parse_bitxor, Punct::Pipe, BinaryOp::BitOr)
     }
@@ -946,96 +993,25 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_equality(&mut self) -> CompileResult<Expr> {
-        let mut expr = self.parse_relational()?;
-
-        loop {
-            let op = if self.consume_punct(Punct::EqEq) {
-                BinaryOp::Eq
-            } else if self.consume_punct(Punct::NotEq) {
-                BinaryOp::Ne
-            } else {
-                break;
-            };
-
-            let location = self.last_location();
-            let rhs = self.parse_relational()?;
-            expr = self.expr_at(
-                ExprKind::Binary {
-                    op,
-                    lhs: Box::new(expr),
-                    rhs: Box::new(rhs),
-                },
-                location,
-            );
-        }
-
-        Ok(expr)
+        self.parse_binary_ops(
+            Self::parse_relational,
+            &[
+                (Punct::EqEq, BinaryOp::Eq, false),
+                (Punct::NotEq, BinaryOp::Ne, false),
+            ],
+        )
     }
 
     fn parse_relational(&mut self) -> CompileResult<Expr> {
-        let mut expr = self.parse_add()?;
-
-        loop {
-            if self.consume_punct(Punct::Less) {
-                let location = self.last_location();
-                let rhs = self.parse_add()?;
-                expr = self.expr_at(
-                    ExprKind::Binary {
-                        op: BinaryOp::Lt,
-                        lhs: Box::new(expr),
-                        rhs: Box::new(rhs),
-                    },
-                    location,
-                );
-                continue;
-            }
-
-            if self.consume_punct(Punct::LessEq) {
-                let location = self.last_location();
-                let rhs = self.parse_add()?;
-                expr = self.expr_at(
-                    ExprKind::Binary {
-                        op: BinaryOp::Le,
-                        lhs: Box::new(expr),
-                        rhs: Box::new(rhs),
-                    },
-                    location,
-                );
-                continue;
-            }
-
-            if self.consume_punct(Punct::Greater) {
-                let location = self.last_location();
-                let rhs = self.parse_add()?;
-                expr = self.expr_at(
-                    ExprKind::Binary {
-                        op: BinaryOp::Lt,
-                        lhs: Box::new(rhs),
-                        rhs: Box::new(expr),
-                    },
-                    location,
-                );
-                continue;
-            }
-
-            if self.consume_punct(Punct::GreaterEq) {
-                let location = self.last_location();
-                let rhs = self.parse_add()?;
-                expr = self.expr_at(
-                    ExprKind::Binary {
-                        op: BinaryOp::Le,
-                        lhs: Box::new(rhs),
-                        rhs: Box::new(expr),
-                    },
-                    location,
-                );
-                continue;
-            }
-
-            break;
-        }
-
-        Ok(expr)
+        self.parse_binary_ops(
+            Self::parse_add,
+            &[
+                (Punct::Less, BinaryOp::Lt, false),
+                (Punct::LessEq, BinaryOp::Le, false),
+                (Punct::Greater, BinaryOp::Lt, true),
+                (Punct::GreaterEq, BinaryOp::Le, true),
+            ],
+        )
     }
 
     fn parse_add(&mut self) -> CompileResult<Expr> {
@@ -1064,32 +1040,14 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_mul(&mut self) -> CompileResult<Expr> {
-        let mut expr = self.parse_cast()?;
-
-        loop {
-            let op = if self.consume_punct(Punct::Star) {
-                BinaryOp::Mul
-            } else if self.consume_punct(Punct::Slash) {
-                BinaryOp::Div
-            } else if self.consume_punct(Punct::Mod) {
-                BinaryOp::Mod
-            } else {
-                break;
-            };
-
-            let location = self.last_location();
-            let rhs = self.parse_cast()?;
-            expr = self.expr_at(
-                ExprKind::Binary {
-                    op,
-                    lhs: Box::new(expr),
-                    rhs: Box::new(rhs),
-                },
-                location,
-            );
-        }
-
-        Ok(expr)
+        self.parse_binary_ops(
+            Self::parse_cast,
+            &[
+                (Punct::Star, BinaryOp::Mul, false),
+                (Punct::Slash, BinaryOp::Div, false),
+                (Punct::Mod, BinaryOp::Mod, false),
+            ],
+        )
     }
 
     fn parse_cast(&mut self) -> CompileResult<Expr> {
