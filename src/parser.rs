@@ -14,6 +14,7 @@ struct Parser<'a> {
     globals: Vec<Obj>,
     string_label: usize,
     scopes: Vec<Scope>,
+    current_fn_return: Option<Type>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +51,7 @@ impl<'a> Parser<'a> {
             globals: Vec::new(),
             string_label: 0,
             scopes: vec![Scope::default()],
+            current_fn_return: None,
         }
     }
 
@@ -226,6 +228,9 @@ impl<'a> Parser<'a> {
         // Ensure the function is visible for recursive calls.
         self.new_function_decl(name.clone(), Type::Func(Box::new(basety.clone())));
 
+        let prev_return = self.current_fn_return.clone();
+        self.current_fn_return = Some(basety.clone());
+
         self.expect_punct(Punct::LBrace)?;
         self.enter_scope();
 
@@ -236,6 +241,7 @@ impl<'a> Parser<'a> {
 
         self.expect_punct(Punct::RBrace)?;
         self.leave_scope();
+        self.current_fn_return = prev_return;
 
         for stmt in &mut body {
             self.add_type_stmt(stmt)?;
@@ -305,6 +311,11 @@ impl<'a> Parser<'a> {
         if self.consume_keyword(Keyword::Return) {
             let expr = self.parse_expr()?;
             self.expect_punct(Punct::Semicolon)?;
+            let expr = if let Some(ret_ty) = self.current_fn_return.clone() {
+                self.cast_expr(expr, ret_ty)
+            } else {
+                expr
+            };
             return Ok(self.stmt_last(StmtKind::Return(expr)));
         }
 
@@ -1638,7 +1649,7 @@ impl<'a> Parser<'a> {
     }
 
     fn add_type_expr(&self, expr: &mut Expr) -> CompileResult<()> {
-        if expr.ty.is_some() {
+        if expr.ty.is_some() && !matches!(expr.kind, ExprKind::Cast { .. }) {
             return Ok(());
         }
 
