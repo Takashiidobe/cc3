@@ -118,6 +118,16 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     let run_out_mine = run_exe(&exe_mine)?;
     let mine = to_runlog(run_out_mine);
 
+    // Only persist snapshot if test passed (status 0)
+    // This prevents accepting incorrect tests and shows what failed
+    assert_eq!(
+        mine.status, 0,
+        "[{}] test failed with status {}\n--- stdout ---\n{}",
+        path.display(),
+        mine.status,
+        mine.stdout
+    );
+
     assert_yaml_snapshot!(path.to_str(), &mine);
 
     Ok(())
