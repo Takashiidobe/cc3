@@ -1,6 +1,7 @@
 use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, UnaryOp};
 
 const ARG_REGS_8: [&str; 6] = ["%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"];
+const ARG_REGS_16: [&str; 6] = ["%di", "%si", "%dx", "%cx", "%r8w", "%r9w"];
 const ARG_REGS_32: [&str; 6] = ["%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"];
 const ARG_REGS_64: [&str; 6] = ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"];
 
@@ -57,6 +58,7 @@ impl Codegen {
     fn store_gp(&mut self, r: usize, offset: i32, sz: i64) {
         match sz {
             1 => self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_8[r], offset)),
+            2 => self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_16[r], offset)),
             4 => self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_32[r], offset)),
             8 => self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_64[r], offset)),
             _ => unreachable!(),
@@ -273,6 +275,10 @@ impl Codegen {
                     self.emit_line("  movsbq (%rax), %rax");
                     return;
                 }
+                2 => {
+                    self.emit_line("  movswq (%rax), %rax");
+                    return;
+                }
                 4 => {
                     self.emit_line("  movslq (%rax), %rax");
                     return;
@@ -305,6 +311,10 @@ impl Codegen {
             match ty.size() {
                 1 => {
                     self.emit_line("  mov %al, (%rdi)");
+                    return;
+                }
+                2 => {
+                    self.emit_line("  mov %ax, (%rdi)");
                     return;
                 }
                 4 => {

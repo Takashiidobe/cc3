@@ -123,6 +123,7 @@ pub struct Obj {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
     Char,
+    Short,
     Int,
     Long,
     Ptr(Box<Type>),
@@ -142,7 +143,7 @@ pub enum Type {
 
 impl Type {
     pub fn is_integer(&self) -> bool {
-        matches!(self, Type::Char | Type::Int | Type::Long)
+        matches!(self, Type::Char | Type::Short | Type::Int | Type::Long)
     }
 
     pub fn is_ptr(&self) -> bool {
@@ -164,6 +165,7 @@ impl Type {
     pub fn size(&self) -> i64 {
         match self {
             Type::Char => 1,
+            Type::Short => 2,
             Type::Int => 4,
             Type::Long => 8,
             Type::Ptr(_) => 8,
@@ -194,6 +196,7 @@ impl Type {
     pub fn align(&self) -> i64 {
         match self {
             Type::Char => 1,
+            Type::Short => 2,
             Type::Int => 4,
             Type::Long => 8,
             Type::Ptr(_) => 8,

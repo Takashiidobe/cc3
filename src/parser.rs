@@ -68,6 +68,8 @@ impl<'a> Parser<'a> {
     fn parse_declspec(&mut self) -> CompileResult<Type> {
         if self.consume_keyword(Keyword::Char) {
             Ok(Type::Char)
+        } else if self.consume_keyword(Keyword::Short) {
+            Ok(Type::Short)
         } else if self.consume_keyword(Keyword::Long) {
             Ok(Type::Long)
         } else if self.consume_keyword(Keyword::Struct) {
@@ -83,7 +85,7 @@ impl<'a> Parser<'a> {
     fn is_typename(&self) -> bool {
         matches!(
             self.peek().kind,
-            TokenKind::Keyword(Keyword::Char | Keyword::Int | Keyword::Long | Keyword::Struct | Keyword::Union)
+            TokenKind::Keyword(Keyword::Char | Keyword::Short | Keyword::Int | Keyword::Long | Keyword::Struct | Keyword::Union)
         )
     }
 
