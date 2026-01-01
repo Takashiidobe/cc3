@@ -279,6 +279,7 @@ impl Codegen {
             Type::Char => 0,
             Type::Short => 1,
             Type::Int => 2,
+            Type::Enum => 2,
             _ => 3,
         }
     }

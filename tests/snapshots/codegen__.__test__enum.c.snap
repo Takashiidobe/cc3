@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "({ enum { zero, one, two }; zero; }) => 0\n({ enum { zero, one, two }; one; }) => 1\n({ enum { zero, one, two }; two; }) => 2\n({ enum { five=5, six, seven }; five; }) => 5\n({ enum { five=5, six, seven }; six; }) => 6\n({ enum { zero, five=5, three=3, four }; zero; }) => 0\n({ enum { zero, five=5, three=3, four }; five; }) => 5\n({ enum { zero, five=5, three=3, four }; three; }) => 3\n({ enum { zero, five=5, three=3, four }; four; }) => 4\n({ enum { zero, one, two } x; sizeof(x); }) => 4\n({ enum t { zero, one, two }; enum t y; sizeof(y); }) => 4\nOK\n"
+status: 0

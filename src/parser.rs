@@ -23,6 +23,7 @@ struct VarScope {
     idx: Option<usize>,
     is_local: bool,
     type_def: Option<Type>,
+    enum_val: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,11 +113,11 @@ impl<'a> Parser<'a> {
 
             let token = self.peek().clone();
             let typedef_ty = self.find_typedef(&token);
-            let is_struct_union = matches!(
+            let is_struct_union_enum = matches!(
                 token.kind,
-                TokenKind::Keyword(Keyword::Struct | Keyword::Union)
+                TokenKind::Keyword(Keyword::Struct | Keyword::Union | Keyword::Enum)
             );
-            if is_struct_union || typedef_ty.is_some() {
+            if is_struct_union_enum || typedef_ty.is_some() {
                 if counter != 0 {
                     break;
                 }
@@ -125,6 +126,8 @@ impl<'a> Parser<'a> {
                     ty = self.parse_struct_decl()?;
                 } else if self.consume_keyword(Keyword::Union) {
                     ty = self.parse_union_decl()?;
+                } else if self.consume_keyword(Keyword::Enum) {
+                    ty = self.parse_enum_specifier()?;
                 } else if let Some(ty2) = typedef_ty {
                     self.pos += 1;
                     ty = ty2;
@@ -183,6 +186,7 @@ impl<'a> Parser<'a> {
                 | Keyword::Long
                 | Keyword::Struct
                 | Keyword::Union
+                | Keyword::Enum
                 | Keyword::Typedef,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
@@ -506,6 +510,73 @@ impl<'a> Parser<'a> {
     fn parse_typename(&mut self) -> CompileResult<Type> {
         let basety = self.parse_declspec(None)?;
         self.parse_abstract_declarator(basety)
+    }
+
+    fn parse_enum_specifier(&mut self) -> CompileResult<Type> {
+        let mut tag: Option<Token> = None;
+        if matches!(self.peek().kind, TokenKind::Ident(_)) {
+            tag = Some(self.peek().clone());
+            self.pos += 1;
+        }
+
+        if let Some(tag_token) = &tag
+            && !self.check_punct(Punct::LBrace)
+        {
+            let name = match &tag_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => unreachable!(),
+            };
+            let ty = self
+                .find_tag(name)
+                .ok_or_else(|| self.error_at(tag_token.location, "unknown enum type"))?;
+            if ty != Type::Enum {
+                return Err(self.error_at(tag_token.location, "not an enum tag"));
+            }
+            return Ok(ty);
+        }
+
+        self.expect_punct(Punct::LBrace)?;
+
+        let mut first = true;
+        let mut val: i64 = 0;
+        while !self.check_punct(Punct::RBrace) {
+            if !first {
+                self.expect_punct(Punct::Comma)?;
+            }
+            first = false;
+
+            let name_token = self.expect_ident_token()?;
+            let name = match &name_token.kind {
+                TokenKind::Ident(name) => name.clone(),
+                _ => unreachable!(),
+            };
+
+            if self.consume_punct(Punct::Assign) {
+                let token = self.peek().clone();
+                val = match token.kind {
+                    TokenKind::Num(value) => {
+                        self.pos += 1;
+                        value
+                    }
+                    _ => return Err(self.error_expected("number")),
+                };
+            }
+
+            self.push_scope_enum(name, val);
+            val += 1;
+        }
+
+        self.expect_punct(Punct::RBrace)?;
+
+        if let Some(tag_token) = tag {
+            let name = match tag_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => unreachable!(),
+            };
+            self.push_tag_scope(name, Type::Enum);
+        }
+
+        Ok(Type::Enum)
     }
 
     // Shared parsing logic for struct/union declarations
@@ -1012,12 +1083,26 @@ impl<'a> Parser<'a> {
                 }
 
                 let name = name.clone();
-                let (idx, is_local) = match self.find_var(&name) {
-                    Some((idx, is_local)) => (idx, is_local),
-                    None => return Err(self.error_at(token.location, "undefined variable")),
+                let scope = self
+                    .find_var_scope(&name)
+                    .ok_or_else(|| self.error_at(token.location, "undefined variable"))?;
+                let expr = if let Some(idx) = scope.idx {
+                    self.expr_at(
+                        ExprKind::Var {
+                            idx,
+                            is_local: scope.is_local,
+                        },
+                        token.location,
+                    )
+                } else if let Some(val) = scope.enum_val {
+                    let mut expr = self.expr_at(ExprKind::Num(val), token.location);
+                    expr.ty = Some(Type::Enum);
+                    expr
+                } else {
+                    return Err(self.error_at(token.location, "undefined variable"));
                 };
                 self.pos += 1;
-                Ok(self.expr_at(ExprKind::Var { idx, is_local }, token.location))
+                Ok(expr)
             }
             TokenKind::Str { bytes, ty } => {
                 let idx = self.new_string_literal(bytes, ty);
@@ -1236,14 +1321,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn find_var(&self, name: &str) -> Option<(usize, bool)> {
+    fn find_var_scope(&self, name: &str) -> Option<&VarScope> {
         for scope in self.scopes.iter().rev() {
             for var in scope.vars.iter().rev() {
                 if var.name == name {
-                    if let Some(idx) = var.idx {
-                        return Some((idx, var.is_local));
-                    }
-                    return None;
+                    return Some(var);
                 }
             }
         }
@@ -1401,6 +1483,7 @@ impl<'a> Parser<'a> {
                 idx: Some(idx),
                 is_local,
                 type_def: None,
+                enum_val: None,
             });
         }
     }
@@ -1412,6 +1495,19 @@ impl<'a> Parser<'a> {
                 idx: None,
                 is_local: false,
                 type_def: Some(ty),
+                enum_val: None,
+            });
+        }
+    }
+
+    fn push_scope_enum(&mut self, name: String, val: i64) {
+        if let Some(scope) = self.scopes.last_mut() {
+            scope.vars.push(VarScope {
+                name,
+                idx: None,
+                is_local: false,
+                type_def: None,
+                enum_val: Some(val),
             });
         }
     }
@@ -1444,7 +1540,7 @@ impl<'a> Parser<'a> {
             _ => unreachable!("parse_funcall expects identifier token"),
         };
 
-        if self.find_var(&name).is_some() {
+        if self.find_var_scope(&name).is_some() {
             return Err(self.error_at(name_token.location, "not a function"));
         }
 

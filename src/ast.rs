@@ -133,6 +133,7 @@ pub enum Type {
     Short,
     Int,
     Long,
+    Enum,
     Ptr(Box<Type>),
     #[allow(dead_code)]
     Func(Box<Type>),
@@ -152,7 +153,7 @@ impl Type {
     pub fn is_integer(&self) -> bool {
         matches!(
             self,
-            Type::Bool | Type::Char | Type::Short | Type::Int | Type::Long
+            Type::Bool | Type::Char | Type::Short | Type::Int | Type::Long | Type::Enum
         )
     }
 
@@ -176,6 +177,7 @@ impl Type {
             Type::Short => 2,
             Type::Int => 4,
             Type::Long => 8,
+            Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
             Type::Struct { members } => {
@@ -209,6 +211,7 @@ impl Type {
             Type::Short => 2,
             Type::Int => 4,
             Type::Long => 8,
+            Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
             Type::Struct { members } | Type::Union { members } => {
