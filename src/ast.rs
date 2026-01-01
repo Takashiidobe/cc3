@@ -163,7 +163,7 @@ impl Type {
     pub fn size(&self) -> i64 {
         match self {
             Type::Char => 1,
-            Type::Int => 8,
+            Type::Int => 4,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
             Type::Struct { members } => {
@@ -192,7 +192,7 @@ impl Type {
     pub fn align(&self) -> i64 {
         match self {
             Type::Char => 1,
-            Type::Int => 8,
+            Type::Int => 4,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
             Type::Struct { members } | Type::Union { members } => {

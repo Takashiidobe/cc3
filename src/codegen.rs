@@ -1,6 +1,7 @@
 use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, UnaryOp};
 
 const ARG_REGS_8: [&str; 6] = ["%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"];
+const ARG_REGS_32: [&str; 6] = ["%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"];
 const ARG_REGS_64: [&str; 6] = ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"];
 
 pub struct Codegen {
@@ -53,6 +54,15 @@ impl Codegen {
         }
     }
 
+    fn store_gp(&mut self, r: usize, offset: i32, sz: i64) {
+        match sz {
+            1 => self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_8[r], offset)),
+            4 => self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_32[r], offset)),
+            8 => self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_64[r], offset)),
+            _ => unreachable!(),
+        }
+    }
+
     fn generate_function(&mut self, function: &Obj, globals: &[Obj]) {
         self.current_fn = Some(function.name.clone());
 
@@ -65,11 +75,7 @@ impl Codegen {
 
         // Save passed-by-register arguments to the stack
         for (i, param) in function.params.iter().enumerate() {
-            if param.ty.size() == 1 {
-                self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_8[i], param.offset));
-            } else {
-                self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_64[i], param.offset));
-            }
+            self.store_gp(i, param.offset, param.ty.size());
         }
 
         let mut last_was_return = false;
@@ -261,11 +267,18 @@ impl Codegen {
                 _ => {}
             }
         }
-        if let Some(ty) = ty
-            && ty.size() == 1
-        {
-            self.emit_line("  movsbq (%rax), %rax");
-            return;
+        if let Some(ty) = ty {
+            match ty.size() {
+                1 => {
+                    self.emit_line("  movsbq (%rax), %rax");
+                    return;
+                }
+                4 => {
+                    self.emit_line("  movslq (%rax), %rax");
+                    return;
+                }
+                _ => {}
+            }
         }
         self.emit_line("  mov (%rax), %rax");
     }
@@ -288,11 +301,18 @@ impl Codegen {
             }
         }
 
-        if let Some(ty) = ty
-            && ty.size() == 1
-        {
-            self.emit_line("  mov %al, (%rdi)");
-            return;
+        if let Some(ty) = ty {
+            match ty.size() {
+                1 => {
+                    self.emit_line("  mov %al, (%rdi)");
+                    return;
+                }
+                4 => {
+                    self.emit_line("  mov %eax, (%rdi)");
+                    return;
+                }
+                _ => {}
+            }
         }
         self.emit_line("  mov %rax, (%rdi)");
     }
