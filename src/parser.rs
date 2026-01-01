@@ -776,6 +776,7 @@ impl<'a> Parser<'a> {
 
     fn parse_assign(&mut self) -> CompileResult<Expr> {
         let expr = self.parse_equality()?;
+
         if self.consume_punct(Punct::Assign) {
             if !self.is_lvalue(&expr) {
                 return Err(self.error_here("invalid assignment target"));
@@ -790,7 +791,103 @@ impl<'a> Parser<'a> {
                 location,
             ));
         }
+
+        let compound_ops = [
+            (Punct::AddAssign, BinaryOp::Add),
+            (Punct::SubAssign, BinaryOp::Sub),
+            (Punct::MulAssign, BinaryOp::Mul),
+            (Punct::DivAssign, BinaryOp::Div),
+        ];
+
+        for (punct, op) in compound_ops {
+            if self.consume_punct(punct) {
+                if !self.is_lvalue(&expr) {
+                    return Err(self.error_here("invalid assignment target"));
+                }
+                let location = self.last_location();
+                let rhs = self.parse_assign()?;
+                return self.to_assign(expr, rhs, op, location);
+            }
+        }
+
         Ok(expr)
+    }
+
+    // Convert `A op= B` to `tmp = &A, *tmp = *tmp op B`
+    fn to_assign(
+        &mut self,
+        mut lhs: Expr,
+        mut rhs: Expr,
+        op: BinaryOp,
+        location: crate::error::SourceLocation,
+    ) -> CompileResult<Expr> {
+        self.add_type_expr(&mut lhs)?;
+        self.add_type_expr(&mut rhs)?;
+
+        let lhs_ty = lhs.ty.clone().ok_or_else(|| self.error_at(location, "lhs has no type"))?;
+        let ptr_ty = Type::Ptr(Box::new(lhs_ty));
+
+        // Create temporary pointer variable
+        let var_idx = self.new_lvar(String::new(), ptr_ty);
+
+        // expr1: tmp = &A
+        let expr1 = self.expr_at(
+            ExprKind::Assign {
+                lhs: Box::new(self.expr_at(
+                    ExprKind::Var {
+                        idx: var_idx,
+                        is_local: true,
+                    },
+                    location,
+                )),
+                rhs: Box::new(self.expr_at(ExprKind::Addr(Box::new(lhs.clone())), location)),
+            },
+            location,
+        );
+
+        // *tmp
+        let deref_tmp = self.expr_at(
+            ExprKind::Deref(Box::new(self.expr_at(
+                ExprKind::Var {
+                    idx: var_idx,
+                    is_local: true,
+                },
+                location,
+            ))),
+            location,
+        );
+
+        // *tmp op B
+        let bin_expr = match op {
+            BinaryOp::Add => self.new_add(deref_tmp.clone(), rhs, location)?,
+            BinaryOp::Sub => self.new_sub(deref_tmp.clone(), rhs, location)?,
+            _ => self.expr_at(
+                ExprKind::Binary {
+                    op,
+                    lhs: Box::new(deref_tmp.clone()),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            ),
+        };
+
+        // expr2: *tmp = *tmp op B
+        let expr2 = self.expr_at(
+            ExprKind::Assign {
+                lhs: Box::new(deref_tmp),
+                rhs: Box::new(bin_expr),
+            },
+            location,
+        );
+
+        // Return comma expression: expr1, expr2
+        Ok(self.expr_at(
+            ExprKind::Comma {
+                lhs: Box::new(expr1),
+                rhs: Box::new(expr2),
+            },
+            location,
+        ))
     }
 
     fn is_lvalue(&self, expr: &Expr) -> bool {

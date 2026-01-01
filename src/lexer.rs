@@ -50,6 +50,10 @@ pub enum Punct {
     Semicolon,
     Comma,
     Assign,
+    AddAssign,
+    SubAssign,
+    MulAssign,
+    DivAssign,
     EqEq,
     NotEq,
     Less,
@@ -77,6 +81,10 @@ impl std::fmt::Display for Punct {
             Punct::Semicolon => ";",
             Punct::Comma => ",",
             Punct::Assign => "=",
+            Punct::AddAssign => "+=",
+            Punct::SubAssign => "-=",
+            Punct::MulAssign => "*=",
+            Punct::DivAssign => "/=",
             Punct::EqEq => "==",
             Punct::NotEq => "!=",
             Punct::Less => "<",
@@ -428,6 +436,18 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
     }
     if input.starts_with("->") {
         return Some((Punct::Arrow, 2));
+    }
+    if input.starts_with("+=") {
+        return Some((Punct::AddAssign, 2));
+    }
+    if input.starts_with("-=") {
+        return Some((Punct::SubAssign, 2));
+    }
+    if input.starts_with("*=") {
+        return Some((Punct::MulAssign, 2));
+    }
+    if input.starts_with("/=") {
+        return Some((Punct::DivAssign, 2));
     }
     if input.starts_with("=") {
         return Some((Punct::Assign, 1));
