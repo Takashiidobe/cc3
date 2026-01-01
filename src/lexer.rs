@@ -38,6 +38,8 @@ pub enum Punct {
     Minus,
     Star,
     Amp,
+    Pipe,
+    Caret,
     Slash,
     Mod,
     Dot,
@@ -56,6 +58,9 @@ pub enum Punct {
     MulAssign,
     DivAssign,
     ModAssign,
+    AndAssign,
+    OrAssign,
+    XorAssign,
     Inc,
     Dec,
     Not,
@@ -75,6 +80,8 @@ impl std::fmt::Display for Punct {
             Punct::Minus => "-",
             Punct::Star => "*",
             Punct::Amp => "&",
+            Punct::Pipe => "|",
+            Punct::Caret => "^",
             Punct::Slash => "/",
             Punct::Mod => "%",
             Punct::Dot => ".",
@@ -93,6 +100,9 @@ impl std::fmt::Display for Punct {
             Punct::MulAssign => "*=",
             Punct::DivAssign => "/=",
             Punct::ModAssign => "%=",
+            Punct::AndAssign => "&=",
+            Punct::OrAssign => "|=",
+            Punct::XorAssign => "^=",
             Punct::Inc => "++",
             Punct::Dec => "--",
             Punct::Not => "!",
@@ -515,6 +525,15 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
     if input.starts_with("%=") {
         return Some((Punct::ModAssign, 2));
     }
+    if input.starts_with("&=") {
+        return Some((Punct::AndAssign, 2));
+    }
+    if input.starts_with("|=") {
+        return Some((Punct::OrAssign, 2));
+    }
+    if input.starts_with("^=") {
+        return Some((Punct::XorAssign, 2));
+    }
     if input.starts_with("++") {
         return Some((Punct::Inc, 2));
     }
@@ -531,6 +550,8 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
         b'-' => Punct::Minus,
         b'*' => Punct::Star,
         b'&' => Punct::Amp,
+        b'|' => Punct::Pipe,
+        b'^' => Punct::Caret,
         b'/' => Punct::Slash,
         b'%' => Punct::Mod,
         b'.' => Punct::Dot,

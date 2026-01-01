@@ -272,6 +272,15 @@ impl Codegen {
                             self.emit_line("  mov %rdx, %rax");
                         }
                     }
+                    BinaryOp::BitAnd => {
+                        self.emit_line(&format!("  and {}, {}", di, ax));
+                    }
+                    BinaryOp::BitOr => {
+                        self.emit_line(&format!("  or {}, {}", di, ax));
+                    }
+                    BinaryOp::BitXor => {
+                        self.emit_line(&format!("  xor {}, {}", di, ax));
+                    }
                     BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => {
                         self.emit_line(&format!("  cmp {}, {}", di, ax));
                         match op {
