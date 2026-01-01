@@ -43,11 +43,22 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_declspec(&mut self) -> CompileResult<Type> {
-        self.expect_keyword(Keyword::Int)?;
-        Ok(Type::Int)
+        if self.consume_keyword(Keyword::Char) {
+            Ok(Type::Char)
+        } else {
+            self.expect_keyword(Keyword::Int)?;
+            Ok(Type::Int)
+        }
     }
 
-    fn parse_function_with_basety(&mut self, _basety: Type) -> CompileResult<()> {
+    fn is_typename(&self) -> bool {
+        matches!(
+            self.peek().kind,
+            TokenKind::Keyword(Keyword::Char | Keyword::Int)
+        )
+    }
+
+    fn parse_function_with_basety(&mut self, basety: Type) -> CompileResult<()> {
         let name = self.expect_ident()?;
 
         self.expect_punct(Punct::LParen)?;
@@ -58,10 +69,14 @@ impl<'a> Parser<'a> {
         let mut params = Vec::new();
         if !self.check_punct(Punct::RParen) {
             loop {
-                self.expect_keyword(Keyword::Int)?;
-                let param_name = self.expect_ident()?;
+                let param_basety = self.parse_declspec()?;
+                let (param_ty, param_token) = self.parse_declarator(param_basety)?;
+                let param_name = match param_token.kind {
+                    TokenKind::Ident(name) => name,
+                    _ => unreachable!("parse_declarator only returns identifiers"),
+                };
                 // Use new_lvar to assign correct offset
-                let _idx = self.new_lvar(param_name.clone(), Type::Int);
+                let _idx = self.new_lvar(param_name.clone(), param_ty);
                 // Get the newly added param
                 if let Some(param) = self.locals.last() {
                     params.push(param.clone());
@@ -99,7 +114,7 @@ impl<'a> Parser<'a> {
         // Create function object
         let func = Obj {
             name,
-            ty: Type::Func(Box::new(Type::Int)),
+            ty: Type::Func(Box::new(basety)),
             is_local: false,
             offset: 0,
             is_function: true,
@@ -152,7 +167,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_stmt(&mut self) -> CompileResult<Stmt> {
-        if matches!(self.peek().kind, TokenKind::Keyword(Keyword::Int)) {
+        if self.is_typename() {
             return self.parse_declaration();
         }
 
@@ -232,7 +247,7 @@ impl<'a> Parser<'a> {
 
     fn parse_declaration(&mut self) -> CompileResult<Stmt> {
         let location = self.peek().location;
-        self.expect_keyword(Keyword::Int)?;
+        let basety = self.parse_declspec()?;
 
         let mut stmts = Vec::new();
         let mut first = true;
@@ -243,7 +258,7 @@ impl<'a> Parser<'a> {
             }
             first = false;
 
-            let (ty, name_token) = self.parse_declarator(Type::Int)?;
+            let (ty, name_token) = self.parse_declarator(basety.clone())?;
             let name = match name_token.kind {
                 TokenKind::Ident(name) => name,
                 _ => unreachable!("parse_declarator only returns identifiers"),

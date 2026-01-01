@@ -2,6 +2,7 @@ use crate::error::{CompileError, CompileResult, SourceLocation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Keyword {
+    Char,
     Int,
     Return,
     If,
@@ -134,6 +135,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             }
             let word = &input[start..i];
             let kind = match word {
+                "char" => TokenKind::Keyword(Keyword::Char),
                 "int" => TokenKind::Keyword(Keyword::Int),
                 "return" => TokenKind::Keyword(Keyword::Return),
                 "if" => TokenKind::Keyword(Keyword::If),

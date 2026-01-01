@@ -103,16 +103,20 @@ pub struct Obj {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Type {
+    Char,
     Int,
     Ptr(Box<Type>),
     #[allow(dead_code)]
     Func(Box<Type>),
-    Array { base: Box<Type>, len: i32 },
+    Array {
+        base: Box<Type>,
+        len: i32,
+    },
 }
 
 impl Type {
     pub fn is_integer(&self) -> bool {
-        matches!(self, Type::Int)
+        matches!(self, Type::Char | Type::Int)
     }
 
     pub fn is_ptr(&self) -> bool {
@@ -133,6 +137,7 @@ impl Type {
 
     pub fn size(&self) -> i64 {
         match self {
+            Type::Char => 1,
             Type::Int => 8,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,

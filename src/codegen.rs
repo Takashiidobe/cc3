@@ -1,6 +1,7 @@
 use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, UnaryOp};
 
-const ARG_REGS: [&str; 6] = ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"];
+const ARG_REGS_8: [&str; 6] = ["%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"];
+const ARG_REGS_64: [&str; 6] = ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"];
 
 pub struct Codegen {
     buffer: String,
@@ -56,7 +57,11 @@ impl Codegen {
 
         // Save passed-by-register arguments to the stack
         for (i, param) in function.params.iter().enumerate() {
-            self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS[i], param.offset));
+            if param.ty.size() == 1 {
+                self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_8[i], param.offset));
+            } else {
+                self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_64[i], param.offset));
+            }
         }
 
         let mut last_was_return = false;
@@ -162,7 +167,7 @@ impl Codegen {
                     nargs += 1;
                 }
                 for i in (0..nargs).rev() {
-                    self.emit_line(&format!("  pop {}", ARG_REGS[i]));
+                    self.emit_line(&format!("  pop {}", ARG_REGS_64[i]));
                 }
                 self.emit_line("  mov $0, %rax");
                 self.emit_line(&format!("  call {}", name));
@@ -182,7 +187,7 @@ impl Codegen {
                 self.gen_lvalue(lhs, function, globals);
                 self.emit_line("  push %rax");
                 self.gen_expr(rhs, function, globals);
-                self.store();
+                self.store(expr.ty.as_ref());
             }
             ExprKind::Binary { op, lhs, rhs } => {
                 self.gen_expr(rhs, function, globals);
@@ -226,16 +231,28 @@ impl Codegen {
         // becomes not the array itself but the address of the array.
         // This is where "array is automatically converted to a pointer to
         // the first element of the array in C" occurs.
-        if let Some(ty) = ty {
-            if ty.is_array() {
-                return;
-            }
+        if let Some(ty) = ty
+            && ty.is_array()
+        {
+            return;
+        }
+        if let Some(ty) = ty
+            && ty.size() == 1
+        {
+            self.emit_line("  movsbq (%rax), %rax");
+            return;
         }
         self.emit_line("  mov (%rax), %rax");
     }
 
-    fn store(&mut self) {
+    fn store(&mut self, ty: Option<&crate::ast::Type>) {
         self.emit_line("  pop %rdi");
+        if let Some(ty) = ty
+            && ty.size() == 1
+        {
+            self.emit_line("  mov %al, (%rdi)");
+            return;
+        }
         self.emit_line("  mov %rax, (%rdi)");
     }
 
@@ -256,9 +273,7 @@ impl Codegen {
 
     fn gen_lvalue(&mut self, expr: &Expr, function: &Obj, globals: &[Obj]) {
         match &expr.kind {
-            ExprKind::Var { idx, is_local } => {
-                self.gen_addr(*idx, *is_local, function, globals)
-            }
+            ExprKind::Var { idx, is_local } => self.gen_addr(*idx, *is_local, function, globals),
             ExprKind::Deref(expr) => self.gen_expr(expr, function, globals),
             _ => self.emit_line("  mov $0, %rax"),
         }
