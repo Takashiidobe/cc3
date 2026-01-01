@@ -902,73 +902,52 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_bitor(&mut self) -> CompileResult<Expr> {
-        let mut expr = self.parse_bitxor()?;
+    fn parse_binary_op<F>(
+        &mut self,
+        mut parse_next: F,
+        operators: &[(Punct, BinaryOp)],
+    ) -> CompileResult<Expr>
+    where
+        F: FnMut(&mut Self) -> CompileResult<Expr>,
+    {
+        let mut expr = parse_next(self)?;
 
         loop {
-            if self.consume_punct(Punct::Pipe) {
-                let location = self.last_location();
-                let rhs = self.parse_bitxor()?;
-                expr = self.expr_at(
-                    ExprKind::Binary {
-                        op: BinaryOp::BitOr,
-                        lhs: Box::new(expr),
-                        rhs: Box::new(rhs),
-                    },
-                    location,
-                );
-            } else {
+            let mut matched = false;
+            for &(punct, op) in operators {
+                if self.consume_punct(punct) {
+                    let location = self.last_location();
+                    let rhs = parse_next(self)?;
+                    expr = self.expr_at(
+                        ExprKind::Binary {
+                            op,
+                            lhs: Box::new(expr),
+                            rhs: Box::new(rhs),
+                        },
+                        location,
+                    );
+                    matched = true;
+                    break;
+                }
+            }
+            if !matched {
                 break;
             }
         }
 
         Ok(expr)
+    }
+
+    fn parse_bitor(&mut self) -> CompileResult<Expr> {
+        self.parse_binary_op(Self::parse_bitxor, &[(Punct::Pipe, BinaryOp::BitOr)])
     }
 
     fn parse_bitxor(&mut self) -> CompileResult<Expr> {
-        let mut expr = self.parse_bitand()?;
-
-        loop {
-            if self.consume_punct(Punct::Caret) {
-                let location = self.last_location();
-                let rhs = self.parse_bitand()?;
-                expr = self.expr_at(
-                    ExprKind::Binary {
-                        op: BinaryOp::BitXor,
-                        lhs: Box::new(expr),
-                        rhs: Box::new(rhs),
-                    },
-                    location,
-                );
-            } else {
-                break;
-            }
-        }
-
-        Ok(expr)
+        self.parse_binary_op(Self::parse_bitand, &[(Punct::Caret, BinaryOp::BitXor)])
     }
 
     fn parse_bitand(&mut self) -> CompileResult<Expr> {
-        let mut expr = self.parse_equality()?;
-
-        loop {
-            if self.consume_punct(Punct::Amp) {
-                let location = self.last_location();
-                let rhs = self.parse_equality()?;
-                expr = self.expr_at(
-                    ExprKind::Binary {
-                        op: BinaryOp::BitAnd,
-                        lhs: Box::new(expr),
-                        rhs: Box::new(rhs),
-                    },
-                    location,
-                );
-            } else {
-                break;
-            }
-        }
-
-        Ok(expr)
+        self.parse_binary_op(Self::parse_equality, &[(Punct::Amp, BinaryOp::BitAnd)])
     }
 
     fn parse_equality(&mut self) -> CompileResult<Expr> {
