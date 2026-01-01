@@ -50,7 +50,10 @@ pub enum ExprKind {
     },
     Addr(Box<Expr>),
     Deref(Box<Expr>),
-    Var(usize),
+    Var {
+        idx: usize,
+        is_local: bool,
+    },
     Assign {
         lhs: Box<Expr>,
         rhs: Box<Expr>,

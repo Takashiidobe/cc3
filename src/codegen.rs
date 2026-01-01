@@ -18,15 +18,33 @@ impl Codegen {
     }
 
     pub fn generate(mut self, program: &Program) -> String {
-        for obj in &program.globals {
-            if obj.is_function {
-                self.generate_function(obj);
-            }
-        }
+        self.emit_data(program);
+        self.emit_text(program);
         self.buffer
     }
 
-    fn generate_function(&mut self, function: &Obj) {
+    fn emit_data(&mut self, program: &Program) {
+        for obj in &program.globals {
+            if obj.is_function {
+                continue;
+            }
+
+            self.emit_line("  .data");
+            self.emit_line(&format!("  .globl {}", obj.name));
+            self.emit_line(&format!("{}:", obj.name));
+            self.emit_line(&format!("  .zero {}", obj.ty.size()));
+        }
+    }
+
+    fn emit_text(&mut self, program: &Program) {
+        for obj in &program.globals {
+            if obj.is_function {
+                self.generate_function(obj, &program.globals);
+            }
+        }
+    }
+
+    fn generate_function(&mut self, function: &Obj, globals: &[Obj]) {
         self.current_fn = Some(function.name.clone());
 
         self.emit_line(&format!("  .globl {}", function.name));
@@ -44,7 +62,7 @@ impl Codegen {
         let mut last_was_return = false;
         for stmt in &function.body {
             last_was_return = matches!(stmt.kind, StmtKind::Return(_));
-            self.gen_stmt(stmt, function);
+            self.gen_stmt(stmt, function, globals);
         }
 
         if !last_was_return {
@@ -64,27 +82,27 @@ impl Codegen {
         self.label_counter
     }
 
-    fn gen_stmt(&mut self, stmt: &Stmt, function: &Obj) {
+    fn gen_stmt(&mut self, stmt: &Stmt, function: &Obj, globals: &[Obj]) {
         match &stmt.kind {
             StmtKind::Return(expr) => {
-                self.gen_expr(expr, function);
+                self.gen_expr(expr, function, globals);
                 self.emit_epilogue();
                 self.emit_line("  ret");
             }
             StmtKind::If { cond, then, els } => {
                 let label = self.next_label();
-                self.gen_expr(cond, function);
+                self.gen_expr(cond, function, globals);
                 self.emit_line("  cmp $0, %rax");
                 if let Some(els) = els {
                     self.emit_line(&format!("  je .L.else.{}", label));
-                    self.gen_stmt(then, function);
+                    self.gen_stmt(then, function, globals);
                     self.emit_line(&format!("  jmp .L.end.{}", label));
                     self.emit_line(&format!(".L.else.{}:", label));
-                    self.gen_stmt(els, function);
+                    self.gen_stmt(els, function, globals);
                     self.emit_line(&format!(".L.end.{}:", label));
                 } else {
                     self.emit_line(&format!("  je .L.end.{}", label));
-                    self.gen_stmt(then, function);
+                    self.gen_stmt(then, function, globals);
                     self.emit_line(&format!(".L.end.{}:", label));
                 }
             }
@@ -96,40 +114,40 @@ impl Codegen {
             } => {
                 let label = self.next_label();
                 if let Some(init) = init {
-                    self.gen_stmt(init, function);
+                    self.gen_stmt(init, function, globals);
                 }
                 self.emit_line(&format!(".L.begin.{}:", label));
                 if let Some(cond) = cond {
-                    self.gen_expr(cond, function);
+                    self.gen_expr(cond, function, globals);
                     self.emit_line("  cmp $0, %rax");
                     self.emit_line(&format!("  je .L.end.{}", label));
                 }
-                self.gen_stmt(body, function);
+                self.gen_stmt(body, function, globals);
                 if let Some(inc) = inc {
-                    self.gen_expr(inc, function);
+                    self.gen_expr(inc, function, globals);
                 }
                 self.emit_line(&format!("  jmp .L.begin.{}", label));
                 self.emit_line(&format!(".L.end.{}:", label));
             }
             StmtKind::Block(stmts) => {
                 for stmt in stmts {
-                    self.gen_stmt(stmt, function);
+                    self.gen_stmt(stmt, function, globals);
                 }
             }
             StmtKind::Expr(expr) => {
-                self.gen_expr(expr, function);
+                self.gen_expr(expr, function, globals);
             }
             StmtKind::Decl(_) => {}
         }
     }
 
-    fn gen_expr(&mut self, expr: &Expr, function: &Obj) {
+    fn gen_expr(&mut self, expr: &Expr, function: &Obj, globals: &[Obj]) {
         match &expr.kind {
             ExprKind::Num(value) => {
                 self.emit_line(&format!("  mov ${}, %rax", value));
             }
             ExprKind::Unary { op, expr } => {
-                self.gen_expr(expr, function);
+                self.gen_expr(expr, function, globals);
                 match op {
                     UnaryOp::Neg => {
                         self.emit_line("  neg %rax");
@@ -139,7 +157,7 @@ impl Codegen {
             ExprKind::Call { name, args } => {
                 let mut nargs = 0;
                 for arg in args {
-                    self.gen_expr(arg, function);
+                    self.gen_expr(arg, function, globals);
                     self.emit_line("  push %rax");
                     nargs += 1;
                 }
@@ -150,26 +168,26 @@ impl Codegen {
                 self.emit_line(&format!("  call {}", name));
             }
             ExprKind::Addr(expr) => {
-                self.gen_lvalue(expr, function);
+                self.gen_lvalue(expr, function, globals);
             }
             ExprKind::Deref(inner) => {
-                self.gen_expr(inner, function);
+                self.gen_expr(inner, function, globals);
                 self.load(expr.ty.as_ref());
             }
-            ExprKind::Var(idx) => {
-                self.gen_addr(*idx, function);
+            ExprKind::Var { idx, is_local } => {
+                self.gen_addr(*idx, *is_local, function, globals);
                 self.load(expr.ty.as_ref());
             }
             ExprKind::Assign { lhs, rhs } => {
-                self.gen_lvalue(lhs, function);
+                self.gen_lvalue(lhs, function, globals);
                 self.emit_line("  push %rax");
-                self.gen_expr(rhs, function);
+                self.gen_expr(rhs, function, globals);
                 self.store();
             }
             ExprKind::Binary { op, lhs, rhs } => {
-                self.gen_expr(rhs, function);
+                self.gen_expr(rhs, function, globals);
                 self.emit_line("  push %rax");
-                self.gen_expr(lhs, function);
+                self.gen_expr(lhs, function, globals);
                 self.emit_line("  pop %rdi");
                 match op {
                     BinaryOp::Add => {
@@ -226,15 +244,22 @@ impl Codegen {
         self.emit_line("  pop %rbp");
     }
 
-    fn gen_addr(&mut self, idx: usize, function: &Obj) {
-        let offset = function.locals[idx].offset;
-        self.emit_line(&format!("  lea {}(%rbp), %rax", offset));
+    fn gen_addr(&mut self, idx: usize, is_local: bool, function: &Obj, globals: &[Obj]) {
+        if is_local {
+            let offset = function.locals[idx].offset;
+            self.emit_line(&format!("  lea {}(%rbp), %rax", offset));
+            return;
+        }
+        let name = &globals[idx].name;
+        self.emit_line(&format!("  lea {}(%rip), %rax", name));
     }
 
-    fn gen_lvalue(&mut self, expr: &Expr, function: &Obj) {
+    fn gen_lvalue(&mut self, expr: &Expr, function: &Obj, globals: &[Obj]) {
         match &expr.kind {
-            ExprKind::Var(idx) => self.gen_addr(*idx, function),
-            ExprKind::Deref(expr) => self.gen_expr(expr, function),
+            ExprKind::Var { idx, is_local } => {
+                self.gen_addr(*idx, *is_local, function, globals)
+            }
+            ExprKind::Deref(expr) => self.gen_expr(expr, function, globals),
             _ => self.emit_line("  mov $0, %rax"),
         }
     }

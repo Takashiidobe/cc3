@@ -26,15 +26,28 @@ impl<'a> Parser<'a> {
 
     fn parse_program(&mut self) -> CompileResult<Program> {
         while !self.check_eof() {
-            self.parse_function()?;
+            let basety = self.parse_declspec()?;
+
+            // Function
+            if self.is_function()? {
+                self.parse_function_with_basety(basety)?;
+                continue;
+            }
+
+            // Global variable
+            self.parse_global_variable(basety)?;
         }
         Ok(Program {
             globals: std::mem::take(&mut self.globals),
         })
     }
 
-    fn parse_function(&mut self) -> CompileResult<()> {
+    fn parse_declspec(&mut self) -> CompileResult<Type> {
         self.expect_keyword(Keyword::Int)?;
+        Ok(Type::Int)
+    }
+
+    fn parse_function_with_basety(&mut self, _basety: Type) -> CompileResult<()> {
         let name = self.expect_ident()?;
 
         self.expect_punct(Punct::LParen)?;
@@ -99,6 +112,45 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    fn is_function(&self) -> CompileResult<bool> {
+        // Look ahead to see if this is a function or variable declaration
+        // A function has '(' after the identifier, a variable has ',' or ';'
+        let mut pos = self.pos;
+
+        // Skip past the declarator to find LParen (function) or semicolon/comma (variable)
+        while pos < self.tokens.len() {
+            match &self.tokens[pos].kind {
+                TokenKind::Punct(Punct::LParen) => return Ok(true),
+                TokenKind::Punct(Punct::Semicolon) | TokenKind::Punct(Punct::Comma) => {
+                    return Ok(false);
+                }
+                _ => pos += 1,
+            }
+        }
+        Ok(false)
+    }
+
+    fn parse_global_variable(&mut self, basety: Type) -> CompileResult<()> {
+        let mut first = true;
+
+        while !self.check_punct(Punct::Semicolon) {
+            if !first {
+                self.expect_punct(Punct::Comma)?;
+            }
+            first = false;
+
+            let (ty, name_token) = self.parse_declarator(basety.clone())?;
+            let name = match name_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => return Err(self.error_at(name_token.location, "variable name expected")),
+            };
+            self.new_gvar(name, ty);
+        }
+
+        self.expect_punct(Punct::Semicolon)?;
+        Ok(())
+    }
+
     fn parse_stmt(&mut self) -> CompileResult<Stmt> {
         if matches!(self.peek().kind, TokenKind::Keyword(Keyword::Int)) {
             return self.parse_declaration();
@@ -106,7 +158,7 @@ impl<'a> Parser<'a> {
 
         if self.consume_keyword(Keyword::Return) {
             let expr = self.parse_expr()?;
-            self.expect_punct(Punct::Semi)?;
+            self.expect_punct(Punct::Semicolon)?;
             return Ok(self.stmt_last(StmtKind::Return(expr)));
         }
 
@@ -130,11 +182,11 @@ impl<'a> Parser<'a> {
         if self.consume_keyword(Keyword::For) {
             self.expect_punct(Punct::LParen)?;
             let init = self.parse_expr_stmt()?;
-            let cond = if self.consume_punct(Punct::Semi) {
+            let cond = if self.consume_punct(Punct::Semicolon) {
                 None
             } else {
                 let expr = self.parse_expr()?;
-                self.expect_punct(Punct::Semi)?;
+                self.expect_punct(Punct::Semicolon)?;
                 Some(expr)
             };
             let inc = if self.consume_punct(Punct::RParen) {
@@ -185,7 +237,7 @@ impl<'a> Parser<'a> {
         let mut stmts = Vec::new();
         let mut first = true;
 
-        while !self.check_punct(Punct::Semi) {
+        while !self.check_punct(Punct::Semicolon) {
             if !first {
                 self.expect_punct(Punct::Comma)?;
             }
@@ -202,7 +254,13 @@ impl<'a> Parser<'a> {
             if self.consume_punct(Punct::Assign) {
                 let assign_location = self.last_location();
                 let rhs = self.parse_assign()?;
-                let lhs = self.expr_at(ExprKind::Var(idx), name_token.location);
+                let lhs = self.expr_at(
+                    ExprKind::Var {
+                        idx,
+                        is_local: true,
+                    },
+                    name_token.location,
+                );
                 let assign = self.expr_at(
                     ExprKind::Assign {
                         lhs: Box::new(lhs),
@@ -214,7 +272,7 @@ impl<'a> Parser<'a> {
             }
         }
 
-        self.expect_punct(Punct::Semi)?;
+        self.expect_punct(Punct::Semicolon)?;
         Ok(self.stmt_at(StmtKind::Block(stmts), location))
     }
 
@@ -260,13 +318,13 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_expr_stmt(&mut self) -> CompileResult<Stmt> {
-        if self.consume_punct(Punct::Semi) {
+        if self.consume_punct(Punct::Semicolon) {
             return Ok(self.stmt_last(StmtKind::Block(Vec::new())));
         }
 
         let location = self.peek().location;
         let expr = self.parse_expr()?;
-        self.expect_punct(Punct::Semi)?;
+        self.expect_punct(Punct::Semicolon)?;
         Ok(self.stmt_at(StmtKind::Expr(expr), location))
     }
 
@@ -277,7 +335,7 @@ impl<'a> Parser<'a> {
     fn parse_assign(&mut self) -> CompileResult<Expr> {
         let expr = self.parse_equality()?;
         if self.consume_punct(Punct::Assign) {
-            if !matches!(expr.kind, ExprKind::Var(_) | ExprKind::Deref(_)) {
+            if !matches!(expr.kind, ExprKind::Var { .. } | ExprKind::Deref(_)) {
                 return Err(self.error_here("invalid assignment target"));
             }
             let location = self.last_location();
@@ -509,12 +567,12 @@ impl<'a> Parser<'a> {
                 }
 
                 let name = name.clone();
-                let idx = match self.find_var(&name) {
-                    Some(idx) => idx,
+                let (idx, is_local) = match self.find_var(&name) {
+                    Some((idx, is_local)) => (idx, is_local),
                     None => return Err(self.error_at(token.location, "undefined variable")),
                 };
                 self.pos += 1;
-                Ok(self.expr_at(ExprKind::Var(idx), token.location))
+                Ok(self.expr_at(ExprKind::Var { idx, is_local }, token.location))
             }
             TokenKind::Num(value) => {
                 self.pos += 1;
@@ -669,8 +727,16 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn find_var(&self, name: &str) -> Option<usize> {
-        self.locals.iter().position(|var| var.name == name)
+    fn find_var(&self, name: &str) -> Option<(usize, bool)> {
+        // Search locals first
+        if let Some(idx) = self.locals.iter().position(|var| var.name == name) {
+            return Some((idx, true));
+        }
+        // Search globals
+        if let Some(idx) = self.globals.iter().position(|var| var.name == name) {
+            return Some((idx, false));
+        }
+        None
     }
 
     fn new_lvar(&mut self, name: String, ty: Type) -> usize {
@@ -692,6 +758,21 @@ impl<'a> Parser<'a> {
             stack_size: 0,
         });
         self.locals.len() - 1
+    }
+
+    fn new_gvar(&mut self, name: String, ty: Type) -> usize {
+        self.globals.push(Obj {
+            name,
+            ty,
+            is_local: false,
+            offset: 0,
+            is_function: false,
+            params: Vec::new(),
+            body: Vec::new(),
+            locals: Vec::new(),
+            stack_size: 0,
+        });
+        self.globals.len() - 1
     }
 
     fn parse_funcall(&mut self, name_token: Token) -> CompileResult<Expr> {
@@ -901,11 +982,19 @@ impl<'a> Parser<'a> {
 
         let ty = match &mut expr.kind {
             ExprKind::Num(_) => Type::Int,
-            ExprKind::Var(idx) => self
-                .locals
-                .get(*idx)
-                .map(|obj| obj.ty.clone())
-                .unwrap_or(Type::Int),
+            ExprKind::Var { idx, is_local } => {
+                if *is_local {
+                    self.locals
+                        .get(*idx)
+                        .map(|obj| obj.ty.clone())
+                        .unwrap_or(Type::Int)
+                } else {
+                    self.globals
+                        .get(*idx)
+                        .map(|obj| obj.ty.clone())
+                        .unwrap_or(Type::Int)
+                }
+            }
             ExprKind::Call { args, .. } => {
                 for arg in args {
                     self.add_type_expr(arg)?;
