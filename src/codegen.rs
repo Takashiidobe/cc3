@@ -31,9 +31,17 @@ impl Codegen {
             }
 
             self.emit_line("  .data");
-            self.emit_line(&format!("  .globl {}", obj.name));
+            if !obj.name.starts_with(".L") {
+                self.emit_line(&format!("  .globl {}", obj.name));
+            }
             self.emit_line(&format!("{}:", obj.name));
-            self.emit_line(&format!("  .zero {}", obj.ty.size()));
+            if let Some(init_data) = &obj.init_data {
+                for byte in init_data {
+                    self.emit_line(&format!("  .byte {}", byte));
+                }
+            } else {
+                self.emit_line(&format!("  .zero {}", obj.ty.size()));
+            }
         }
     }
 

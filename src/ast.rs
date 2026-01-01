@@ -94,6 +94,9 @@ pub struct Obj {
     // Global variable or function
     pub is_function: bool,
 
+    // Global variable
+    pub init_data: Option<Vec<u8>>,
+
     // Function
     pub params: Vec<Obj>,
     pub body: Vec<Stmt>,

@@ -12,6 +12,7 @@ struct Parser<'a> {
     pos: usize,
     locals: Vec<Obj>,
     globals: Vec<Obj>,
+    string_label: usize,
 }
 
 impl<'a> Parser<'a> {
@@ -21,6 +22,7 @@ impl<'a> Parser<'a> {
             pos: 0,
             locals: Vec::new(),
             globals: Vec::new(),
+            string_label: 0,
         }
     }
 
@@ -118,6 +120,7 @@ impl<'a> Parser<'a> {
             is_local: false,
             offset: 0,
             is_function: true,
+            init_data: None,
             params,
             body,
             locals,
@@ -589,6 +592,17 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(self.expr_at(ExprKind::Var { idx, is_local }, token.location))
             }
+            TokenKind::Str { bytes, ty } => {
+                let idx = self.new_string_literal(bytes, ty);
+                self.pos += 1;
+                Ok(self.expr_at(
+                    ExprKind::Var {
+                        idx,
+                        is_local: false,
+                    },
+                    token.location,
+                ))
+            }
             TokenKind::Num(value) => {
                 self.pos += 1;
                 Ok(self.expr_at(ExprKind::Num(value), token.location))
@@ -737,6 +751,7 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(kw) => format!("keyword '{kw:?}'"),
             TokenKind::Ident(name) => format!("identifier '{name}'"),
             TokenKind::Num(value) => format!("number {value}"),
+            TokenKind::Str { .. } => "string literal".to_string(),
             TokenKind::Punct(punct) => format!("'{punct}'"),
             TokenKind::Eof => "end of file".to_string(),
         }
@@ -767,6 +782,7 @@ impl<'a> Parser<'a> {
             is_local: true,
             offset,
             is_function: false,
+            init_data: None,
             params: Vec::new(),
             body: Vec::new(),
             locals: Vec::new(),
@@ -782,12 +798,32 @@ impl<'a> Parser<'a> {
             is_local: false,
             offset: 0,
             is_function: false,
+            init_data: None,
             params: Vec::new(),
             body: Vec::new(),
             locals: Vec::new(),
             stack_size: 0,
         });
         self.globals.len() - 1
+    }
+
+    fn new_unique_name(&mut self) -> String {
+        let name = format!(".L..{}", self.string_label);
+        self.string_label += 1;
+        name
+    }
+
+    fn new_anon_gvar(&mut self, ty: Type) -> usize {
+        let name = self.new_unique_name();
+        self.new_gvar(name, ty)
+    }
+
+    fn new_string_literal(&mut self, bytes: Vec<u8>, ty: Type) -> usize {
+        let idx = self.new_anon_gvar(ty);
+        if let Some(obj) = self.globals.get_mut(idx) {
+            obj.init_data = Some(bytes);
+        }
+        idx
     }
 
     fn parse_funcall(&mut self, name_token: Token) -> CompileResult<Expr> {

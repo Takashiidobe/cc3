@@ -1,3 +1,4 @@
+use crate::ast::Type;
 use crate::error::{CompileError, CompileResult, SourceLocation};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,6 +18,7 @@ pub enum TokenKind {
     Keyword(Keyword),
     Ident(String),
     Num(i64),
+    Str { bytes: Vec<u8>, ty: Type },
     Punct(Punct),
     Eof,
 }
@@ -146,6 +148,58 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 _ => TokenKind::Ident(word.to_string()),
             };
             tokens.push(Token { kind, location });
+            column += i - start;
+            continue;
+        }
+
+        if b == b'"' {
+            let start = i;
+            let location = SourceLocation {
+                line,
+                column,
+                byte: start,
+            };
+            i += 1;
+            while i < bytes.len() && bytes[i] != b'"' {
+                if bytes[i] == b'\n' || bytes[i] == b'\0' {
+                    return Err(CompileError::at(
+                        "unclosed string literal",
+                        SourceLocation {
+                            line,
+                            column,
+                            byte: start,
+                        },
+                    ));
+                }
+                i += 1;
+            }
+            if i >= bytes.len() {
+                return Err(CompileError::at(
+                    "unclosed string literal",
+                    SourceLocation {
+                        line,
+                        column,
+                        byte: start,
+                    },
+                ));
+            }
+
+            let content = &bytes[start + 1..i];
+            let mut str_bytes = Vec::with_capacity(content.len() + 1);
+            str_bytes.extend_from_slice(content);
+            str_bytes.push(0);
+            let ty = Type::Array {
+                base: Box::new(Type::Char),
+                len: str_bytes.len() as i32,
+            };
+            tokens.push(Token {
+                kind: TokenKind::Str {
+                    bytes: str_bytes,
+                    ty,
+                },
+                location,
+            });
+            i += 1;
             column += i - start;
             continue;
         }
