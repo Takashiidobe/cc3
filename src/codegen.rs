@@ -38,6 +38,7 @@ impl Codegen {
 
             if !obj.name.starts_with(".L") {
                 self.emit_line(&format!("  .globl {}", obj.name));
+                self.emit_line(&format!("  .align {}", obj.ty.align()));
             }
 
             if let Some(init_data) = &obj.init_data {
