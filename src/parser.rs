@@ -267,7 +267,12 @@ impl<'a> Parser<'a> {
 
         // Parse function parameters
         let mut param_indices = Vec::new();
-        if !self.check_punct(Punct::RParen) {
+
+        // Check for void parameter list: foo(void)
+        if self.consume_keyword(Keyword::Void) && self.check_punct(Punct::RParen) {
+            // void parameter list means no parameters
+            // param_indices remains empty
+        } else if !self.check_punct(Punct::RParen) {
             loop {
                 let param_basety = self.parse_declspec(None)?;
                 let (param_ty, param_token) = self.parse_declarator(param_basety)?;
