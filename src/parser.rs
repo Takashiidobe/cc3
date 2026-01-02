@@ -2290,6 +2290,28 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Initialize a char array with a string literal.
+    /// For example: char x[4] = "abc";
+    fn string_initializer(&mut self, init: &mut Initializer, str_bytes: &[u8]) {
+        // Initialize each array element with the corresponding character from the string
+        // Use the minimum of array length and string length to handle both:
+        // - char x[10] = "abc";  // Initialize first 3, rest are 0
+        // - char x[2] = "abc";   // Initialize first 2, truncate rest
+        let array_len = if let Type::Array { len, .. } = &init.ty {
+            *len as usize
+        } else {
+            return;
+        };
+
+        let len = array_len.min(str_bytes.len());
+        for i in 0..len {
+            init.children[i].expr = Some(self.expr_at(
+                ExprKind::Num(str_bytes[i] as i64),
+                SourceLocation { line: 0, column: 0, byte: 0 },
+            ));
+        }
+    }
+
     /// Skip an excess initializer element (one that exceeds the array size).
     /// This handles both braced initializers and simple expressions.
     fn skip_excess_element(&mut self) -> CompileResult<()> {
@@ -2305,33 +2327,56 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Parse an initializer recursively.
-    /// initializer = "{" initializer ("," initializer)* "}"
-    ///             | assign
-    fn parse_initializer2(&mut self, init: &mut Initializer) -> CompileResult<()> {
-        if let Type::Array { len, .. } = &init.ty {
-            self.expect_punct(Punct::LBrace)?;
+    /// Parse an array initializer with braces.
+    /// array-initializer = "{" initializer ("," initializer)* "}"
+    fn array_initializer(&mut self, init: &mut Initializer) -> CompileResult<()> {
+        let len = if let Type::Array { len, .. } = &init.ty {
+            *len
+        } else {
+            return Ok(());
+        };
 
-            let mut i = 0;
-            // Parse all initializers until closing brace
-            while !self.consume_punct(Punct::RBrace) {
-                if i > 0 {
-                    self.expect_punct(Punct::Comma)?;
-                }
+        self.expect_punct(Punct::LBrace)?;
 
-                if i < (*len as usize) {
-                    // Normal case: parse initializer for array element
-                    self.parse_initializer2(&mut init.children[i])?;
-                } else {
-                    // Excess element: skip it
-                    self.skip_excess_element()?;
-                }
-                i += 1;
+        let mut i = 0;
+        // Parse all initializers until closing brace
+        while !self.consume_punct(Punct::RBrace) {
+            if i > 0 {
+                self.expect_punct(Punct::Comma)?;
             }
 
-            return Ok(());
+            if i < (len as usize) {
+                // Normal case: parse initializer for array element
+                self.parse_initializer2(&mut init.children[i])?;
+            } else {
+                // Excess element: skip it
+                self.skip_excess_element()?;
+            }
+            i += 1;
         }
 
+        Ok(())
+    }
+
+    /// Parse an initializer recursively.
+    /// initializer = string-initializer | array-initializer | assign
+    fn parse_initializer2(&mut self, init: &mut Initializer) -> CompileResult<()> {
+        // Check for string literal initializer for char arrays
+        if let Type::Array { .. } = &init.ty {
+            if let TokenKind::Str { bytes, .. } = &self.peek().kind {
+                let bytes_clone = bytes.clone();
+                self.string_initializer(init, &bytes_clone);
+                self.pos += 1; // Consume the string token
+                return Ok(());
+            }
+        }
+
+        // Check for array initializer
+        if let Type::Array { .. } = &init.ty {
+            return self.array_initializer(init);
+        }
+
+        // Scalar initializer
         init.expr = Some(self.parse_assign()?);
         Ok(())
     }
