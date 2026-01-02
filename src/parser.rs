@@ -1399,22 +1399,7 @@ impl<'a> Parser<'a> {
                 let location = token.location;
                 self.pos += 2;
                 self.enter_scope();
-                let mut stmts = Vec::new();
-                while !self.check_punct(Punct::RBrace) {
-                    let is_label = matches!(self.peek().kind, TokenKind::Ident(_))
-                        && matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::Colon));
-                    if self.is_typename() && !is_label {
-                        let mut attr = VarAttr::default();
-                        let basety = self.parse_declspec(Some(&mut attr))?;
-                        if attr.is_typedef {
-                            self.parse_typedef(basety)?;
-                            continue;
-                        }
-                        stmts.push(self.parse_declaration(basety)?);
-                        continue;
-                    }
-                    stmts.push(self.parse_stmt()?);
-                }
+                let stmts = self.parse_block_items()?;
                 self.expect_punct(Punct::RBrace)?;
                 self.leave_scope();
                 self.expect_punct(Punct::RParen)?;
@@ -1947,6 +1932,13 @@ impl<'a> Parser<'a> {
 
     fn parse_block_stmt(&mut self) -> CompileResult<Stmt> {
         self.enter_scope();
+        let stmts = self.parse_block_items()?;
+        self.expect_punct(Punct::RBrace)?;
+        self.leave_scope();
+        Ok(self.stmt_last(StmtKind::Block(stmts)))
+    }
+
+    fn parse_block_items(&mut self) -> CompileResult<Vec<Stmt>> {
         let mut stmts = Vec::new();
         while !self.check_punct(Punct::RBrace) {
             let is_label = matches!(self.peek().kind, TokenKind::Ident(_))
@@ -1964,9 +1956,7 @@ impl<'a> Parser<'a> {
 
             stmts.push(self.parse_stmt()?);
         }
-        self.expect_punct(Punct::RBrace)?;
-        self.leave_scope();
-        Ok(self.stmt_last(StmtKind::Block(stmts)))
+        Ok(stmts)
     }
 
     fn parse_funcall(&mut self, name_token: Token) -> CompileResult<Expr> {
