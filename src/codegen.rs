@@ -36,12 +36,14 @@ impl Codegen {
                 continue;
             }
 
-            self.emit_line("  .data");
             if !obj.name.starts_with(".L") {
                 self.emit_line(&format!("  .globl {}", obj.name));
             }
-            self.emit_line(&format!("{}:", obj.name));
+
             if let Some(init_data) = &obj.init_data {
+                self.emit_line("  .data");
+                self.emit_line(&format!("{}:", obj.name));
+
                 let mut pos = 0;
                 let mut rel_iter = obj.relocations.iter().peekable();
 
@@ -64,9 +66,12 @@ impl Codegen {
                     self.emit_line(&format!("  .byte {}", init_data[pos]));
                     pos += 1;
                 }
-            } else {
-                self.emit_line(&format!("  .zero {}", obj.ty.size()));
+                continue;
             }
+
+            self.emit_line("  .bss");
+            self.emit_line(&format!("{}:", obj.name));
+            self.emit_line(&format!("  .zero {}", obj.ty.size()));
         }
     }
 
