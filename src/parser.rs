@@ -3,12 +3,14 @@ use crate::ast::{
 };
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
+use std::mem;
 
 pub fn parse(tokens: &[Token]) -> CompileResult<Program> {
     let mut parser = Parser::new(tokens);
     parser.parse_program()
 }
 
+#[derive(Default)]
 struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
@@ -68,17 +70,8 @@ impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
         Self {
             tokens,
-            pos: 0,
-            locals: Vec::new(),
-            globals: Vec::new(),
-            string_label: 0,
             scopes: vec![Scope::default()],
-            current_fn_return: None,
-            fn_labels: Vec::new(),
-            fn_gotos: Vec::new(),
-            break_depth: 0,
-            loop_depth: 0,
-            current_switch: None,
+            ..Default::default()
         }
     }
 
@@ -92,7 +85,6 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
-            // Function
             if self.is_function()? {
                 self.parse_function_with_basety(basety, &attr)?;
                 continue;
@@ -102,7 +94,7 @@ impl<'a> Parser<'a> {
             self.parse_global_variable(basety)?;
         }
         Ok(Program {
-            globals: std::mem::take(&mut self.globals),
+            globals: mem::take(&mut self.globals),
         })
     }
 
@@ -313,7 +305,7 @@ impl<'a> Parser<'a> {
             self.add_type_stmt(stmt)?;
         }
 
-        let mut locals = std::mem::take(&mut self.locals);
+        let mut locals = mem::take(&mut self.locals);
         let stack_size = assign_lvar_offsets(&mut locals);
 
         // Create function object
@@ -439,14 +431,7 @@ impl<'a> Parser<'a> {
 
         if self.consume_keyword(Keyword::Case) {
             let location = self.last_location();
-            let value_token = self.peek().clone();
-            let value = match value_token.kind {
-                TokenKind::Num(value) => {
-                    self.pos += 1;
-                    value
-                }
-                _ => return Err(self.error_expected("number")),
-            };
+            let value = self.const_expr()?;
             self.expect_punct(Punct::Colon)?;
 
             let label = self.new_unique_name();
@@ -772,14 +757,7 @@ impl<'a> Parser<'a> {
             };
 
             if self.consume_punct(Punct::Assign) {
-                let token = self.peek().clone();
-                val = match token.kind {
-                    TokenKind::Num(value) => {
-                        self.pos += 1;
-                        value
-                    }
-                    _ => return Err(self.error_expected("number")),
-                };
+                val = self.const_expr()?;
             }
 
             self.push_scope_enum(name, val);
@@ -969,17 +947,7 @@ impl<'a> Parser<'a> {
         let len = if self.consume_punct(Punct::RBracket) {
             -1
         } else {
-            let size_token = self.peek().clone();
-            let len = match size_token.kind {
-                TokenKind::Num(len) => {
-                    self.pos += 1;
-                    len as i32
-                }
-                _ => {
-                    return Err(self.error_expected("array size"));
-                }
-            };
-
+            let len = self.const_expr()? as i32;
             self.expect_punct(Punct::RBracket)?;
             len
         };
@@ -1072,7 +1040,7 @@ impl<'a> Parser<'a> {
         mut lhs: Expr,
         mut rhs: Expr,
         op: BinaryOp,
-        location: crate::error::SourceLocation,
+        location: SourceLocation,
     ) -> CompileResult<Expr> {
         self.add_type_expr(&mut lhs)?;
         self.add_type_expr(&mut rhs)?;
@@ -1438,7 +1406,7 @@ impl<'a> Parser<'a> {
         &mut self,
         mut node: Expr,
         addend: i64,
-        location: crate::error::SourceLocation,
+        location: SourceLocation,
     ) -> CompileResult<Expr> {
         self.add_type_expr(&mut node)?;
         let node_ty = node
@@ -1662,7 +1630,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn dummy_expr(&self, location: crate::error::SourceLocation) -> Expr {
+    fn dummy_expr(&self, location: SourceLocation) -> Expr {
         self.expr_at(ExprKind::Num(0), location)
     }
 
@@ -1681,7 +1649,7 @@ impl<'a> Parser<'a> {
 
     fn cast_expr_in_place(&self, expr: &mut Expr, ty: Type) {
         let location = expr.location;
-        let inner = std::mem::replace(expr, self.dummy_expr(location));
+        let inner = mem::replace(expr, self.dummy_expr(location));
         *expr = self.cast_expr(inner, ty);
     }
 
@@ -1754,15 +1722,6 @@ impl<'a> Parser<'a> {
         matches!(self.peek().kind, TokenKind::Punct(found) if found == punct)
     }
 
-    #[allow(dead_code)]
-    fn expect_eof(&mut self) -> CompileResult<()> {
-        let token = self.peek().clone();
-        match token.kind {
-            TokenKind::Eof => Ok(()),
-            _ => Err(self.error_expected("end of file")),
-        }
-    }
-
     fn check_eof(&self) -> bool {
         matches!(self.peek().kind, TokenKind::Eof)
     }
@@ -1779,7 +1738,7 @@ impl<'a> Parser<'a> {
             .unwrap_or_else(|| &self.tokens[self.tokens.len().saturating_sub(1)])
     }
 
-    fn last_location(&self) -> crate::error::SourceLocation {
+    fn last_location(&self) -> SourceLocation {
         self.tokens
             .get(self.pos.saturating_sub(1))
             .map(|token| token.location)
@@ -1790,11 +1749,11 @@ impl<'a> Parser<'a> {
         self.stmt_at(kind, self.last_location())
     }
 
-    fn stmt_at(&self, kind: StmtKind, location: crate::error::SourceLocation) -> Stmt {
+    fn stmt_at(&self, kind: StmtKind, location: SourceLocation) -> Stmt {
         Stmt { kind, location }
     }
 
-    fn expr_at(&self, kind: ExprKind, location: crate::error::SourceLocation) -> Expr {
+    fn expr_at(&self, kind: ExprKind, location: SourceLocation) -> Expr {
         Expr {
             kind,
             location,
@@ -1807,11 +1766,7 @@ impl<'a> Parser<'a> {
         CompileError::at(message, location)
     }
 
-    fn error_at(
-        &self,
-        location: crate::error::SourceLocation,
-        message: impl Into<String>,
-    ) -> CompileError {
+    fn error_at(&self, location: SourceLocation, message: impl Into<String>) -> CompileError {
         CompileError::at(message, location)
     }
 
@@ -1980,6 +1935,7 @@ impl<'a> Parser<'a> {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn new_function_def(
         &mut self,
         name: String,
@@ -2177,7 +2133,7 @@ impl<'a> Parser<'a> {
         &self,
         mut lhs: Expr,
         mut rhs: Expr,
-        location: crate::error::SourceLocation,
+        location: SourceLocation,
     ) -> CompileResult<Expr> {
         self.add_type_expr(&mut lhs)?;
         self.add_type_expr(&mut rhs)?;
@@ -2205,8 +2161,8 @@ impl<'a> Parser<'a> {
         }
 
         if !lhs_has_base && rhs_has_base {
-            std::mem::swap(&mut lhs, &mut rhs);
-            std::mem::swap(&mut lhs_ty, &mut rhs_ty);
+            mem::swap(&mut lhs, &mut rhs);
+            mem::swap(&mut lhs_ty, &mut rhs_ty);
         }
 
         let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
@@ -2236,7 +2192,7 @@ impl<'a> Parser<'a> {
         &self,
         mut lhs: Expr,
         mut rhs: Expr,
-        location: crate::error::SourceLocation,
+        location: SourceLocation,
     ) -> CompileResult<Expr> {
         self.add_type_expr(&mut lhs)?;
         self.add_type_expr(&mut rhs)?;
@@ -2372,17 +2328,12 @@ impl<'a> Parser<'a> {
                 }
             }
             ExprKind::Var { idx, is_local } => {
-                if *is_local {
-                    self.locals
-                        .get(*idx)
-                        .map(|obj| obj.ty.clone())
-                        .unwrap_or(Type::Int)
+                let map = if *is_local {
+                    &self.locals
                 } else {
-                    self.globals
-                        .get(*idx)
-                        .map(|obj| obj.ty.clone())
-                        .unwrap_or(Type::Int)
-                }
+                    &self.globals
+                };
+                map.get(*idx).map(|obj| obj.ty.clone()).unwrap_or(Type::Int)
             }
             ExprKind::Call { name, args } => {
                 for arg in args {
@@ -2521,6 +2472,74 @@ impl<'a> Parser<'a> {
 
         expr.ty = Some(ty);
         Ok(())
+    }
+
+    /// Evaluate a given expression as a constant expression at compile time.
+    fn eval(&self, expr: &mut Expr) -> CompileResult<i64> {
+        self.add_type_expr(expr)?;
+
+        match &mut expr.kind {
+            ExprKind::Num(val) => Ok(*val),
+            ExprKind::Unary { op, expr } => {
+                let val = self.eval(expr)?;
+                match op {
+                    UnaryOp::Neg => Ok(-val),
+                    UnaryOp::Not => Ok(if val == 0 { 1 } else { 0 }),
+                    UnaryOp::BitNot => Ok(!val),
+                }
+            }
+            ExprKind::Binary { op, lhs, rhs } => {
+                let lval = self.eval(lhs)?;
+                let rval = self.eval(rhs)?;
+                match op {
+                    BinaryOp::Add => Ok(lval + rval),
+                    BinaryOp::Sub => Ok(lval - rval),
+                    BinaryOp::Mul => Ok(lval * rval),
+                    BinaryOp::Div => Ok(lval / rval),
+                    BinaryOp::Mod => Ok(lval % rval),
+                    BinaryOp::BitAnd => Ok(lval & rval),
+                    BinaryOp::BitOr => Ok(lval | rval),
+                    BinaryOp::BitXor => Ok(lval ^ rval),
+                    BinaryOp::Shl => Ok(lval << rval),
+                    BinaryOp::Shr => Ok(lval >> rval),
+                    BinaryOp::Eq => Ok(if lval == rval { 1 } else { 0 }),
+                    BinaryOp::Ne => Ok(if lval != rval { 1 } else { 0 }),
+                    BinaryOp::Lt => Ok(if lval < rval { 1 } else { 0 }),
+                    BinaryOp::Le => Ok(if lval <= rval { 1 } else { 0 }),
+                    BinaryOp::LogAnd => Ok(if lval != 0 && rval != 0 { 1 } else { 0 }),
+                    BinaryOp::LogOr => Ok(if lval != 0 || rval != 0 { 1 } else { 0 }),
+                }
+            }
+            ExprKind::Cond { cond, then, els } => {
+                let cond_val = self.eval(cond)?;
+                if cond_val != 0 {
+                    self.eval(then)
+                } else {
+                    self.eval(els)
+                }
+            }
+            ExprKind::Comma { lhs: _, rhs } => self.eval(rhs),
+            ExprKind::Cast { expr, ty } => {
+                let val = self.eval(expr)?;
+                if ty.is_integer() {
+                    match ty.size() {
+                        1 => Ok(val as u8 as i64),
+                        2 => Ok(val as u16 as i64),
+                        4 => Ok(val as u32 as i64),
+                        _ => Ok(val),
+                    }
+                } else {
+                    Ok(val)
+                }
+            }
+            _ => Err(self.error_at(expr.location, "not a compile-time constant")),
+        }
+    }
+
+    /// Parse and evaluate a constant expression.
+    fn const_expr(&mut self) -> CompileResult<i64> {
+        let mut expr = self.parse_conditional()?;
+        self.eval(&mut expr)
     }
 }
 
