@@ -34,6 +34,13 @@ pub enum StmtKind {
         inc: Option<Expr>,
         body: Box<Stmt>,
     },
+    Goto {
+        label: String,
+    },
+    Label {
+        label: String,
+        stmt: Box<Stmt>,
+    },
     Expr(Expr),
     Decl(usize),
 }

@@ -20,6 +20,7 @@ pub enum Keyword {
     For,
     While,
     Sizeof,
+    Goto,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -52,6 +53,7 @@ pub enum Punct {
     RBracket,
     Semicolon,
     Comma,
+    Colon,
     Assign,
     AddAssign,
     SubAssign,
@@ -96,6 +98,7 @@ impl std::fmt::Display for Punct {
             Punct::RBracket => "]",
             Punct::Semicolon => ";",
             Punct::Comma => ",",
+            Punct::Colon => ":",
             Punct::Assign => "=",
             Punct::AddAssign => "+=",
             Punct::SubAssign => "-=",
@@ -293,6 +296,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 "for" => TokenKind::Keyword(Keyword::For),
                 "while" => TokenKind::Keyword(Keyword::While),
                 "sizeof" => TokenKind::Keyword(Keyword::Sizeof),
+                "goto" => TokenKind::Keyword(Keyword::Goto),
                 _ => TokenKind::Ident(word.to_string()),
             };
             tokens.push(Token { kind, location });
@@ -575,6 +579,7 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
         b']' => Punct::RBracket,
         b';' => Punct::Semicolon,
         b',' => Punct::Comma,
+        b':' => Punct::Colon,
         b'<' => Punct::Less,
         b'>' => Punct::Greater,
         _ => return None,

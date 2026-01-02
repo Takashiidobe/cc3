@@ -1,5 +1,5 @@
 use crate::ast::{BinaryOp, Expr, ExprKind, Member, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
-use crate::error::{CompileError, CompileResult};
+use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
 
 pub fn parse(tokens: &[Token]) -> CompileResult<Program> {
@@ -15,6 +15,8 @@ struct Parser<'a> {
     string_label: usize,
     scopes: Vec<Scope>,
     current_fn_return: Option<Type>,
+    fn_labels: Vec<(String, SourceLocation)>,
+    fn_gotos: Vec<(String, SourceLocation)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,6 +62,8 @@ impl<'a> Parser<'a> {
             string_label: 0,
             scopes: vec![Scope::default()],
             current_fn_return: None,
+            fn_labels: Vec::new(),
+            fn_gotos: Vec::new(),
         }
     }
 
@@ -261,6 +265,9 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
 
+        self.fn_labels.clear();
+        self.fn_gotos.clear();
+
         // Ensure the function is visible for recursive calls.
         self.new_function_decl(
             name.clone(),
@@ -282,6 +289,10 @@ impl<'a> Parser<'a> {
         self.expect_punct(Punct::RBrace)?;
         self.leave_scope();
         self.current_fn_return = prev_return;
+
+        self.validate_goto_labels()?;
+        self.fn_labels.clear();
+        self.fn_gotos.clear();
 
         for stmt in &mut body {
             self.add_type_stmt(stmt)?;
@@ -426,6 +437,37 @@ impl<'a> Parser<'a> {
                 inc: None,
                 body: Box::new(body),
             }));
+        }
+
+        if self.consume_keyword(Keyword::Goto) {
+            let name_token = self.expect_ident_token()?;
+            let label = match name_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => unreachable!(),
+            };
+            self.fn_gotos.push((label.clone(), name_token.location));
+            self.expect_punct(Punct::Semicolon)?;
+            return Ok(self.stmt_at(StmtKind::Goto { label }, name_token.location));
+        }
+
+        if matches!(self.peek().kind, TokenKind::Ident(_))
+            && matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::Colon))
+        {
+            let name_token = self.expect_ident_token()?;
+            self.expect_punct(Punct::Colon)?;
+            let label = match name_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => unreachable!(),
+            };
+            self.fn_labels.push((label.clone(), name_token.location));
+            let stmt = self.parse_stmt()?;
+            return Ok(self.stmt_at(
+                StmtKind::Label {
+                    label,
+                    stmt: Box::new(stmt),
+                },
+                name_token.location,
+            ));
         }
 
         if self.consume_punct(Punct::LBrace) {
@@ -1824,6 +1866,21 @@ impl<'a> Parser<'a> {
         name
     }
 
+    fn validate_goto_labels(&self) -> CompileResult<()> {
+        let mut labels = std::collections::HashMap::new();
+        for (label, location) in &self.fn_labels {
+            if labels.insert(label.clone(), *location).is_some() {
+                return Err(self.error_at(*location, "duplicate label"));
+            }
+        }
+        for (label, location) in &self.fn_gotos {
+            if !labels.contains_key(label) {
+                return Err(self.error_at(*location, "use of undeclared label"));
+            }
+        }
+        Ok(())
+    }
+
     fn new_anon_gvar(&mut self, ty: Type) -> usize {
         let name = self.new_unique_name();
         self.new_gvar(name, ty)
@@ -2128,6 +2185,10 @@ impl<'a> Parser<'a> {
                     self.add_type_expr(inc)?;
                 }
                 self.add_type_stmt(body)?;
+            }
+            StmtKind::Goto { .. } => {}
+            StmtKind::Label { stmt, .. } => {
+                self.add_type_stmt(stmt)?;
             }
             StmtKind::Expr(expr) => self.add_type_expr(expr)?,
             StmtKind::Decl(_) => {}

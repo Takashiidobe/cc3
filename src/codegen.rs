@@ -102,6 +102,10 @@ impl Codegen {
         self.buffer.push('\n');
     }
 
+    fn label_symbol(&self, function: &Obj, label: &str) -> String {
+        format!(".L.{}.{}", function.name, label)
+    }
+
     fn next_label(&mut self) -> usize {
         self.label_counter += 1;
         self.label_counter
@@ -154,6 +158,15 @@ impl Codegen {
                 }
                 self.emit_line(&format!("  jmp .L.begin.{}", label));
                 self.emit_line(&format!(".L.end.{}:", label));
+            }
+            StmtKind::Goto { label } => {
+                let target = self.label_symbol(function, label);
+                self.emit_line(&format!("  jmp {}", target));
+            }
+            StmtKind::Label { label, stmt } => {
+                let symbol = self.label_symbol(function, label);
+                self.emit_line(&format!("{}:", symbol));
+                self.gen_stmt(stmt, function, globals);
             }
             StmtKind::Block(stmts) => {
                 for stmt in stmts {
