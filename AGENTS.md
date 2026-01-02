@@ -13,12 +13,7 @@ diff of the task to work on, e.g.
 $ bd show f7x
 
 cc3-f7x: 0. Compile an integer to an exectuable that exits with the given number
-Status: open
-Priority: P2
-Type: task
-Created: 2025-12-31 15:08
-Created by: takashi
-Updated: 2025-12-31 15:08
+...
 
 Description:
 Diff: Refer to diffs/0.diff

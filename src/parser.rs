@@ -387,7 +387,12 @@ impl<'a> Parser<'a> {
                 TokenKind::Ident(name) => name,
                 _ => return Err(self.error_at(name_token.location, "variable name expected")),
             };
-            self.new_gvar(name, ty);
+            let var_idx = self.new_gvar(name, ty);
+
+            // Check for initializer
+            if self.consume_punct(Punct::Assign) {
+                self.parse_gvar_initializer(var_idx)?;
+            }
         }
 
         self.expect_punct(Punct::Semicolon)?;
@@ -2721,6 +2726,60 @@ impl<'a> Parser<'a> {
             },
             location,
         ))
+    }
+
+    /// Write a value to a buffer based on size (1, 2, 4, or 8 bytes).
+    fn write_buf(buf: &mut [u8], val: u64, sz: usize, offset: usize) {
+        match sz {
+            1 | 2 | 4 | 8 => {
+                let bytes = val.to_le_bytes();
+                let truncated_bytes = &bytes[..sz];
+                buf[offset..offset + sz].copy_from_slice(truncated_bytes);
+            }
+            _ => panic!("Invalid size: {}", sz),
+        }
+    }
+
+    /// Recursively serialize initializer data to a byte array for global variables.
+    fn write_gvar_data(
+        &self,
+        init: &Initializer,
+        buf: &mut [u8],
+        offset: usize,
+    ) -> CompileResult<()> {
+        if let Type::Array { base, len } = &init.ty {
+            let sz = base.size() as usize;
+            for i in 0..(*len as usize) {
+                self.write_gvar_data(&init.children[i], buf, offset + sz * i)?;
+            }
+            return Ok(());
+        }
+
+        if let Some(expr) = &init.expr {
+            let mut expr_clone = expr.clone();
+            let val = self.eval(&mut expr_clone)?;
+            Self::write_buf(buf, val as u64, init.ty.size() as usize, offset);
+        }
+
+        Ok(())
+    }
+
+    /// Parse and evaluate global variable initializers at compile-time.
+    /// Initializers for global variables are embedded in the .data section.
+    fn parse_gvar_initializer(&mut self, var_idx: usize) -> CompileResult<()> {
+        let ty = self.globals[var_idx].ty.clone();
+        let (init, updated_ty) = self.parse_initializer(ty)?;
+
+        // Update the variable's type (important for flexible arrays)
+        self.globals[var_idx].ty = updated_ty.clone();
+
+        // Allocate buffer and serialize initializer data
+        let size = updated_ty.size() as usize;
+        let mut buf = vec![0u8; size];
+        self.write_gvar_data(&init, &mut buf, 0)?;
+        self.globals[var_idx].init_data = Some(buf);
+
+        Ok(())
     }
 
     fn add_type_stmt(&self, stmt: &mut Stmt) -> CompileResult<()> {
