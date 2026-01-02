@@ -77,6 +77,8 @@ struct Initializer {
     /// If it's an initializer for an aggregate type (e.g. array),
     /// `children` has initializers for its children.
     children: Vec<Initializer>,
+    /// True if this is a flexible array (length not specified, e.g., `int x[] = {1,2,3}`)
+    is_flexible: bool,
 }
 
 /// Represents a designator for local variable initialization.
@@ -631,18 +633,6 @@ impl<'a> Parser<'a> {
                 TokenKind::Ident(name) => name,
                 _ => unreachable!("parse_declarator only returns identifiers"),
             };
-            if ty.size() < 0 {
-                return Err(CompileError::at(
-                    "variable has incomplete type",
-                    name_token.location,
-                ));
-            }
-            if ty == Type::Void {
-                return Err(CompileError::at(
-                    "variable declared void",
-                    name_token.location,
-                ));
-            }
             let idx = self.new_lvar(name, ty.clone());
             stmts.push(self.stmt_at(StmtKind::Decl(idx), name_token.location));
 
@@ -650,6 +640,21 @@ impl<'a> Parser<'a> {
                 let assign_location = self.last_location();
                 let expr = self.parse_lvar_initializer(idx, true, ty, assign_location)?;
                 stmts.push(self.stmt_at(StmtKind::Expr(expr), assign_location));
+            }
+
+            // Check for incomplete type after initialization (which may determine array length)
+            let var = &self.locals[idx];
+            if var.ty.size() < 0 {
+                return Err(CompileError::at(
+                    "variable has incomplete type",
+                    name_token.location,
+                ));
+            }
+            if var.ty == Type::Void {
+                return Err(CompileError::at(
+                    "variable declared void",
+                    name_token.location,
+                ));
             }
         }
 
@@ -2274,10 +2279,22 @@ impl<'a> Parser<'a> {
     }
 
     /// Create a new initializer tree for the given type.
-    fn new_initializer(&self, ty: Type) -> Initializer {
+    fn new_initializer(&self, ty: Type, is_flexible: bool) -> Initializer {
+        // For flexible arrays with unspecified length, don't create children yet
+        if is_flexible
+            && let Type::Array { len, .. } = &ty
+                && *len < 0 {
+                    return Initializer {
+                        ty,
+                        expr: None,
+                        children: Vec::new(),
+                        is_flexible: true,
+                    };
+                }
+
         let children = if let Type::Array { base, len } = &ty {
             (0..(*len as usize))
-                .map(|_| self.new_initializer(*base.clone()))
+                .map(|_| self.new_initializer(*base.clone(), false))
                 .collect()
         } else {
             Vec::new()
@@ -2287,12 +2304,23 @@ impl<'a> Parser<'a> {
             ty,
             expr: None,
             children,
+            is_flexible: false,
         }
     }
 
     /// Initialize a char array with a string literal.
     /// For example: char x[4] = "abc";
     fn string_initializer(&mut self, init: &mut Initializer, str_bytes: &[u8]) {
+        // If this is a flexible array (e.g., char x[] = "abc"), determine the length from the string
+        if init.is_flexible
+            && let Type::Array { base, .. } = &init.ty {
+                let new_ty = Type::Array {
+                    base: base.clone(),
+                    len: str_bytes.len() as i32,
+                };
+                *init = self.new_initializer(new_ty, false);
+            }
+
         // Initialize each array element with the corresponding character from the string
         // Use the minimum of array length and string length to handle both:
         // - char x[10] = "abc";  // Initialize first 3, rest are 0
@@ -2327,16 +2355,52 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Count the number of elements in an array initializer.
+    /// This is used for flexible arrays to determine their length.
+    fn count_array_init_elements(&mut self, base_ty: &Type) -> CompileResult<usize> {
+        let dummy = self.new_initializer(base_ty.clone(), false);
+        let mut count = 0;
+
+        while !self.check_punct(Punct::RBrace) {
+            if count > 0 {
+                self.expect_punct(Punct::Comma)?;
+            }
+            // Parse (and discard) the initializer to advance position
+            let mut dummy_copy = dummy.clone();
+            self.parse_initializer2(&mut dummy_copy)?;
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
     /// Parse an array initializer with braces.
     /// array-initializer = "{" initializer ("," initializer)* "}"
     fn array_initializer(&mut self, init: &mut Initializer) -> CompileResult<()> {
+        self.expect_punct(Punct::LBrace)?;
+
+        // If this is a flexible array (e.g., int x[] = {1,2,3}), count elements to determine length
+        if init.is_flexible
+            && let Type::Array { base, .. } = &init.ty {
+                // Save position to count elements
+                let saved_pos = self.pos;
+                let count = self.count_array_init_elements(base)?;
+                // Restore position to parse elements
+                self.pos = saved_pos;
+
+                // Create a new initializer with the determined length
+                let new_ty = Type::Array {
+                    base: base.clone(),
+                    len: count as i32,
+                };
+                *init = self.new_initializer(new_ty, false);
+            }
+
         let len = if let Type::Array { len, .. } = &init.ty {
             *len
         } else {
             return Ok(());
         };
-
-        self.expect_punct(Punct::LBrace)?;
 
         let mut i = 0;
         // Parse all initializers until closing brace
@@ -2362,14 +2426,13 @@ impl<'a> Parser<'a> {
     /// initializer = string-initializer | array-initializer | assign
     fn parse_initializer2(&mut self, init: &mut Initializer) -> CompileResult<()> {
         // Check for string literal initializer for char arrays
-        if let Type::Array { .. } = &init.ty {
-            if let TokenKind::Str { bytes, .. } = &self.peek().kind {
+        if let Type::Array { .. } = &init.ty
+            && let TokenKind::Str { bytes, .. } = &self.peek().kind {
                 let bytes_clone = bytes.clone();
                 self.string_initializer(init, &bytes_clone);
                 self.pos += 1; // Consume the string token
                 return Ok(());
             }
-        }
 
         // Check for array initializer
         if let Type::Array { .. } = &init.ty {
@@ -2382,10 +2445,11 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse an initializer for the given type.
-    fn parse_initializer(&mut self, ty: Type) -> CompileResult<Initializer> {
-        let mut init = self.new_initializer(ty);
+    fn parse_initializer(&mut self, ty: Type) -> CompileResult<(Initializer, Type)> {
+        let mut init = self.new_initializer(ty, true);
         self.parse_initializer2(&mut init)?;
-        Ok(init)
+        let updated_ty = init.ty.clone();
+        Ok((init, updated_ty))
     }
 
     /// Build an expression for the designated element.
@@ -2480,7 +2544,15 @@ impl<'a> Parser<'a> {
         ty: Type,
         location: SourceLocation,
     ) -> CompileResult<Expr> {
-        let init = self.parse_initializer(ty)?;
+        let (init, updated_ty) = self.parse_initializer(ty)?;
+
+        // Update the variable's type (important for flexible arrays)
+        if var_is_local {
+            self.locals[var_idx].ty = updated_ty;
+        } else {
+            self.globals[var_idx].ty = updated_ty;
+        }
+
         let mut desg_stack = vec![InitDesg {
             idx: 0,
             var_idx: Some(var_idx),
