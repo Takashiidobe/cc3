@@ -146,6 +146,16 @@ pub enum BinaryOp {
     Le,
 }
 
+/// Global variable can be initialized either by a constant expression
+/// or a pointer to another global variable. This struct represents the
+/// latter.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Relocation {
+    pub offset: usize,
+    pub label: String,
+    pub addend: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Obj {
     pub name: String,
@@ -162,6 +172,7 @@ pub struct Obj {
 
     // Global variable
     pub init_data: Option<Vec<u8>>,
+    pub relocations: Vec<Relocation>,
 
     // Function
     pub params: Vec<Obj>,

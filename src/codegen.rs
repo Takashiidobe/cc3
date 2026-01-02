@@ -42,8 +42,28 @@ impl Codegen {
             }
             self.emit_line(&format!("{}:", obj.name));
             if let Some(init_data) = &obj.init_data {
-                for byte in init_data {
-                    self.emit_line(&format!("  .byte {}", byte));
+                let mut pos = 0;
+                let mut rel_iter = obj.relocations.iter().peekable();
+
+                while pos < init_data.len() {
+                    if let Some(rel) = rel_iter.peek() {
+                        if rel.offset == pos {
+                            // Emit a relocation
+                            let addend_str = if rel.addend >= 0 {
+                                format!("+{}", rel.addend)
+                            } else {
+                                format!("{}", rel.addend)
+                            };
+                            self.emit_line(&format!("  .quad {}{}", rel.label, addend_str));
+                            pos += 8;
+                            rel_iter.next();
+                            continue;
+                        }
+                    }
+
+                    // Emit a regular byte
+                    self.emit_line(&format!("  .byte {}", init_data[pos]));
+                    pos += 1;
                 }
             } else {
                 self.emit_line(&format!("  .zero {}", obj.ty.size()));

@@ -1,5 +1,6 @@
 use crate::ast::{
-    BinaryOp, Expr, ExprKind, Member, Obj, Program, Stmt, StmtKind, SwitchCase, Type, UnaryOp,
+    BinaryOp, Expr, ExprKind, Member, Obj, Program, Relocation, Stmt, StmtKind, SwitchCase, Type,
+    UnaryOp,
 };
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
@@ -357,14 +358,16 @@ impl<'a> Parser<'a> {
 
     fn is_function(&self) -> CompileResult<bool> {
         // Look ahead to see if this is a function or variable declaration
-        // A function has '(' after the identifier, a variable has ',' or ';'
+        // A function has '(' after the identifier, a variable has '=', ',' or ';'
         let mut pos = self.pos;
 
-        // Skip past the declarator to find LParen (function) or semicolon/comma (variable)
+        // Skip past the declarator to find LParen (function) or assign/semicolon/comma (variable)
         while pos < self.tokens.len() {
             match &self.tokens[pos].kind {
                 TokenKind::Punct(Punct::LParen) => return Ok(true),
-                TokenKind::Punct(Punct::Semicolon) | TokenKind::Punct(Punct::Comma) => {
+                TokenKind::Punct(Punct::Assign)
+                | TokenKind::Punct(Punct::Semicolon)
+                | TokenKind::Punct(Punct::Comma) => {
                     return Ok(false);
                 }
                 _ => pos += 1,
@@ -1915,6 +1918,7 @@ impl<'a> Parser<'a> {
             is_definition: false,
             is_static: false,
             init_data: None,
+            relocations: Vec::new(),
             params: Vec::new(),
             body: Vec::new(),
             locals: Vec::new(),
@@ -1935,6 +1939,7 @@ impl<'a> Parser<'a> {
             is_definition: false,
             is_static: false,
             init_data: None,
+            relocations: Vec::new(),
             params: Vec::new(),
             body: Vec::new(),
             locals: Vec::new(),
@@ -1954,6 +1959,7 @@ impl<'a> Parser<'a> {
             is_definition: false,
             is_static,
             init_data: None,
+            relocations: Vec::new(),
             params: vec![],
             body: vec![],
             locals: vec![],
@@ -1981,6 +1987,7 @@ impl<'a> Parser<'a> {
             is_definition: true,
             is_static,
             init_data: None,
+            relocations: Vec::new(),
             params,
             body,
             locals,
@@ -2748,40 +2755,57 @@ impl<'a> Parser<'a> {
         init: &Initializer,
         buf: &mut [u8],
         offset: usize,
-    ) -> CompileResult<()> {
+    ) -> CompileResult<Vec<Relocation>> {
         if let Type::Array { base, len } = &init.ty {
             let sz = base.size() as usize;
+            let mut relocations = Vec::new();
             for i in 0..(*len as usize) {
-                self.write_gvar_data(&init.children[i], buf, offset + sz * i)?;
+                let mut rels = self.write_gvar_data(&init.children[i], buf, offset + sz * i)?;
+                relocations.append(&mut rels);
             }
-            return Ok(());
+            return Ok(relocations);
         }
 
         if let Type::Union { members, .. } = &init.ty {
-            for (i, member) in members.iter().enumerate() {
-                self.write_gvar_data(&init.children[i], buf, offset + member.offset as usize)?;
+            // For unions, only initialize the first member
+            if !members.is_empty() {
+                return self.write_gvar_data(&init.children[0], buf, offset);
             }
-            return Ok(());
+            return Ok(Vec::new());
         }
 
         if let Type::Struct { members, .. } = &init.ty {
+            let mut relocations = Vec::new();
             for member in members {
-                self.write_gvar_data(
+                let mut rels = self.write_gvar_data(
                     &init.children[member.idx],
                     buf,
                     offset + member.offset as usize,
                 )?;
+                relocations.append(&mut rels);
             }
-            return Ok(());
+            return Ok(relocations);
         }
 
         if let Some(expr) = &init.expr {
             let mut expr_clone = expr.clone();
-            let val = self.eval(&mut expr_clone)?;
-            Self::write_buf(buf, val as u64, init.ty.size() as usize, offset);
+            let mut label = None;
+            let val = self.eval2(&mut expr_clone, Some(&mut label))?;
+
+            if let Some(label_str) = label {
+                // This is a pointer to a global variable
+                return Ok(vec![Relocation {
+                    offset,
+                    label: label_str,
+                    addend: val,
+                }]);
+            } else {
+                // This is a regular constant value
+                Self::write_buf(buf, val as u64, init.ty.size() as usize, offset);
+            }
         }
 
-        Ok(())
+        Ok(Vec::new())
     }
 
     /// Parse and evaluate global variable initializers at compile-time.
@@ -2796,8 +2820,9 @@ impl<'a> Parser<'a> {
         // Allocate buffer and serialize initializer data
         let size = updated_ty.size() as usize;
         let mut buf = vec![0u8; size];
-        self.write_gvar_data(&init, &mut buf, 0)?;
+        let relocations = self.write_gvar_data(&init, &mut buf, 0)?;
         self.globals[var_idx].init_data = Some(buf);
+        self.globals[var_idx].relocations = relocations;
 
         Ok(())
     }
@@ -3017,12 +3042,22 @@ impl<'a> Parser<'a> {
 
     /// Evaluate a given expression as a constant expression at compile time.
     fn eval(&self, expr: &mut Expr) -> CompileResult<i64> {
+        self.eval2(expr, None)
+    }
+
+    /// Evaluate a given expression as a constant expression.
+    ///
+    /// A constant expression is either just a number or ptr+n where ptr
+    /// is a pointer to a global variable and n is a positive/negative
+    /// number. The latter form is accepted only as an initialization
+    /// expression for a global variable.
+    fn eval2(&self, expr: &mut Expr, label: Option<&mut Option<String>>) -> CompileResult<i64> {
         self.add_type_expr(expr)?;
 
         match &mut expr.kind {
             ExprKind::Num(val) => Ok(*val),
             ExprKind::Unary { op, expr } => {
-                let val = self.eval(expr)?;
+                let val = self.eval2(expr, label)?;
                 match op {
                     UnaryOp::Neg => Ok(-val),
                     UnaryOp::Not => Ok(if val == 0 { 1 } else { 0 }),
@@ -3030,38 +3065,51 @@ impl<'a> Parser<'a> {
                 }
             }
             ExprKind::Binary { op, lhs, rhs } => {
-                let lval = self.eval(lhs)?;
-                let rval = self.eval(rhs)?;
                 match op {
-                    BinaryOp::Add => Ok(lval + rval),
-                    BinaryOp::Sub => Ok(lval - rval),
-                    BinaryOp::Mul => Ok(lval * rval),
-                    BinaryOp::Div => Ok(lval / rval),
-                    BinaryOp::Mod => Ok(lval % rval),
-                    BinaryOp::BitAnd => Ok(lval & rval),
-                    BinaryOp::BitOr => Ok(lval | rval),
-                    BinaryOp::BitXor => Ok(lval ^ rval),
-                    BinaryOp::Shl => Ok(lval << rval),
-                    BinaryOp::Shr => Ok(lval >> rval),
-                    BinaryOp::Eq => Ok(if lval == rval { 1 } else { 0 }),
-                    BinaryOp::Ne => Ok(if lval != rval { 1 } else { 0 }),
-                    BinaryOp::Lt => Ok(if lval < rval { 1 } else { 0 }),
-                    BinaryOp::Le => Ok(if lval <= rval { 1 } else { 0 }),
-                    BinaryOp::LogAnd => Ok(if lval != 0 && rval != 0 { 1 } else { 0 }),
-                    BinaryOp::LogOr => Ok(if lval != 0 || rval != 0 { 1 } else { 0 }),
+                    BinaryOp::Add => {
+                        let lval = self.eval2(lhs, label)?;
+                        let rval = self.eval(rhs)?;
+                        Ok(lval + rval)
+                    }
+                    BinaryOp::Sub => {
+                        let lval = self.eval2(lhs, label)?;
+                        let rval = self.eval(rhs)?;
+                        Ok(lval - rval)
+                    }
+                    _ => {
+                        let lval = self.eval(lhs)?;
+                        let rval = self.eval(rhs)?;
+                        match op {
+                            BinaryOp::Mul => Ok(lval * rval),
+                            BinaryOp::Div => Ok(lval / rval),
+                            BinaryOp::Mod => Ok(lval % rval),
+                            BinaryOp::BitAnd => Ok(lval & rval),
+                            BinaryOp::BitOr => Ok(lval | rval),
+                            BinaryOp::BitXor => Ok(lval ^ rval),
+                            BinaryOp::Shl => Ok(lval << rval),
+                            BinaryOp::Shr => Ok(lval >> rval),
+                            BinaryOp::Eq => Ok(if lval == rval { 1 } else { 0 }),
+                            BinaryOp::Ne => Ok(if lval != rval { 1 } else { 0 }),
+                            BinaryOp::Lt => Ok(if lval < rval { 1 } else { 0 }),
+                            BinaryOp::Le => Ok(if lval <= rval { 1 } else { 0 }),
+                            BinaryOp::LogAnd => Ok(if lval != 0 && rval != 0 { 1 } else { 0 }),
+                            BinaryOp::LogOr => Ok(if lval != 0 || rval != 0 { 1 } else { 0 }),
+                            _ => unreachable!(),
+                        }
+                    }
                 }
             }
             ExprKind::Cond { cond, then, els } => {
                 let cond_val = self.eval(cond)?;
                 if cond_val != 0 {
-                    self.eval(then)
+                    self.eval2(then, label)
                 } else {
-                    self.eval(els)
+                    self.eval2(els, label)
                 }
             }
-            ExprKind::Comma { lhs: _, rhs } => self.eval(rhs),
+            ExprKind::Comma { lhs: _, rhs } => self.eval2(rhs, label),
             ExprKind::Cast { expr, ty } => {
-                let val = self.eval(expr)?;
+                let val = self.eval2(expr, label)?;
                 if ty.is_integer() {
                     match ty.size() {
                         1 => Ok(val as u8 as i64),
@@ -3073,7 +3121,58 @@ impl<'a> Parser<'a> {
                     Ok(val)
                 }
             }
+            ExprKind::Addr(inner) => self.eval_rval(inner, label),
+            ExprKind::Member { lhs, member } => {
+                if label.is_none() {
+                    return Err(self.error_at(expr.location, "not a compile-time constant"));
+                }
+                if !member.ty.is_array() {
+                    return Err(self.error_at(expr.location, "invalid initializer"));
+                }
+                let offset = self.eval_rval(lhs, label)?;
+                Ok(offset + member.offset as i64)
+            }
+            ExprKind::Var { idx, is_local } => {
+                if label.is_none() {
+                    return Err(self.error_at(expr.location, "not a compile-time constant"));
+                }
+                let var = if *is_local {
+                    &self.locals[*idx]
+                } else {
+                    &self.globals[*idx]
+                };
+                if !var.ty.is_array() && !matches!(var.ty, Type::Func(_)) {
+                    return Err(self.error_at(expr.location, "invalid initializer"));
+                }
+                if let Some(label_ref) = label {
+                    *label_ref = Some(var.name.clone());
+                }
+                Ok(0)
+            }
             _ => Err(self.error_at(expr.location, "not a compile-time constant")),
+        }
+    }
+
+    fn eval_rval(&self, expr: &mut Expr, label: Option<&mut Option<String>>) -> CompileResult<i64> {
+        self.add_type_expr(expr)?;
+
+        match &mut expr.kind {
+            ExprKind::Var { idx, is_local } => {
+                if *is_local {
+                    return Err(self.error_at(expr.location, "not a compile-time constant"));
+                }
+                let var = &self.globals[*idx];
+                if let Some(label_ref) = label {
+                    *label_ref = Some(var.name.clone());
+                }
+                Ok(0)
+            }
+            ExprKind::Deref(inner) => self.eval2(inner, label),
+            ExprKind::Member { lhs, member } => {
+                let offset = self.eval_rval(lhs, label)?;
+                Ok(offset + member.offset as i64)
+            }
+            _ => Err(self.error_at(expr.location, "invalid initializer")),
         }
     }
 
