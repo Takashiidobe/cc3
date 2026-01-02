@@ -70,6 +70,11 @@ pub struct Expr {
 pub enum ExprKind {
     Null,
     Num(i64),
+    /// Zero-clear a stack variable (for initializers)
+    Memzero {
+        idx: usize,
+        is_local: bool,
+    },
     Unary {
         op: UnaryOp,
         expr: Box<Expr>,

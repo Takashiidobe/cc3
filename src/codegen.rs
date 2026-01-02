@@ -241,6 +241,19 @@ impl Codegen {
             ExprKind::Null => {
                 // Do nothing
             }
+            ExprKind::Memzero { idx, is_local } => {
+                // Zero-clear a stack variable using rep stosb
+                // `rep stosb` is equivalent to `memset(%rdi, %al, %rcx)`
+                let var = if *is_local {
+                    &function.locals[*idx]
+                } else {
+                    &globals[*idx]
+                };
+                self.emit_line(&format!("  mov ${}, %rcx", var.ty.size()));
+                self.emit_line(&format!("  lea {}(%rbp), %rdi", var.offset));
+                self.emit_line("  mov $0, %al");
+                self.emit_line("  rep stosb");
+            }
             ExprKind::Num(value) => {
                 self.emit_line(&format!("  mov ${}, %rax", value));
             }

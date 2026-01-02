@@ -2297,7 +2297,11 @@ impl<'a> Parser<'a> {
         if let Type::Array { len, .. } = &init.ty {
             self.expect_punct(Punct::LBrace)?;
 
+            // Parse initializers until we hit the closing brace or reach the array size
             for i in 0..(*len as usize) {
+                if self.check_punct(Punct::RBrace) {
+                    break;
+                }
                 if i > 0 {
                     self.expect_punct(Punct::Comma)?;
                 }
@@ -2378,6 +2382,11 @@ impl<'a> Parser<'a> {
             return Ok(node);
         }
 
+        // If no initializer expression, return null (element will be zero-initialized)
+        if init.expr.is_none() {
+            return Ok(self.expr_at(ExprKind::Null, location));
+        }
+
         let lhs = self.init_desg_expr(desg_stack, location)?;
         let rhs = init.expr.clone().unwrap();
 
@@ -2395,6 +2404,10 @@ impl<'a> Parser<'a> {
     /// followed by assignments. For example:
     /// `int x[2][2] = {{6, 7}, {8, 9}}` is converted to:
     ///   x[0][0] = 6; x[0][1] = 7; x[1][0] = 8; x[1][1] = 9;
+    ///
+    /// If a partial initializer list is given, the C standard requires that
+    /// unspecified elements are set to 0. We implement this by zero-initializing
+    /// the entire memory region before applying user-supplied values.
     fn parse_lvar_initializer(
         &mut self,
         var_idx: usize,
@@ -2408,7 +2421,27 @@ impl<'a> Parser<'a> {
             var_idx: Some(var_idx),
             var_is_local,
         }];
-        self.create_lvar_init(&init, &mut desg_stack, location)
+
+        // First, zero-initialize the entire variable
+        let memzero = self.expr_at(
+            ExprKind::Memzero {
+                idx: var_idx,
+                is_local: var_is_local,
+            },
+            location,
+        );
+
+        // Then apply user-supplied initializers
+        let assignments = self.create_lvar_init(&init, &mut desg_stack, location)?;
+
+        // Combine them with a comma operator: memzero, assignments
+        Ok(self.expr_at(
+            ExprKind::Comma {
+                lhs: Box::new(memzero),
+                rhs: Box::new(assignments),
+            },
+            location,
+        ))
     }
 
     fn add_type_stmt(&self, stmt: &mut Stmt) -> CompileResult<()> {
@@ -2469,6 +2502,7 @@ impl<'a> Parser<'a> {
 
         let ty = match &mut expr.kind {
             ExprKind::Null => Type::Void,
+            ExprKind::Memzero { .. } => Type::Void,
             ExprKind::Num(value) => {
                 if i32::try_from(*value).is_ok() {
                     Type::Int
