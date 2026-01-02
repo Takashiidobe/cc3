@@ -769,7 +769,7 @@ impl<'a> Parser<'a> {
 
         let mut first = true;
         let mut val: i64 = 0;
-        while !self.check_punct(Punct::RBrace) {
+        while !self.consume_end() {
             if !first {
                 self.expect_punct(Punct::Comma)?;
             }
@@ -788,8 +788,6 @@ impl<'a> Parser<'a> {
             self.push_scope_enum(name, val);
             val += 1;
         }
-
-        self.expect_punct(Punct::RBrace)?;
 
         if let Some(tag_token) = tag {
             let name = match tag_token.kind {
@@ -1755,6 +1753,32 @@ impl<'a> Parser<'a> {
         matches!(self.peek().kind, TokenKind::Eof)
     }
 
+    /// Check if we're at the end of an enum or initializer list.
+    /// Returns true if current token is `}` OR if it's `,` followed by `}`.
+    fn is_end(&self) -> bool {
+        self.check_punct(Punct::RBrace)
+            || (self.check_punct(Punct::Comma)
+                && matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::RBrace)))
+    }
+
+    /// Consume the end of an enum or initializer list.
+    /// Consumes either `}` or `,}` and returns true if successful.
+    fn consume_end(&mut self) -> bool {
+        if self.check_punct(Punct::RBrace) {
+            self.pos += 1;
+            return true;
+        }
+
+        if self.check_punct(Punct::Comma)
+            && matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::RBrace))
+        {
+            self.pos += 2;
+            return true;
+        }
+
+        false
+    }
+
     fn peek(&self) -> &Token {
         self.tokens
             .get(self.pos)
@@ -2392,7 +2416,7 @@ impl<'a> Parser<'a> {
         let dummy = self.new_initializer(base_ty.clone(), false);
         let mut count = 0;
 
-        while !self.check_punct(Punct::RBrace) {
+        while !self.is_end() {
             if count > 0 {
                 self.expect_punct(Punct::Comma)?;
             }
@@ -2437,7 +2461,7 @@ impl<'a> Parser<'a> {
 
         let mut i = 0;
         // Parse all initializers until closing brace
-        while !self.consume_punct(Punct::RBrace) {
+        while !self.consume_end() {
             if i > 0 {
                 self.expect_punct(Punct::Comma)?;
             }
@@ -2480,7 +2504,7 @@ impl<'a> Parser<'a> {
 
         // Parse initializers without braces, stopping at '}' or after all elements
         for i in 0..(len as usize) {
-            if self.check_punct(Punct::RBrace) {
+            if self.is_end() {
                 break;
             }
 
@@ -2505,7 +2529,7 @@ impl<'a> Parser<'a> {
         };
 
         let mut member_idx = 0;
-        while !self.consume_punct(Punct::RBrace) {
+        while !self.consume_end() {
             if member_idx > 0 {
                 self.expect_punct(Punct::Comma)?;
             }
@@ -2534,7 +2558,7 @@ impl<'a> Parser<'a> {
 
         let mut first = true;
         for member in &members {
-            if self.check_punct(Punct::RBrace) {
+            if self.is_end() {
                 break;
             }
 
@@ -2556,6 +2580,7 @@ impl<'a> Parser<'a> {
         if self.consume_punct(Punct::LBrace) {
             // With braces: { initializer }
             self.parse_initializer2(&mut init.children[0])?;
+            self.consume_punct(Punct::Comma); // Optional trailing comma
             self.expect_punct(Punct::RBrace)?;
         } else {
             // Without braces: just the initializer

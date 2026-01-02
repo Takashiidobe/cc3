@@ -67,8 +67,8 @@ bd sync               # Sync with git
    ```bash
    cargo test
    ```
-4. Run `cargo clippy --all-targets --allow-dirty --fix` and fix any linter errors that can't be fixed automatically
-5. Run `cargo fmt` to format code
+4. **Run linter** Run `cargo clippy --all-targets --allow-dirty --fix` and fix any linter errors that can't be fixed automatically
+5. **Run formatter** Run `cargo fmt` to format code
 6. **Update issue status** - Close finished work, update in-progress items
 7. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
