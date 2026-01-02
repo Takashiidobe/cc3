@@ -1,4 +1,6 @@
-use crate::ast::{BinaryOp, Expr, ExprKind, Member, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
+use crate::ast::{
+    BinaryOp, Expr, ExprKind, Member, Obj, Program, Stmt, StmtKind, SwitchCase, Type, UnaryOp,
+};
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
 
@@ -18,6 +20,8 @@ struct Parser<'a> {
     fn_labels: Vec<(String, SourceLocation)>,
     fn_gotos: Vec<(String, SourceLocation)>,
     break_depth: usize,
+    loop_depth: usize,
+    current_switch: Option<SwitchContext>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +51,13 @@ struct VarAttr {
     is_static: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SwitchContext {
+    cases: Vec<SwitchCase>,
+    default_label: Option<String>,
+    break_label: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RecordKind {
     Struct,
@@ -66,6 +77,8 @@ impl<'a> Parser<'a> {
             fn_labels: Vec::new(),
             fn_gotos: Vec::new(),
             break_depth: 0,
+            loop_depth: 0,
+            current_switch: None,
         }
     }
 
@@ -390,6 +403,95 @@ impl<'a> Parser<'a> {
             }));
         }
 
+        if self.consume_keyword(Keyword::Switch) {
+            let location = self.last_location();
+            self.expect_punct(Punct::LParen)?;
+            let cond = self.parse_expr()?;
+            self.expect_punct(Punct::RParen)?;
+
+            let prev_switch = self.current_switch.take();
+            let break_label = self.new_unique_name();
+            self.current_switch = Some(SwitchContext {
+                cases: Vec::new(),
+                default_label: None,
+                break_label: break_label.clone(),
+            });
+
+            let prev_break = self.break_depth;
+            self.break_depth += 1;
+            let body = self.parse_stmt()?;
+            self.break_depth = prev_break;
+
+            let ctx = self.current_switch.take().unwrap();
+            self.current_switch = prev_switch;
+
+            return Ok(self.stmt_at(
+                StmtKind::Switch {
+                    cond,
+                    body: Box::new(body),
+                    cases: ctx.cases,
+                    default_label: ctx.default_label,
+                    break_label: ctx.break_label,
+                },
+                location,
+            ));
+        }
+
+        if self.consume_keyword(Keyword::Case) {
+            let location = self.last_location();
+            let value_token = self.peek().clone();
+            let value = match value_token.kind {
+                TokenKind::Num(value) => {
+                    self.pos += 1;
+                    value
+                }
+                _ => return Err(self.error_expected("number")),
+            };
+            self.expect_punct(Punct::Colon)?;
+
+            let label = self.new_unique_name();
+            if let Some(ctx) = self.current_switch.as_mut() {
+                ctx.cases.push(SwitchCase {
+                    value,
+                    label: label.clone(),
+                });
+            } else {
+                return Err(self.error_at(location, "stray case"));
+            }
+
+            let stmt = self.parse_stmt()?;
+            return Ok(self.stmt_at(
+                StmtKind::Case {
+                    value: Some(value),
+                    label,
+                    stmt: Box::new(stmt),
+                },
+                location,
+            ));
+        }
+
+        if self.consume_keyword(Keyword::Default) {
+            let location = self.last_location();
+            self.expect_punct(Punct::Colon)?;
+
+            let label = self.new_unique_name();
+            if let Some(ctx) = self.current_switch.as_mut() {
+                ctx.default_label = Some(label.clone());
+            } else {
+                return Err(self.error_at(location, "stray default"));
+            }
+
+            let stmt = self.parse_stmt()?;
+            return Ok(self.stmt_at(
+                StmtKind::Case {
+                    value: None,
+                    label,
+                    stmt: Box::new(stmt),
+                },
+                location,
+            ));
+        }
+
         if self.consume_keyword(Keyword::For) {
             self.expect_punct(Punct::LParen)?;
 
@@ -417,7 +519,9 @@ impl<'a> Parser<'a> {
                 Some(expr)
             };
             self.break_depth += 1;
+            self.loop_depth += 1;
             let body = self.parse_stmt()?;
+            self.loop_depth -= 1;
             self.break_depth -= 1;
 
             self.leave_scope();
@@ -435,7 +539,9 @@ impl<'a> Parser<'a> {
             let cond = self.parse_expr()?;
             self.expect_punct(Punct::RParen)?;
             self.break_depth += 1;
+            self.loop_depth += 1;
             let body = self.parse_stmt()?;
+            self.loop_depth -= 1;
             self.break_depth -= 1;
             return Ok(self.stmt_last(StmtKind::For {
                 init: None,
@@ -454,7 +560,7 @@ impl<'a> Parser<'a> {
         }
 
         if self.consume_keyword(Keyword::Continue) {
-            if self.break_depth == 0 {
+            if self.loop_depth == 0 {
                 return Err(self.error_here("stray continue"));
             }
             self.expect_punct(Punct::Semicolon)?;
@@ -2198,6 +2304,13 @@ impl<'a> Parser<'a> {
                     self.add_type_expr(inc)?;
                 }
                 self.add_type_stmt(body)?;
+            }
+            StmtKind::Switch { cond, body, .. } => {
+                self.add_type_expr(cond)?;
+                self.add_type_stmt(body)?;
+            }
+            StmtKind::Case { stmt, .. } => {
+                self.add_type_stmt(stmt)?;
             }
             StmtKind::Goto { .. } => {}
             StmtKind::Break => {}

@@ -170,6 +170,36 @@ impl Codegen {
                 self.break_stack.pop();
                 self.continue_stack.pop();
             }
+            StmtKind::Switch {
+                cond,
+                body,
+                cases,
+                default_label,
+                break_label,
+            } => {
+                self.gen_expr(cond, function, globals);
+                let use_64 = cond.ty.as_ref().map(|ty| ty.size() == 8).unwrap_or(true);
+                let reg = if use_64 { "%rax" } else { "%eax" };
+
+                for case in cases {
+                    self.emit_line(&format!("  cmp ${}, {}", case.value, reg));
+                    self.emit_line(&format!("  je {}", case.label));
+                }
+
+                if let Some(label) = default_label {
+                    self.emit_line(&format!("  jmp {}", label));
+                }
+
+                self.emit_line(&format!("  jmp {}", break_label));
+                self.break_stack.push(break_label.clone());
+                self.gen_stmt(body, function, globals);
+                self.break_stack.pop();
+                self.emit_line(&format!("{}:", break_label));
+            }
+            StmtKind::Case { label, stmt, .. } => {
+                self.emit_line(&format!("{}:", label));
+                self.gen_stmt(stmt, function, globals);
+            }
             StmtKind::Break => {
                 if let Some(label) = self.break_stack.last() {
                     self.emit_line(&format!("  jmp {}", label));

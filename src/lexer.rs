@@ -23,6 +23,9 @@ pub enum Keyword {
     Goto,
     Break,
     Continue,
+    Switch,
+    Case,
+    Default,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -301,6 +304,9 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 "goto" => TokenKind::Keyword(Keyword::Goto),
                 "break" => TokenKind::Keyword(Keyword::Break),
                 "continue" => TokenKind::Keyword(Keyword::Continue),
+                "switch" => TokenKind::Keyword(Keyword::Switch),
+                "case" => TokenKind::Keyword(Keyword::Case),
+                "default" => TokenKind::Keyword(Keyword::Default),
                 _ => TokenKind::Ident(word.to_string()),
             };
             tokens.push(Token { kind, location });

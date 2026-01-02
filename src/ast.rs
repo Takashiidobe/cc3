@@ -34,6 +34,18 @@ pub enum StmtKind {
         inc: Option<Expr>,
         body: Box<Stmt>,
     },
+    Switch {
+        cond: Expr,
+        body: Box<Stmt>,
+        cases: Vec<SwitchCase>,
+        default_label: Option<String>,
+        break_label: String,
+    },
+    Case {
+        value: Option<i64>,
+        label: String,
+        stmt: Box<Stmt>,
+    },
     Goto {
         label: String,
     },
@@ -142,6 +154,12 @@ pub struct Obj {
     pub body: Vec<Stmt>,
     pub locals: Vec<Obj>,
     pub stack_size: i32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SwitchCase {
+    pub value: i64,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
