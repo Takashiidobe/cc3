@@ -44,6 +44,12 @@ struct VarAttr {
     is_static: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RecordKind {
+    Struct,
+    Union,
+}
+
 impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
         Self {
@@ -623,8 +629,7 @@ impl<'a> Parser<'a> {
         Ok(Type::Enum)
     }
 
-    // Shared parsing logic for struct/union declarations
-    fn parse_struct_union_decl(&mut self) -> CompileResult<(Option<Token>, Vec<Member>)> {
+    fn parse_struct_union_decl(&mut self, kind: RecordKind) -> CompileResult<Type> {
         // Read a tag (optional identifier)
         let tag = if matches!(self.peek().kind, TokenKind::Ident(_)) {
             let tag_token = self.peek().clone();
@@ -634,70 +639,124 @@ impl<'a> Parser<'a> {
             None
         };
 
-        // If we have a tag but no opening brace, look up the existing type
-        if let Some(ref tag_token) = tag
+        let tag_name = tag.as_ref().map(|tag_token| match &tag_token.kind {
+            TokenKind::Ident(name) => name.clone(),
+            _ => unreachable!(),
+        });
+
+        // If we have a tag but no opening brace, look up the existing type or
+        // create an incomplete type.
+        if let Some(name) = tag_name.clone()
             && !self.check_punct(Punct::LBrace)
         {
-            let name = match &tag_token.kind {
-                TokenKind::Ident(name) => name,
-                _ => unreachable!(),
-            };
-            match self.find_tag(name) {
-                Some(Type::Struct { members }) | Some(Type::Union { members }) => {
-                    return Ok((None, members));
-                }
-                _ => return Err(self.error_at(tag_token.location, "unknown struct/union type")),
+            if let Some(ty) = self.find_tag(&name) {
+                return Ok(ty);
             }
+
+            let ty = match kind {
+                RecordKind::Struct => Type::Struct {
+                    members: Vec::new(),
+                    tag: Some(name.clone()),
+                    is_incomplete: true,
+                },
+                RecordKind::Union => Type::Union {
+                    members: Vec::new(),
+                    tag: Some(name.clone()),
+                    is_incomplete: true,
+                },
+            };
+            self.push_tag_scope(name, ty.clone());
+            return Ok(ty);
+        }
+
+        // If we have a tag, make sure it exists in the current scope before
+        // parsing members so self-references work.
+        if let Some(name) = tag_name.as_ref()
+            && self.find_tag_in_current_scope(name).is_none()
+        {
+            let ty = match kind {
+                RecordKind::Struct => Type::Struct {
+                    members: Vec::new(),
+                    tag: Some(name.clone()),
+                    is_incomplete: true,
+                },
+                RecordKind::Union => Type::Union {
+                    members: Vec::new(),
+                    tag: Some(name.clone()),
+                    is_incomplete: true,
+                },
+            };
+            self.push_tag_scope(name.clone(), ty);
         }
 
         // Parse members
         self.expect_punct(Punct::LBrace)?;
         let members = self.parse_struct_members()?;
-        Ok((tag, members))
-    }
 
-    fn parse_struct_decl(&mut self) -> CompileResult<Type> {
-        let (tag, mut members) = self.parse_struct_union_decl()?;
+        let ty = match kind {
+            RecordKind::Struct => Type::Struct {
+                members,
+                tag: tag_name.clone(),
+                is_incomplete: false,
+            },
+            RecordKind::Union => Type::Union {
+                members,
+                tag: tag_name.clone(),
+                is_incomplete: false,
+            },
+        };
 
-        // Assign offsets within the struct to members
-        let mut offset = 0i32;
-        for member in &mut members {
-            // Align offset to member's type alignment
-            offset = align_to(offset, member.ty.align() as i32);
-            member.offset = offset;
-            offset += member.ty.size() as i32;
-        }
-
-        let ty = Type::Struct { members };
-
-        // Register the struct type if a tag was given
-        if let Some(tag_token) = tag {
-            let name = match tag_token.kind {
-                TokenKind::Ident(name) => name,
-                _ => unreachable!(),
-            };
+        // Register the struct/union type if a tag was given.
+        if let Some(name) = tag_name {
+            if self.update_tag_in_current_scope(&name, ty.clone()) {
+                return Ok(ty);
+            }
             self.push_tag_scope(name, ty.clone());
         }
 
         Ok(ty)
     }
 
-    fn parse_union_decl(&mut self) -> CompileResult<Type> {
-        let (tag, members) = self.parse_struct_union_decl()?;
+    fn parse_struct_decl(&mut self) -> CompileResult<Type> {
+        let mut ty = self.parse_struct_union_decl(RecordKind::Struct)?;
 
-        // All union members start at offset 0 (already initialized to 0)
+        if let Type::Struct {
+            members,
+            is_incomplete,
+            ..
+        } = &mut ty
+        {
+            if *is_incomplete {
+                return Ok(ty);
+            }
 
-        let ty = Type::Union { members };
-
-        // Register the union type if a tag was given
-        if let Some(tag_token) = tag {
-            let name = match tag_token.kind {
-                TokenKind::Ident(name) => name,
-                _ => unreachable!(),
-            };
-            self.push_tag_scope(name, ty.clone());
+            // Assign offsets within the struct to members
+            let mut offset = 0i32;
+            for member in members.iter_mut() {
+                // Align offset to member's type alignment
+                offset = align_to(offset, member.ty.align() as i32);
+                member.offset = offset;
+                offset += member.ty.size() as i32;
+            }
         }
 
+        if let Type::Struct { tag: Some(tag), .. } = &ty {
+            self.update_tag_in_current_scope(tag, ty.clone());
+        }
+
+        Ok(ty)
+    }
+
+    fn parse_union_decl(&mut self) -> CompileResult<Type> {
+        let ty = self.parse_struct_union_decl(RecordKind::Union)?;
+
+        if let Type::Union { is_incomplete, .. } = &ty
+            && *is_incomplete
+        {
+            return Ok(ty);
+        }
+
+        // All union members start at offset 0 (already initialized to 0)
         Ok(ty)
     }
 
@@ -1255,7 +1314,20 @@ impl<'a> Parser<'a> {
     fn struct_ref(&self, mut lhs: Expr, name_token: Token) -> CompileResult<Expr> {
         self.add_type_expr(&mut lhs)?;
         let members = match lhs.ty.clone().unwrap_or(Type::Int) {
-            Type::Struct { members } | Type::Union { members } => members,
+            Type::Struct {
+                members,
+                tag: Some(tag),
+                is_incomplete: true,
+            }
+            | Type::Union {
+                members,
+                tag: Some(tag),
+                is_incomplete: true,
+            } => match self.find_tag(&tag) {
+                Some(Type::Struct { members, .. } | Type::Union { members, .. }) => members,
+                _ => members,
+            },
+            Type::Struct { members, .. } | Type::Union { members, .. } => members,
             _ => return Err(self.error_at(lhs.location, "not a struct nor a union")),
         };
         let name = match name_token.kind {
@@ -1592,12 +1664,39 @@ impl<'a> Parser<'a> {
             for scope in self.scopes.iter().rev() {
                 for var in scope.vars.iter().rev() {
                     if var.name == *name {
-                        return var.type_def.clone();
+                        if let Some(ty) = var.type_def.clone() {
+                            return Some(self.resolve_typedef_type(ty));
+                        }
+                        return None;
                     }
                 }
             }
         }
         None
+    }
+
+    fn resolve_typedef_type(&self, ty: Type) -> Type {
+        match ty {
+            Type::Struct {
+                members,
+                tag: Some(tag),
+                is_incomplete: true,
+            } => self.find_tag(&tag).unwrap_or(Type::Struct {
+                members,
+                tag: Some(tag),
+                is_incomplete: true,
+            }),
+            Type::Union {
+                members,
+                tag: Some(tag),
+                is_incomplete: true,
+            } => self.find_tag(&tag).unwrap_or(Type::Union {
+                members,
+                tag: Some(tag),
+                is_incomplete: true,
+            }),
+            other => other,
+        }
     }
 
     fn find_tag(&self, name: &str) -> Option<Type> {
@@ -1609,6 +1708,25 @@ impl<'a> Parser<'a> {
             }
         }
         None
+    }
+
+    fn find_tag_in_current_scope(&self, name: &str) -> Option<Type> {
+        self.scopes
+            .last()
+            .and_then(|scope| scope.tags.iter().rfind(|tag| tag.name == name))
+            .map(|tag| tag.ty.clone())
+    }
+
+    fn update_tag_in_current_scope(&mut self, name: &str, ty: Type) -> bool {
+        if let Some(scope) = self.scopes.last_mut() {
+            for tag in scope.tags.iter_mut().rev() {
+                if tag.name == name {
+                    tag.ty = ty;
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn push_tag_scope(&mut self, name: String, ty: Type) {

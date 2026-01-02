@@ -149,9 +149,13 @@ pub enum Type {
     Func(Box<Type>),
     Struct {
         members: Vec<Member>,
+        tag: Option<String>,
+        is_incomplete: bool,
     },
     Union {
         members: Vec<Member>,
+        tag: Option<String>,
+        is_incomplete: bool,
     },
     Array {
         base: Box<Type>,
@@ -190,7 +194,14 @@ impl Type {
             Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
-            Type::Struct { members } => {
+            Type::Struct {
+                members,
+                is_incomplete,
+                ..
+            } => {
+                if *is_incomplete {
+                    return -1;
+                }
                 if members.is_empty() {
                     return 0;
                 }
@@ -200,7 +211,14 @@ impl Type {
                 // Round up to alignment
                 ((size + align - 1) / align) * align
             }
-            Type::Union { members } => {
+            Type::Union {
+                members,
+                is_incomplete,
+                ..
+            } => {
+                if *is_incomplete {
+                    return -1;
+                }
                 if members.is_empty() {
                     return 0;
                 }
@@ -233,7 +251,19 @@ impl Type {
             Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func(_) => 8,
-            Type::Struct { members } | Type::Union { members } => {
+            Type::Struct {
+                members,
+                is_incomplete,
+                ..
+            }
+            | Type::Union {
+                members,
+                is_incomplete,
+                ..
+            } => {
+                if *is_incomplete {
+                    return 1;
+                }
                 if members.is_empty() {
                     return 1;
                 }
