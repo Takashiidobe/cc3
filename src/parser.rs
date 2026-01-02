@@ -2290,6 +2290,21 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Skip an excess initializer element (one that exceeds the array size).
+    /// This handles both braced initializers and simple expressions.
+    fn skip_excess_element(&mut self) -> CompileResult<()> {
+        if self.consume_punct(Punct::LBrace) {
+            // Recursively skip the contents of braced initializer
+            self.skip_excess_element()?;
+            self.expect_punct(Punct::RBrace)?;
+            return Ok(());
+        }
+
+        // Parse and discard a simple expression
+        self.parse_assign()?;
+        Ok(())
+    }
+
     /// Parse an initializer recursively.
     /// initializer = "{" initializer ("," initializer)* "}"
     ///             | assign
@@ -2297,18 +2312,23 @@ impl<'a> Parser<'a> {
         if let Type::Array { len, .. } = &init.ty {
             self.expect_punct(Punct::LBrace)?;
 
-            // Parse initializers until we hit the closing brace or reach the array size
-            for i in 0..(*len as usize) {
-                if self.check_punct(Punct::RBrace) {
-                    break;
-                }
+            let mut i = 0;
+            // Parse all initializers until closing brace
+            while !self.consume_punct(Punct::RBrace) {
                 if i > 0 {
                     self.expect_punct(Punct::Comma)?;
                 }
-                self.parse_initializer2(&mut init.children[i])?;
+
+                if i < (*len as usize) {
+                    // Normal case: parse initializer for array element
+                    self.parse_initializer2(&mut init.children[i])?;
+                } else {
+                    // Excess element: skip it
+                    self.skip_excess_element()?;
+                }
+                i += 1;
             }
 
-            self.expect_punct(Punct::RBrace)?;
             return Ok(());
         }
 

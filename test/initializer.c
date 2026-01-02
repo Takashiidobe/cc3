@@ -18,6 +18,9 @@ int main() {
   ASSERT(0, ({ int x[2][3]={{1,2}}; x[1][0]; }));
   ASSERT(0, ({ int x[2][3]={{1,2}}; x[1][2]; }));
 
+  ASSERT(1, ({ int x[2]={1,2,3}; x[0]; }));
+  ASSERT(2, ({ int x[2]={1,2,3}; x[1]; }));
+
   printf("OK\n");
   return 0;
 }
