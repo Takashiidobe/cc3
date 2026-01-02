@@ -1398,10 +1398,7 @@ impl<'a> Parser<'a> {
             {
                 let location = token.location;
                 self.pos += 2;
-                self.enter_scope();
                 let stmts = self.parse_block_items()?;
-                self.expect_punct(Punct::RBrace)?;
-                self.leave_scope();
                 self.expect_punct(Punct::RParen)?;
                 Ok(self.expr_at(ExprKind::StmtExpr(stmts), location))
             }
@@ -1931,14 +1928,12 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_block_stmt(&mut self) -> CompileResult<Stmt> {
-        self.enter_scope();
         let stmts = self.parse_block_items()?;
-        self.expect_punct(Punct::RBrace)?;
-        self.leave_scope();
         Ok(self.stmt_last(StmtKind::Block(stmts)))
     }
 
     fn parse_block_items(&mut self) -> CompileResult<Vec<Stmt>> {
+        self.enter_scope();
         let mut stmts = Vec::new();
         while !self.check_punct(Punct::RBrace) {
             let is_label = matches!(self.peek().kind, TokenKind::Ident(_))
@@ -1956,6 +1951,8 @@ impl<'a> Parser<'a> {
 
             stmts.push(self.parse_stmt()?);
         }
+        self.expect_punct(Punct::RBrace)?;
+        self.leave_scope();
         Ok(stmts)
     }
 
