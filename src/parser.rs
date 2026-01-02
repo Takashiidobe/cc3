@@ -2613,6 +2613,15 @@ impl<'a> Parser<'a> {
             return self.union_initializer(init);
         }
 
+        // Check for scalar initializer with braces
+        if self.consume_punct(Punct::LBrace) {
+            // An initializer for a scalar variable can be surrounded by
+            // braces. E.g. `int x = {3};`. Handle that case.
+            self.parse_initializer2(init)?;
+            self.expect_punct(Punct::RBrace)?;
+            return Ok(());
+        }
+
         // Scalar initializer
         init.expr = Some(self.parse_assign()?);
         Ok(())
