@@ -383,6 +383,14 @@ impl Codegen {
                     BinaryOp::BitXor => {
                         self.emit_line(&format!("  xor {}, {}", di, ax));
                     }
+                    BinaryOp::Shl => {
+                        self.emit_line("  mov %rdi, %rcx");
+                        self.emit_line(&format!("  shl %cl, {}", ax));
+                    }
+                    BinaryOp::Shr => {
+                        self.emit_line("  mov %rdi, %rcx");
+                        self.emit_line(&format!("  sar %cl, {}", ax));
+                    }
                     BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => {
                         self.emit_line(&format!("  cmp {}, {}", di, ax));
                         match op {

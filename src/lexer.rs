@@ -68,12 +68,16 @@ pub enum Punct {
     AndAssign,
     OrAssign,
     XorAssign,
+    ShlAssign,
+    ShrAssign,
     Inc,
     Dec,
     Not,
     BitNot,
     LogAnd,
     LogOr,
+    Shl,
+    Shr,
     EqEq,
     NotEq,
     Less,
@@ -113,12 +117,16 @@ impl std::fmt::Display for Punct {
             Punct::AndAssign => "&=",
             Punct::OrAssign => "|=",
             Punct::XorAssign => "^=",
+            Punct::ShlAssign => "<<=",
+            Punct::ShrAssign => ">>=",
             Punct::Inc => "++",
             Punct::Dec => "--",
             Punct::Not => "!",
             Punct::BitNot => "~",
             Punct::LogAnd => "&&",
             Punct::LogOr => "||",
+            Punct::Shl => "<<",
+            Punct::Shr => ">>",
             Punct::EqEq => "==",
             Punct::NotEq => "!=",
             Punct::Less => "<",
@@ -513,6 +521,12 @@ fn is_ident_continue(b: u8) -> bool {
 }
 
 fn read_punct(input: &str) -> Option<(Punct, usize)> {
+    if input.starts_with("<<=") {
+        return Some((Punct::ShlAssign, 3));
+    }
+    if input.starts_with(">>=") {
+        return Some((Punct::ShrAssign, 3));
+    }
     if input.starts_with("==") {
         return Some((Punct::EqEq, 2));
     }
@@ -527,6 +541,12 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
     }
     if input.starts_with("->") {
         return Some((Punct::Arrow, 2));
+    }
+    if input.starts_with("<<") {
+        return Some((Punct::Shl, 2));
+    }
+    if input.starts_with(">>") {
+        return Some((Punct::Shr, 2));
     }
     if input.starts_with("+=") {
         return Some((Punct::AddAssign, 2));

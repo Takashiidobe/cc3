@@ -1048,6 +1048,8 @@ impl<'a> Parser<'a> {
             (Punct::AndAssign, BinaryOp::BitAnd),
             (Punct::OrAssign, BinaryOp::BitOr),
             (Punct::XorAssign, BinaryOp::BitXor),
+            (Punct::ShlAssign, BinaryOp::Shl),
+            (Punct::ShrAssign, BinaryOp::Shr),
         ];
 
         for (punct, op) in compound_ops {
@@ -1262,12 +1264,22 @@ impl<'a> Parser<'a> {
 
     fn parse_relational(&mut self) -> CompileResult<Expr> {
         self.parse_binary_ops(
-            Self::parse_add,
+            Self::parse_shift,
             &[
                 (Punct::Less, BinaryOp::Lt, false),
                 (Punct::LessEq, BinaryOp::Le, false),
                 (Punct::Greater, BinaryOp::Lt, true),
                 (Punct::GreaterEq, BinaryOp::Le, true),
+            ],
+        )
+    }
+
+    fn parse_shift(&mut self) -> CompileResult<Expr> {
+        self.parse_binary_ops(
+            Self::parse_add,
+            &[
+                (Punct::Shl, BinaryOp::Shl, false),
+                (Punct::Shr, BinaryOp::Shr, false),
             ],
         )
     }
@@ -2469,7 +2481,9 @@ impl<'a> Parser<'a> {
                 | BinaryOp::Mod
                 | BinaryOp::BitAnd
                 | BinaryOp::BitOr
-                | BinaryOp::BitXor => self.usual_arith_conv(lhs, rhs)?,
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr => self.usual_arith_conv(lhs, rhs)?,
             },
         };
 
