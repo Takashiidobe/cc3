@@ -301,6 +301,17 @@ impl Codegen {
                 self.gen_expr(rhs, function, globals);
                 self.store(expr.ty.as_ref());
             }
+            ExprKind::Cond { cond, then, els } => {
+                let label = self.next_label();
+                self.gen_expr(cond, function, globals);
+                self.emit_line("  cmp $0, %rax");
+                self.emit_line(&format!("  je .L.else.{}", label));
+                self.gen_expr(then, function, globals);
+                self.emit_line(&format!("  jmp .L.end.{}", label));
+                self.emit_line(&format!(".L.else.{}:", label));
+                self.gen_expr(els, function, globals);
+                self.emit_line(&format!(".L.end.{}:", label));
+            }
             ExprKind::Comma { lhs, rhs } => {
                 self.gen_expr(lhs, function, globals);
                 self.gen_expr(rhs, function, globals);

@@ -1022,7 +1022,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_assign(&mut self) -> CompileResult<Expr> {
-        let expr = self.parse_logor()?;
+        let expr = self.parse_conditional()?;
 
         if self.consume_punct(Punct::Assign) {
             if !self.is_lvalue(&expr) {
@@ -1234,6 +1234,28 @@ impl<'a> Parser<'a> {
 
     fn parse_logor(&mut self) -> CompileResult<Expr> {
         self.parse_binary_op(Self::parse_logand, Punct::LogOr, BinaryOp::LogOr)
+    }
+
+    fn parse_conditional(&mut self) -> CompileResult<Expr> {
+        let cond = self.parse_logor()?;
+
+        if !self.consume_punct(Punct::Question) {
+            return Ok(cond);
+        }
+
+        let location = self.last_location();
+        let then = self.parse_expr()?;
+        self.expect_punct(Punct::Colon)?;
+        let els = self.parse_conditional()?;
+
+        Ok(self.expr_at(
+            ExprKind::Cond {
+                cond: Box::new(cond),
+                then: Box::new(then),
+                els: Box::new(els),
+            },
+            location,
+        ))
     }
 
     fn parse_logand(&mut self) -> CompileResult<Expr> {
@@ -2453,6 +2475,16 @@ impl<'a> Parser<'a> {
                     self.cast_expr_in_place(rhs, lhs_ty.clone());
                 }
                 lhs_ty
+            }
+            ExprKind::Cond { cond, then, els } => {
+                self.add_type_expr(cond)?;
+                self.add_type_expr(then)?;
+                self.add_type_expr(els)?;
+                if matches!(then.ty, Some(Type::Void)) || matches!(els.ty, Some(Type::Void)) {
+                    Type::Void
+                } else {
+                    self.usual_arith_conv(then, els)?
+                }
             }
             ExprKind::Member { member, .. } => member.ty.clone(),
             ExprKind::Cast { expr, ty } => {

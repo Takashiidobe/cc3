@@ -88,6 +88,11 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    Cond {
+        cond: Box<Expr>,
+        then: Box<Expr>,
+        els: Box<Expr>,
+    },
     Comma {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
