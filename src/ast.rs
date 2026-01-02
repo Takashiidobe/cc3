@@ -202,11 +202,13 @@ pub enum Type {
         members: Vec<Member>,
         tag: Option<String>,
         is_incomplete: bool,
+        is_flexible: bool,
     },
     Union {
         members: Vec<Member>,
         tag: Option<String>,
         is_incomplete: bool,
+        is_flexible: bool,
     },
     Array {
         base: Box<Type>,

@@ -829,11 +829,13 @@ impl<'a> Parser<'a> {
                     members: Vec::new(),
                     tag: Some(name.clone()),
                     is_incomplete: true,
+                    is_flexible: false,
                 },
                 RecordKind::Union => Type::Union {
                     members: Vec::new(),
                     tag: Some(name.clone()),
                     is_incomplete: true,
+                    is_flexible: false,
                 },
             };
             self.push_tag_scope(name, ty.clone());
@@ -850,11 +852,13 @@ impl<'a> Parser<'a> {
                     members: Vec::new(),
                     tag: Some(name.clone()),
                     is_incomplete: true,
+                    is_flexible: false,
                 },
                 RecordKind::Union => Type::Union {
                     members: Vec::new(),
                     tag: Some(name.clone()),
                     is_incomplete: true,
+                    is_flexible: false,
                 },
             };
             self.push_tag_scope(name.clone(), ty);
@@ -862,18 +866,20 @@ impl<'a> Parser<'a> {
 
         // Parse members
         self.expect_punct(Punct::LBrace)?;
-        let members = self.parse_struct_members()?;
+        let (members, is_flexible) = self.parse_struct_members()?;
 
         let ty = match kind {
             RecordKind::Struct => Type::Struct {
                 members,
                 tag: tag_name.clone(),
                 is_incomplete: false,
+                is_flexible,
             },
             RecordKind::Union => Type::Union {
                 members,
                 tag: tag_name.clone(),
                 is_incomplete: false,
+                is_flexible,
             },
         };
 
@@ -931,7 +937,7 @@ impl<'a> Parser<'a> {
         Ok(ty)
     }
 
-    fn parse_struct_members(&mut self) -> CompileResult<Vec<Member>> {
+    fn parse_struct_members(&mut self) -> CompileResult<(Vec<Member>, bool)> {
         let mut members = Vec::new();
         let mut idx = 0;
         while !self.check_punct(Punct::RBrace) {
@@ -964,6 +970,7 @@ impl<'a> Parser<'a> {
         // If the last element is an array of incomplete type, it's
         // called a "flexible array member". It should behave as if
         // it were a zero-sized array.
+        let mut is_flexible = false;
         if let Some(last_member) = members.last_mut()
             && let Type::Array { base, len } = &last_member.ty
             && *len < 0
@@ -972,10 +979,11 @@ impl<'a> Parser<'a> {
                 base: base.clone(),
                 len: 0,
             };
+            is_flexible = true;
         }
 
         self.expect_punct(Punct::RBrace)?;
-        Ok(members)
+        Ok((members, is_flexible))
     }
 
     fn parse_array_suffix(&mut self, ty: Type) -> CompileResult<Type> {
@@ -1530,11 +1538,13 @@ impl<'a> Parser<'a> {
                 members,
                 tag: Some(tag),
                 is_incomplete: true,
+                ..
             }
             | Type::Union {
                 members,
                 tag: Some(tag),
                 is_incomplete: true,
+                ..
             } => match self.find_tag(&tag) {
                 Some(Type::Struct { members, .. } | Type::Union { members, .. }) => members,
                 _ => members,
@@ -1890,19 +1900,23 @@ impl<'a> Parser<'a> {
                 members,
                 tag: Some(tag),
                 is_incomplete: true,
+                is_flexible,
             } => self.find_tag(&tag).unwrap_or(Type::Struct {
                 members,
                 tag: Some(tag),
                 is_incomplete: true,
+                is_flexible,
             }),
             Type::Union {
                 members,
                 tag: Some(tag),
                 is_incomplete: true,
+                is_flexible,
             } => self.find_tag(&tag).unwrap_or(Type::Union {
                 members,
                 tag: Some(tag),
                 is_incomplete: true,
+                is_flexible,
             }),
             other => other,
         }
@@ -2352,11 +2366,30 @@ impl<'a> Parser<'a> {
             (0..(*len as usize))
                 .map(|_| self.new_initializer(*base.clone(), false))
                 .collect()
-        } else if let Type::Struct { members, .. } | Type::Union { members, .. } = &ty {
+        } else if let Type::Struct {
+            members,
+            is_flexible: struct_is_flexible,
+            ..
+        }
+        | Type::Union {
+            members,
+            is_flexible: struct_is_flexible,
+            ..
+        } = &ty
+        {
             // Create children for each struct/union member
+            let num_members = members.len();
             members
                 .iter()
-                .map(|member| self.new_initializer(member.ty.clone(), false))
+                .enumerate()
+                .map(|(idx, member)| {
+                    // If this is a flexible struct and we're on the last member, make it flexible
+                    if is_flexible && *struct_is_flexible && idx == num_members - 1 {
+                        self.new_initializer(member.ty.clone(), true)
+                    } else {
+                        self.new_initializer(member.ty.clone(), false)
+                    }
+                })
                 .collect()
         } else {
             Vec::new()
@@ -2550,6 +2583,8 @@ impl<'a> Parser<'a> {
             if member_idx < members.len() {
                 // Normal case: parse initializer for struct member
                 let member = &members[member_idx];
+
+                // Parse the member initializer normally
                 self.parse_initializer2(&mut init.children[member.idx])?;
             } else {
                 // Excess element: skip it
@@ -2665,10 +2700,67 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Deep copy a struct or union type, including its members.
+    fn copy_struct_type(&self, ty: Type) -> Type {
+        match ty {
+            Type::Struct {
+                members,
+                tag,
+                is_incomplete,
+                is_flexible,
+            } => Type::Struct {
+                members: members.iter().map(|m| m.clone()).collect(),
+                tag,
+                is_incomplete,
+                is_flexible,
+            },
+            Type::Union {
+                members,
+                tag,
+                is_incomplete,
+                is_flexible,
+            } => Type::Union {
+                members: members.iter().map(|m| m.clone()).collect(),
+                tag,
+                is_incomplete,
+                is_flexible,
+            },
+            other => other,
+        }
+    }
+
     /// Parse an initializer for the given type.
     fn parse_initializer(&mut self, ty: Type) -> CompileResult<(Initializer, Type)> {
-        let mut init = self.new_initializer(ty, true);
+        let mut init = self.new_initializer(ty.clone(), true);
         self.parse_initializer2(&mut init)?;
+
+        // Handle flexible array members in structs/unions
+        if let Type::Struct {
+            is_flexible: true, ..
+        }
+        | Type::Union {
+            is_flexible: true, ..
+        } = &ty
+        {
+            let mut ty = self.copy_struct_type(ty);
+
+            // Find the last member
+            let members = match &mut ty {
+                Type::Struct { members, .. } | Type::Union { members, .. } => members,
+                _ => unreachable!(),
+            };
+
+            let num_members = members.len();
+            if num_members > 0 {
+                let last_idx = num_members - 1;
+                // Update the last member's type to match the initialized array size
+                members[last_idx].ty = init.children[last_idx].ty.clone();
+
+                // The struct size will be recalculated when needed based on the updated member types
+                return Ok((init, ty));
+            }
+        }
+
         let updated_ty = init.ty.clone();
         Ok((init, updated_ty))
     }
