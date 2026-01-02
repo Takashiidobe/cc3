@@ -2407,7 +2407,8 @@ impl<'a> Parser<'a> {
 
     /// Parse an array initializer with braces.
     /// array-initializer = "{" initializer ("," initializer)* "}"
-    fn array_initializer(&mut self, init: &mut Initializer) -> CompileResult<()> {
+    /// Parse array initializer with braces: "{" initializer ("," initializer)* "}"
+    fn array_initializer1(&mut self, init: &mut Initializer) -> CompileResult<()> {
         self.expect_punct(Punct::LBrace)?;
 
         // If this is a flexible array (e.g., int x[] = {1,2,3}), count elements to determine length
@@ -2454,9 +2455,47 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Parse a struct initializer with braces.
-    /// struct-initializer = "{" initializer ("," initializer)* "}"
-    fn struct_initializer(&mut self, init: &mut Initializer) -> CompileResult<()> {
+    /// Parse array initializer without braces: initializer ("," initializer)*
+    fn array_initializer2(&mut self, init: &mut Initializer) -> CompileResult<()> {
+        // If this is a flexible array, count elements to determine length
+        if init.is_flexible
+            && let Type::Array { base, .. } = &init.ty
+        {
+            let saved_pos = self.pos;
+            let count = self.count_array_init_elements(base)?;
+            self.pos = saved_pos;
+
+            let new_ty = Type::Array {
+                base: base.clone(),
+                len: count as i32,
+            };
+            *init = self.new_initializer(new_ty, false);
+        }
+
+        let len = if let Type::Array { len, .. } = &init.ty {
+            *len
+        } else {
+            return Ok(());
+        };
+
+        // Parse initializers without braces, stopping at '}' or after all elements
+        for i in 0..(len as usize) {
+            if self.check_punct(Punct::RBrace) {
+                break;
+            }
+
+            if i > 0 {
+                self.expect_punct(Punct::Comma)?;
+            }
+
+            self.parse_initializer2(&mut init.children[i])?;
+        }
+
+        Ok(())
+    }
+
+    /// Parse struct initializer with braces: "{" initializer ("," initializer)* "}"
+    fn struct_initializer1(&mut self, init: &mut Initializer) -> CompileResult<()> {
         self.expect_punct(Punct::LBrace)?;
 
         let members = if let Type::Struct { members, .. } = &init.ty {
@@ -2485,16 +2524,43 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// Parse a union initializer with braces.
-    /// union-initializer = "{" initializer "}"
+    /// Parse struct initializer without braces: initializer ("," initializer)*
+    fn struct_initializer2(&mut self, init: &mut Initializer) -> CompileResult<()> {
+        let members = if let Type::Struct { members, .. } = &init.ty {
+            members.clone()
+        } else {
+            return Ok(());
+        };
+
+        let mut first = true;
+        for member in &members {
+            if self.check_punct(Punct::RBrace) {
+                break;
+            }
+
+            if !first {
+                self.expect_punct(Punct::Comma)?;
+            }
+            first = false;
+
+            self.parse_initializer2(&mut init.children[member.idx])?;
+        }
+
+        Ok(())
+    }
+
+    /// Parse a union initializer with or without braces.
+    /// union-initializer = "{" initializer "}" | initializer
     /// Unlike structs, union initializers only initialize the first member.
     fn union_initializer(&mut self, init: &mut Initializer) -> CompileResult<()> {
-        self.expect_punct(Punct::LBrace)?;
-
-        // Only initialize the first member (index 0)
-        self.parse_initializer2(&mut init.children[0])?;
-
-        self.expect_punct(Punct::RBrace)?;
+        if self.consume_punct(Punct::LBrace) {
+            // With braces: { initializer }
+            self.parse_initializer2(&mut init.children[0])?;
+            self.expect_punct(Punct::RBrace)?;
+        } else {
+            // Without braces: just the initializer
+            self.parse_initializer2(&mut init.children[0])?;
+        }
         Ok(())
     }
 
@@ -2513,24 +2579,33 @@ impl<'a> Parser<'a> {
 
         // Check for array initializer
         if let Type::Array { .. } = &init.ty {
-            return self.array_initializer(init);
+            if self.check_punct(Punct::LBrace) {
+                return self.array_initializer1(init);
+            } else {
+                return self.array_initializer2(init);
+            }
         }
 
         // Check for struct initializer
         if let Type::Struct { .. } = &init.ty {
-            // A struct can be initialized with another struct. E.g.
-            // `struct T x = y;` where y is a variable of type `struct T`.
-            // Handle that case first.
-            if !self.check_punct(Punct::LBrace) {
-                let mut expr = self.parse_assign()?;
-                self.add_type_expr(&mut expr)?;
-                if matches!(&expr.ty, Some(Type::Struct { .. })) {
-                    init.expr = Some(expr);
-                    return Ok(());
-                }
+            if self.check_punct(Punct::LBrace) {
+                return self.struct_initializer1(init);
             }
 
-            return self.struct_initializer(init);
+            // A struct can be initialized with another struct. E.g.
+            // `struct T x = y;` where y is a variable of type `struct T`.
+            // Try to parse as an expression first
+            let saved_pos = self.pos;
+            let mut expr = self.parse_assign()?;
+            self.add_type_expr(&mut expr)?;
+            if matches!(&expr.ty, Some(Type::Struct { .. })) {
+                init.expr = Some(expr);
+                return Ok(());
+            }
+
+            // Not a struct expression, restore position and parse as struct initializer without braces
+            self.pos = saved_pos;
+            return self.struct_initializer2(init);
         }
 
         // Check for union initializer
@@ -3064,41 +3139,39 @@ impl<'a> Parser<'a> {
                     UnaryOp::BitNot => Ok(!val),
                 }
             }
-            ExprKind::Binary { op, lhs, rhs } => {
-                match op {
-                    BinaryOp::Add => {
-                        let lval = self.eval2(lhs, label)?;
-                        let rval = self.eval(rhs)?;
-                        Ok(lval + rval)
-                    }
-                    BinaryOp::Sub => {
-                        let lval = self.eval2(lhs, label)?;
-                        let rval = self.eval(rhs)?;
-                        Ok(lval - rval)
-                    }
-                    _ => {
-                        let lval = self.eval(lhs)?;
-                        let rval = self.eval(rhs)?;
-                        match op {
-                            BinaryOp::Mul => Ok(lval * rval),
-                            BinaryOp::Div => Ok(lval / rval),
-                            BinaryOp::Mod => Ok(lval % rval),
-                            BinaryOp::BitAnd => Ok(lval & rval),
-                            BinaryOp::BitOr => Ok(lval | rval),
-                            BinaryOp::BitXor => Ok(lval ^ rval),
-                            BinaryOp::Shl => Ok(lval << rval),
-                            BinaryOp::Shr => Ok(lval >> rval),
-                            BinaryOp::Eq => Ok(if lval == rval { 1 } else { 0 }),
-                            BinaryOp::Ne => Ok(if lval != rval { 1 } else { 0 }),
-                            BinaryOp::Lt => Ok(if lval < rval { 1 } else { 0 }),
-                            BinaryOp::Le => Ok(if lval <= rval { 1 } else { 0 }),
-                            BinaryOp::LogAnd => Ok(if lval != 0 && rval != 0 { 1 } else { 0 }),
-                            BinaryOp::LogOr => Ok(if lval != 0 || rval != 0 { 1 } else { 0 }),
-                            _ => unreachable!(),
-                        }
+            ExprKind::Binary { op, lhs, rhs } => match op {
+                BinaryOp::Add => {
+                    let lval = self.eval2(lhs, label)?;
+                    let rval = self.eval(rhs)?;
+                    Ok(lval + rval)
+                }
+                BinaryOp::Sub => {
+                    let lval = self.eval2(lhs, label)?;
+                    let rval = self.eval(rhs)?;
+                    Ok(lval - rval)
+                }
+                _ => {
+                    let lval = self.eval(lhs)?;
+                    let rval = self.eval(rhs)?;
+                    match op {
+                        BinaryOp::Mul => Ok(lval * rval),
+                        BinaryOp::Div => Ok(lval / rval),
+                        BinaryOp::Mod => Ok(lval % rval),
+                        BinaryOp::BitAnd => Ok(lval & rval),
+                        BinaryOp::BitOr => Ok(lval | rval),
+                        BinaryOp::BitXor => Ok(lval ^ rval),
+                        BinaryOp::Shl => Ok(lval << rval),
+                        BinaryOp::Shr => Ok(lval >> rval),
+                        BinaryOp::Eq => Ok(if lval == rval { 1 } else { 0 }),
+                        BinaryOp::Ne => Ok(if lval != rval { 1 } else { 0 }),
+                        BinaryOp::Lt => Ok(if lval < rval { 1 } else { 0 }),
+                        BinaryOp::Le => Ok(if lval <= rval { 1 } else { 0 }),
+                        BinaryOp::LogAnd => Ok(if lval != 0 && rval != 0 { 1 } else { 0 }),
+                        BinaryOp::LogOr => Ok(if lval != 0 || rval != 0 { 1 } else { 0 }),
+                        _ => unreachable!(),
                     }
                 }
-            }
+            },
             ExprKind::Cond { cond, then, els } => {
                 let cond_val = self.eval(cond)?;
                 if cond_val != 0 {

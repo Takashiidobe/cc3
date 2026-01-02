@@ -46,8 +46,8 @@ impl Codegen {
                 let mut rel_iter = obj.relocations.iter().peekable();
 
                 while pos < init_data.len() {
-                    if let Some(rel) = rel_iter.peek() {
-                        if rel.offset == pos {
+                    if let Some(rel) = rel_iter.peek()
+                        && rel.offset == pos {
                             // Emit a relocation
                             let addend_str = if rel.addend >= 0 {
                                 format!("+{}", rel.addend)
@@ -59,7 +59,6 @@ impl Codegen {
                             rel_iter.next();
                             continue;
                         }
-                    }
 
                     // Emit a regular byte
                     self.emit_line(&format!("  .byte {}", init_data[pos]));
