@@ -1401,7 +1401,9 @@ impl<'a> Parser<'a> {
                 self.enter_scope();
                 let mut stmts = Vec::new();
                 while !self.check_punct(Punct::RBrace) {
-                    if self.is_typename() {
+                    let is_label = matches!(self.peek().kind, TokenKind::Ident(_))
+                        && matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::Colon));
+                    if self.is_typename() && !is_label {
                         let mut attr = VarAttr::default();
                         let basety = self.parse_declspec(Some(&mut attr))?;
                         if attr.is_typedef {
@@ -1947,7 +1949,9 @@ impl<'a> Parser<'a> {
         self.enter_scope();
         let mut stmts = Vec::new();
         while !self.check_punct(Punct::RBrace) {
-            if self.is_typename() {
+            let is_label = matches!(self.peek().kind, TokenKind::Ident(_))
+                && matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::Colon));
+            if self.is_typename() && !is_label {
                 let mut attr = VarAttr::default();
                 let basety = self.parse_declspec(Some(&mut attr))?;
                 if attr.is_typedef {
