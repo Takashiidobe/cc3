@@ -2302,8 +2302,8 @@ impl<'a> Parser<'a> {
             (0..(*len as usize))
                 .map(|_| self.new_initializer(*base.clone(), false))
                 .collect()
-        } else if let Type::Struct { members, .. } = &ty {
-            // Create children for each struct member
+        } else if let Type::Struct { members, .. } | Type::Union { members, .. } = &ty {
+            // Create children for each struct/union member
             members
                 .iter()
                 .map(|member| self.new_initializer(member.ty.clone(), false))
@@ -2471,6 +2471,19 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Parse a union initializer with braces.
+    /// union-initializer = "{" initializer "}"
+    /// Unlike structs, union initializers only initialize the first member.
+    fn union_initializer(&mut self, init: &mut Initializer) -> CompileResult<()> {
+        self.expect_punct(Punct::LBrace)?;
+
+        // Only initialize the first member (index 0)
+        self.parse_initializer2(&mut init.children[0])?;
+
+        self.expect_punct(Punct::RBrace)?;
+        Ok(())
+    }
+
     /// Parse an initializer recursively.
     /// initializer = string-initializer | array-initializer | struct-initializer | assign
     fn parse_initializer2(&mut self, init: &mut Initializer) -> CompileResult<()> {
@@ -2504,6 +2517,11 @@ impl<'a> Parser<'a> {
             }
 
             return self.struct_initializer(init);
+        }
+
+        // Check for union initializer
+        if let Type::Union { .. } = &init.ty {
+            return self.union_initializer(init);
         }
 
         // Scalar initializer
@@ -2618,6 +2636,20 @@ impl<'a> Parser<'a> {
 
                 return Ok(node);
             }
+        }
+
+        if let Type::Union { members, .. } = &init.ty {
+            // For unions, only initialize the first member
+            let first_member = &members[0];
+            desg_stack.push(InitDesg {
+                idx: 0,
+                member: Some(first_member.clone()),
+                var_idx: None,
+                var_is_local: false,
+            });
+            let result = self.create_lvar_init(&init.children[0], desg_stack, location)?;
+            desg_stack.pop();
+            return Ok(result);
         }
 
         // If no initializer expression, return null (element will be zero-initialized)
