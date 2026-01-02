@@ -2288,14 +2288,15 @@ impl<'a> Parser<'a> {
         // For flexible arrays with unspecified length, don't create children yet
         if is_flexible
             && let Type::Array { len, .. } = &ty
-                && *len < 0 {
-                    return Initializer {
-                        ty,
-                        expr: None,
-                        children: Vec::new(),
-                        is_flexible: true,
-                    };
-                }
+            && *len < 0
+        {
+            return Initializer {
+                ty,
+                expr: None,
+                children: Vec::new(),
+                is_flexible: true,
+            };
+        }
 
         let children = if let Type::Array { base, len } = &ty {
             (0..(*len as usize))
@@ -2324,13 +2325,14 @@ impl<'a> Parser<'a> {
     fn string_initializer(&mut self, init: &mut Initializer, str_bytes: &[u8]) {
         // If this is a flexible array (e.g., char x[] = "abc"), determine the length from the string
         if init.is_flexible
-            && let Type::Array { base, .. } = &init.ty {
-                let new_ty = Type::Array {
-                    base: base.clone(),
-                    len: str_bytes.len() as i32,
-                };
-                *init = self.new_initializer(new_ty, false);
-            }
+            && let Type::Array { base, .. } = &init.ty
+        {
+            let new_ty = Type::Array {
+                base: base.clone(),
+                len: str_bytes.len() as i32,
+            };
+            *init = self.new_initializer(new_ty, false);
+        }
 
         // Initialize each array element with the corresponding character from the string
         // Use the minimum of array length and string length to handle both:
@@ -2346,7 +2348,11 @@ impl<'a> Parser<'a> {
         for i in 0..len {
             init.children[i].expr = Some(self.expr_at(
                 ExprKind::Num(str_bytes[i] as i64),
-                SourceLocation { line: 0, column: 0, byte: 0 },
+                SourceLocation {
+                    line: 0,
+                    column: 0,
+                    byte: 0,
+                },
             ));
         }
     }
@@ -2392,20 +2398,21 @@ impl<'a> Parser<'a> {
 
         // If this is a flexible array (e.g., int x[] = {1,2,3}), count elements to determine length
         if init.is_flexible
-            && let Type::Array { base, .. } = &init.ty {
-                // Save position to count elements
-                let saved_pos = self.pos;
-                let count = self.count_array_init_elements(base)?;
-                // Restore position to parse elements
-                self.pos = saved_pos;
+            && let Type::Array { base, .. } = &init.ty
+        {
+            // Save position to count elements
+            let saved_pos = self.pos;
+            let count = self.count_array_init_elements(base)?;
+            // Restore position to parse elements
+            self.pos = saved_pos;
 
-                // Create a new initializer with the determined length
-                let new_ty = Type::Array {
-                    base: base.clone(),
-                    len: count as i32,
-                };
-                *init = self.new_initializer(new_ty, false);
-            }
+            // Create a new initializer with the determined length
+            let new_ty = Type::Array {
+                base: base.clone(),
+                len: count as i32,
+            };
+            *init = self.new_initializer(new_ty, false);
+        }
 
         let len = if let Type::Array { len, .. } = &init.ty {
             *len
@@ -2469,12 +2476,13 @@ impl<'a> Parser<'a> {
     fn parse_initializer2(&mut self, init: &mut Initializer) -> CompileResult<()> {
         // Check for string literal initializer for char arrays
         if let Type::Array { .. } = &init.ty
-            && let TokenKind::Str { bytes, .. } = &self.peek().kind {
-                let bytes_clone = bytes.clone();
-                self.string_initializer(init, &bytes_clone);
-                self.pos += 1; // Consume the string token
-                return Ok(());
-            }
+            && let TokenKind::Str { bytes, .. } = &self.peek().kind
+        {
+            let bytes_clone = bytes.clone();
+            self.string_initializer(init, &bytes_clone);
+            self.pos += 1; // Consume the string token
+            return Ok(());
+        }
 
         // Check for array initializer
         if let Type::Array { .. } = &init.ty {
@@ -2483,6 +2491,18 @@ impl<'a> Parser<'a> {
 
         // Check for struct initializer
         if let Type::Struct { .. } = &init.ty {
+            // A struct can be initialized with another struct. E.g.
+            // `struct T x = y;` where y is a variable of type `struct T`.
+            // Handle that case first.
+            if !self.check_punct(Punct::LBrace) {
+                let mut expr = self.parse_assign()?;
+                self.add_type_expr(&mut expr)?;
+                if matches!(&expr.ty, Some(Type::Struct { .. })) {
+                    init.expr = Some(expr);
+                    return Ok(());
+                }
+            }
+
             return self.struct_initializer(init);
         }
 
@@ -2572,28 +2592,32 @@ impl<'a> Parser<'a> {
         }
 
         if let Type::Struct { members, .. } = &init.ty {
-            let mut node = self.expr_at(ExprKind::Null, location);
+            // If we have a direct struct expression (e.g., `T y = x;`), don't do member-by-member init
+            if init.expr.is_none() {
+                let mut node = self.expr_at(ExprKind::Null, location);
 
-            for member in members {
-                desg_stack.push(InitDesg {
-                    idx: 0,
-                    member: Some(member.clone()),
-                    var_idx: None,
-                    var_is_local: false,
-                });
-                let rhs = self.create_lvar_init(&init.children[member.idx], desg_stack, location)?;
-                desg_stack.pop();
+                for member in members {
+                    desg_stack.push(InitDesg {
+                        idx: 0,
+                        member: Some(member.clone()),
+                        var_idx: None,
+                        var_is_local: false,
+                    });
+                    let rhs =
+                        self.create_lvar_init(&init.children[member.idx], desg_stack, location)?;
+                    desg_stack.pop();
 
-                node = self.expr_at(
-                    ExprKind::Comma {
-                        lhs: Box::new(node),
-                        rhs: Box::new(rhs),
-                    },
-                    location,
-                );
+                    node = self.expr_at(
+                        ExprKind::Comma {
+                            lhs: Box::new(node),
+                            rhs: Box::new(rhs),
+                        },
+                        location,
+                    );
+                }
+
+                return Ok(node);
             }
-
-            return Ok(node);
         }
 
         // If no initializer expression, return null (element will be zero-initialized)
