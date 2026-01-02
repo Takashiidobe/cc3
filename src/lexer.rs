@@ -21,6 +21,7 @@ pub enum Keyword {
     While,
     Sizeof,
     Goto,
+    Break,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,6 +298,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 "while" => TokenKind::Keyword(Keyword::While),
                 "sizeof" => TokenKind::Keyword(Keyword::Sizeof),
                 "goto" => TokenKind::Keyword(Keyword::Goto),
+                "break" => TokenKind::Keyword(Keyword::Break),
                 _ => TokenKind::Ident(word.to_string()),
             };
             tokens.push(Token { kind, location });

@@ -17,6 +17,7 @@ struct Parser<'a> {
     current_fn_return: Option<Type>,
     fn_labels: Vec<(String, SourceLocation)>,
     fn_gotos: Vec<(String, SourceLocation)>,
+    break_depth: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -64,6 +65,7 @@ impl<'a> Parser<'a> {
             current_fn_return: None,
             fn_labels: Vec::new(),
             fn_gotos: Vec::new(),
+            break_depth: 0,
         }
     }
 
@@ -414,7 +416,9 @@ impl<'a> Parser<'a> {
                 self.expect_punct(Punct::RParen)?;
                 Some(expr)
             };
+            self.break_depth += 1;
             let body = self.parse_stmt()?;
+            self.break_depth -= 1;
 
             self.leave_scope();
 
@@ -430,13 +434,23 @@ impl<'a> Parser<'a> {
             self.expect_punct(Punct::LParen)?;
             let cond = self.parse_expr()?;
             self.expect_punct(Punct::RParen)?;
+            self.break_depth += 1;
             let body = self.parse_stmt()?;
+            self.break_depth -= 1;
             return Ok(self.stmt_last(StmtKind::For {
                 init: None,
                 cond: Some(cond),
                 inc: None,
                 body: Box::new(body),
             }));
+        }
+
+        if self.consume_keyword(Keyword::Break) {
+            if self.break_depth == 0 {
+                return Err(self.error_here("stray break"));
+            }
+            self.expect_punct(Punct::Semicolon)?;
+            return Ok(self.stmt_last(StmtKind::Break));
         }
 
         if self.consume_keyword(Keyword::Goto) {
@@ -2178,6 +2192,7 @@ impl<'a> Parser<'a> {
                 self.add_type_stmt(body)?;
             }
             StmtKind::Goto { .. } => {}
+            StmtKind::Break => {}
             StmtKind::Label { stmt, .. } => {
                 self.add_type_stmt(stmt)?;
             }
