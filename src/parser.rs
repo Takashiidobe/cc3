@@ -1060,6 +1060,7 @@ impl<'a> Parser<'a> {
     }
 
     // Convert `A op= B` to `tmp = &A, *tmp = *tmp op B`
+    #[allow(clippy::wrong_self_convention)]
     fn to_assign(
         &mut self,
         mut lhs: Expr,
@@ -2350,7 +2351,8 @@ impl<'a> Parser<'a> {
         };
 
         let len = array_len.min(str_bytes.len());
-        for i in 0..len {
+
+        (0..len).for_each(|i| {
             init.children[i].expr = Some(self.expr_at(
                 ExprKind::Num(str_bytes[i] as i64),
                 SourceLocation {
@@ -2359,7 +2361,7 @@ impl<'a> Parser<'a> {
                     byte: 0,
                 },
             ));
-        }
+        });
     }
 
     /// Skip an excess initializer element (one that exceeds the array size).
@@ -2751,6 +2753,24 @@ impl<'a> Parser<'a> {
             let sz = base.size() as usize;
             for i in 0..(*len as usize) {
                 self.write_gvar_data(&init.children[i], buf, offset + sz * i)?;
+            }
+            return Ok(());
+        }
+
+        if let Type::Union { members, .. } = &init.ty {
+            for (i, member) in members.iter().enumerate() {
+                self.write_gvar_data(&init.children[i], buf, offset + member.offset as usize)?;
+            }
+            return Ok(());
+        }
+
+        if let Type::Struct { members, .. } = &init.ty {
+            for member in members {
+                self.write_gvar_data(
+                    &init.children[member.idx],
+                    buf,
+                    offset + member.offset as usize,
+                )?;
             }
             return Ok(());
         }
