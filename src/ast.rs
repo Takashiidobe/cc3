@@ -68,6 +68,7 @@ pub struct Expr {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExprKind {
+    Null,
     Num(i64),
     Unary {
         op: UnaryOp,

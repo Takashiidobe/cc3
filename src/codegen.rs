@@ -238,6 +238,9 @@ impl Codegen {
     fn gen_expr(&mut self, expr: &Expr, function: &Obj, globals: &[Obj]) {
         self.emit_line(&format!("  .loc 1 {}", expr.location.line));
         match &expr.kind {
+            ExprKind::Null => {
+                // Do nothing
+            }
             ExprKind::Num(value) => {
                 self.emit_line(&format!("  mov ${}, %rax", value));
             }

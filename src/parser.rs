@@ -66,6 +66,30 @@ enum RecordKind {
     Union,
 }
 
+/// Represents a variable initializer. Since initializers can be nested
+/// (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), this is a tree structure.
+#[derive(Debug, Clone, PartialEq)]
+struct Initializer {
+    ty: Type,
+    /// If it's not an aggregate type and has an initializer,
+    /// `expr` has an initialization expression.
+    expr: Option<Expr>,
+    /// If it's an initializer for an aggregate type (e.g. array),
+    /// `children` has initializers for its children.
+    children: Vec<Initializer>,
+}
+
+/// Represents a designator for local variable initialization.
+/// This is used to build expressions like `x[0][1]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InitDesg {
+    /// Index for array element
+    idx: i32,
+    /// Variable being initialized (only for the root)
+    var_idx: Option<usize>,
+    var_is_local: bool,
+}
+
 impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
         Self {
@@ -619,27 +643,13 @@ impl<'a> Parser<'a> {
                     name_token.location,
                 ));
             }
-            let idx = self.new_lvar(name, ty);
+            let idx = self.new_lvar(name, ty.clone());
             stmts.push(self.stmt_at(StmtKind::Decl(idx), name_token.location));
 
             if self.consume_punct(Punct::Assign) {
                 let assign_location = self.last_location();
-                let rhs = self.parse_assign()?;
-                let lhs = self.expr_at(
-                    ExprKind::Var {
-                        idx,
-                        is_local: true,
-                    },
-                    name_token.location,
-                );
-                let assign = self.expr_at(
-                    ExprKind::Assign {
-                        lhs: Box::new(lhs),
-                        rhs: Box::new(rhs),
-                    },
-                    assign_location,
-                );
-                stmts.push(self.stmt_at(StmtKind::Expr(assign), assign_location));
+                let expr = self.parse_lvar_initializer(idx, true, ty, assign_location)?;
+                stmts.push(self.stmt_at(StmtKind::Expr(expr), assign_location));
             }
         }
 
@@ -2263,6 +2273,144 @@ impl<'a> Parser<'a> {
         Err(self.error_at(location, "invalid operands"))
     }
 
+    /// Create a new initializer tree for the given type.
+    fn new_initializer(&self, ty: Type) -> Initializer {
+        let children = if let Type::Array { base, len } = &ty {
+            (0..(*len as usize))
+                .map(|_| self.new_initializer(*base.clone()))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        Initializer {
+            ty,
+            expr: None,
+            children,
+        }
+    }
+
+    /// Parse an initializer recursively.
+    /// initializer = "{" initializer ("," initializer)* "}"
+    ///             | assign
+    fn parse_initializer2(&mut self, init: &mut Initializer) -> CompileResult<()> {
+        if let Type::Array { len, .. } = &init.ty {
+            self.expect_punct(Punct::LBrace)?;
+
+            for i in 0..(*len as usize) {
+                if i > 0 {
+                    self.expect_punct(Punct::Comma)?;
+                }
+                self.parse_initializer2(&mut init.children[i])?;
+            }
+
+            self.expect_punct(Punct::RBrace)?;
+            return Ok(());
+        }
+
+        init.expr = Some(self.parse_assign()?);
+        Ok(())
+    }
+
+    /// Parse an initializer for the given type.
+    fn parse_initializer(&mut self, ty: Type) -> CompileResult<Initializer> {
+        let mut init = self.new_initializer(ty);
+        self.parse_initializer2(&mut init)?;
+        Ok(init)
+    }
+
+    /// Build an expression for the designated element.
+    /// For example, `x[0][1]` for a 2D array.
+    fn init_desg_expr(
+        &self,
+        desg_stack: &[InitDesg],
+        location: SourceLocation,
+    ) -> CompileResult<Expr> {
+        // Start with the variable reference
+        let root = &desg_stack[0];
+        let mut expr = self.expr_at(
+            ExprKind::Var {
+                idx: root.var_idx.unwrap(),
+                is_local: root.var_is_local,
+            },
+            location,
+        );
+
+        // Apply indices from the stack (skip the first one which is the variable)
+        for desg in &desg_stack[1..] {
+            let idx_expr = self.expr_at(ExprKind::Num(desg.idx as i64), location);
+            // Use new_add to properly handle pointer arithmetic
+            expr = self.new_add(expr, idx_expr, location)?;
+            expr = self.expr_at(ExprKind::Deref(Box::new(expr)), location);
+        }
+
+        Ok(expr)
+    }
+
+    /// Convert an initializer tree into assignment expressions.
+    fn create_lvar_init(
+        &self,
+        init: &Initializer,
+        desg_stack: &mut Vec<InitDesg>,
+        location: SourceLocation,
+    ) -> CompileResult<Expr> {
+        if let Type::Array { base: _, len } = &init.ty {
+            let mut node = self.expr_at(ExprKind::Null, location);
+
+            for i in 0..(*len as usize) {
+                desg_stack.push(InitDesg {
+                    idx: i as i32,
+                    var_idx: None,
+                    var_is_local: false,
+                });
+                let rhs = self.create_lvar_init(&init.children[i], desg_stack, location)?;
+                desg_stack.pop();
+
+                node = self.expr_at(
+                    ExprKind::Comma {
+                        lhs: Box::new(node),
+                        rhs: Box::new(rhs),
+                    },
+                    location,
+                );
+            }
+
+            return Ok(node);
+        }
+
+        let lhs = self.init_desg_expr(desg_stack, location)?;
+        let rhs = init.expr.clone().unwrap();
+
+        Ok(self.expr_at(
+            ExprKind::Assign {
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            },
+            location,
+        ))
+    }
+
+    /// Parse a local variable initializer and convert it to assignment expressions.
+    /// A variable definition with an initializer is shorthand for a variable definition
+    /// followed by assignments. For example:
+    /// `int x[2][2] = {{6, 7}, {8, 9}}` is converted to:
+    ///   x[0][0] = 6; x[0][1] = 7; x[1][0] = 8; x[1][1] = 9;
+    fn parse_lvar_initializer(
+        &mut self,
+        var_idx: usize,
+        var_is_local: bool,
+        ty: Type,
+        location: SourceLocation,
+    ) -> CompileResult<Expr> {
+        let init = self.parse_initializer(ty)?;
+        let mut desg_stack = vec![InitDesg {
+            idx: 0,
+            var_idx: Some(var_idx),
+            var_is_local,
+        }];
+        self.create_lvar_init(&init, &mut desg_stack, location)
+    }
+
     fn add_type_stmt(&self, stmt: &mut Stmt) -> CompileResult<()> {
         match &mut stmt.kind {
             StmtKind::Return(expr) => self.add_type_expr(expr)?,
@@ -2320,6 +2468,7 @@ impl<'a> Parser<'a> {
         }
 
         let ty = match &mut expr.kind {
+            ExprKind::Null => Type::Void,
             ExprKind::Num(value) => {
                 if i32::try_from(*value).is_ok() {
                     Type::Int
