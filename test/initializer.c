@@ -32,10 +32,9 @@ typedef char T60[];
 T60 g60 = {1, 2, 3};
 T60 g61 = {1, 2, 3, 4, 5, 6};
 
-// TODO: Fix flexible array member in structs
-// typedef struct { char a; char b[]; } T65;
-// T65 g65 = {'f',{'o','o',0}};
-// T65 g66 = {'f',{'o','o','b','a','r',0}};
+typedef struct { char a; char b[]; } T65;
+T65 g65 = {'f',{'o','o',0}};
+T65 g66 = {'f',{'o','o','b','a','r',0}};
 
 int main() {
   ASSERT(1, ({ int x[3]={1,2,3}; x[0]; }));
@@ -180,11 +179,10 @@ int main() {
   ASSERT(3, sizeof(g60));
   ASSERT(6, sizeof(g61));
 
-  // TODO: Fix flexible array member in structs
-  // ASSERT(4, sizeof(g65));
-  // ASSERT(7, sizeof(g66));
-  // ASSERT(0, strcmp(g65.b, "oo"));
-  // ASSERT(0, strcmp(g66.b, "oobar"));
+  ASSERT(4, sizeof(g65));
+  ASSERT(7, sizeof(g66));
+  ASSERT(0, strcmp(g65.b, "oo"));
+  ASSERT(0, strcmp(g66.b, "oobar"));
 
   printf("OK\n");
   return 0;

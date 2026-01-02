@@ -2350,9 +2350,10 @@ impl<'a> Parser<'a> {
     /// Create a new initializer tree for the given type.
     fn new_initializer(&self, ty: Type, is_flexible: bool) -> Initializer {
         // For flexible arrays with unspecified length, don't create children yet
+        // Note: len can be -1 (regular flexible array) or 0 (flexible array member in struct)
         if is_flexible
             && let Type::Array { len, .. } = &ty
-            && *len < 0
+            && *len <= 0
         {
             return Initializer {
                 ty,
