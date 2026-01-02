@@ -10,6 +10,7 @@ pub struct Member {
     pub name: String,
     pub ty: Type,
     pub location: SourceLocation,
+    pub idx: usize,
     pub offset: i32,
 }
 

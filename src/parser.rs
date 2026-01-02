@@ -82,11 +82,13 @@ struct Initializer {
 }
 
 /// Represents a designator for local variable initialization.
-/// This is used to build expressions like `x[0][1]`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// This is used to build expressions like `x[0][1]` or `x.member`.
+#[derive(Debug, Clone, PartialEq)]
 struct InitDesg {
     /// Index for array element
     idx: i32,
+    /// Member for struct element
+    member: Option<Member>,
     /// Variable being initialized (only for the root)
     var_idx: Option<usize>,
     var_is_local: bool,
@@ -925,6 +927,7 @@ impl<'a> Parser<'a> {
 
     fn parse_struct_members(&mut self) -> CompileResult<Vec<Member>> {
         let mut members = Vec::new();
+        let mut idx = 0;
         while !self.check_punct(Punct::RBrace) {
             let basety = self.parse_declspec(None)?;
             let mut first = true;
@@ -943,8 +946,10 @@ impl<'a> Parser<'a> {
                     name,
                     ty,
                     location: name_token.location,
+                    idx,
                     offset: 0,
                 });
+                idx += 1;
             }
 
             self.expect_punct(Punct::Semicolon)?;
@@ -2296,6 +2301,12 @@ impl<'a> Parser<'a> {
             (0..(*len as usize))
                 .map(|_| self.new_initializer(*base.clone(), false))
                 .collect()
+        } else if let Type::Struct { members, .. } = &ty {
+            // Create children for each struct member
+            members
+                .iter()
+                .map(|member| self.new_initializer(member.ty.clone(), false))
+                .collect()
         } else {
             Vec::new()
         };
@@ -2422,8 +2433,39 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Parse a struct initializer with braces.
+    /// struct-initializer = "{" initializer ("," initializer)* "}"
+    fn struct_initializer(&mut self, init: &mut Initializer) -> CompileResult<()> {
+        self.expect_punct(Punct::LBrace)?;
+
+        let members = if let Type::Struct { members, .. } = &init.ty {
+            members.clone()
+        } else {
+            return Ok(());
+        };
+
+        let mut member_idx = 0;
+        while !self.consume_punct(Punct::RBrace) {
+            if member_idx > 0 {
+                self.expect_punct(Punct::Comma)?;
+            }
+
+            if member_idx < members.len() {
+                // Normal case: parse initializer for struct member
+                let member = &members[member_idx];
+                self.parse_initializer2(&mut init.children[member.idx])?;
+            } else {
+                // Excess element: skip it
+                self.skip_excess_element()?;
+            }
+            member_idx += 1;
+        }
+
+        Ok(())
+    }
+
     /// Parse an initializer recursively.
-    /// initializer = string-initializer | array-initializer | assign
+    /// initializer = string-initializer | array-initializer | struct-initializer | assign
     fn parse_initializer2(&mut self, init: &mut Initializer) -> CompileResult<()> {
         // Check for string literal initializer for char arrays
         if let Type::Array { .. } = &init.ty
@@ -2437,6 +2479,11 @@ impl<'a> Parser<'a> {
         // Check for array initializer
         if let Type::Array { .. } = &init.ty {
             return self.array_initializer(init);
+        }
+
+        // Check for struct initializer
+        if let Type::Struct { .. } = &init.ty {
+            return self.struct_initializer(init);
         }
 
         // Scalar initializer
@@ -2469,12 +2516,24 @@ impl<'a> Parser<'a> {
             location,
         );
 
-        // Apply indices from the stack (skip the first one which is the variable)
+        // Apply indices/members from the stack (skip the first one which is the variable)
         for desg in &desg_stack[1..] {
-            let idx_expr = self.expr_at(ExprKind::Num(desg.idx as i64), location);
-            // Use new_add to properly handle pointer arithmetic
-            expr = self.new_add(expr, idx_expr, location)?;
-            expr = self.expr_at(ExprKind::Deref(Box::new(expr)), location);
+            if let Some(member) = &desg.member {
+                // Member access: x.member
+                expr = self.expr_at(
+                    ExprKind::Member {
+                        lhs: Box::new(expr),
+                        member: member.clone(),
+                    },
+                    location,
+                );
+            } else {
+                // Array index: x[idx]
+                let idx_expr = self.expr_at(ExprKind::Num(desg.idx as i64), location);
+                // Use new_add to properly handle pointer arithmetic
+                expr = self.new_add(expr, idx_expr, location)?;
+                expr = self.expr_at(ExprKind::Deref(Box::new(expr)), location);
+            }
         }
 
         Ok(expr)
@@ -2493,10 +2552,36 @@ impl<'a> Parser<'a> {
             for i in 0..(*len as usize) {
                 desg_stack.push(InitDesg {
                     idx: i as i32,
+                    member: None,
                     var_idx: None,
                     var_is_local: false,
                 });
                 let rhs = self.create_lvar_init(&init.children[i], desg_stack, location)?;
+                desg_stack.pop();
+
+                node = self.expr_at(
+                    ExprKind::Comma {
+                        lhs: Box::new(node),
+                        rhs: Box::new(rhs),
+                    },
+                    location,
+                );
+            }
+
+            return Ok(node);
+        }
+
+        if let Type::Struct { members, .. } = &init.ty {
+            let mut node = self.expr_at(ExprKind::Null, location);
+
+            for member in members {
+                desg_stack.push(InitDesg {
+                    idx: 0,
+                    member: Some(member.clone()),
+                    var_idx: None,
+                    var_is_local: false,
+                });
+                let rhs = self.create_lvar_init(&init.children[member.idx], desg_stack, location)?;
                 desg_stack.pop();
 
                 node = self.expr_at(
@@ -2555,6 +2640,7 @@ impl<'a> Parser<'a> {
 
         let mut desg_stack = vec![InitDesg {
             idx: 0,
+            member: None,
             var_idx: Some(var_idx),
             var_is_local,
         }];
