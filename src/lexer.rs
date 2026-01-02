@@ -22,6 +22,7 @@ pub enum Keyword {
     Sizeof,
     Goto,
     Break,
+    Continue,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -299,6 +300,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 "sizeof" => TokenKind::Keyword(Keyword::Sizeof),
                 "goto" => TokenKind::Keyword(Keyword::Goto),
                 "break" => TokenKind::Keyword(Keyword::Break),
+                "continue" => TokenKind::Keyword(Keyword::Continue),
                 _ => TokenKind::Ident(word.to_string()),
             };
             tokens.push(Token { kind, location });

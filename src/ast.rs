@@ -38,6 +38,7 @@ pub enum StmtKind {
         label: String,
     },
     Break,
+    Continue,
     Label {
         label: String,
         stmt: Box<Stmt>,

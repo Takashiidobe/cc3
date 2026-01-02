@@ -453,6 +453,14 @@ impl<'a> Parser<'a> {
             return Ok(self.stmt_last(StmtKind::Break));
         }
 
+        if self.consume_keyword(Keyword::Continue) {
+            if self.break_depth == 0 {
+                return Err(self.error_here("stray continue"));
+            }
+            self.expect_punct(Punct::Semicolon)?;
+            return Ok(self.stmt_last(StmtKind::Continue));
+        }
+
         if self.consume_keyword(Keyword::Goto) {
             let name_token = self.expect_ident_token()?;
             let label = match name_token.kind {
@@ -2193,6 +2201,7 @@ impl<'a> Parser<'a> {
             }
             StmtKind::Goto { .. } => {}
             StmtKind::Break => {}
+            StmtKind::Continue => {}
             StmtKind::Label { stmt, .. } => {
                 self.add_type_stmt(stmt)?;
             }

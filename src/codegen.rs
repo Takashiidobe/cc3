@@ -10,6 +10,7 @@ pub struct Codegen {
     label_counter: usize,
     current_fn: Option<String>,
     break_stack: Vec<String>,
+    continue_stack: Vec<String>,
 }
 
 impl Codegen {
@@ -19,6 +20,7 @@ impl Codegen {
             label_counter: 0,
             current_fn: None,
             break_stack: Vec::new(),
+            continue_stack: Vec::new(),
         }
     }
 
@@ -145,8 +147,10 @@ impl Codegen {
                 body,
             } => {
                 let label = self.next_label();
+                let continue_label = format!(".L.cont.{}", label);
                 let break_label = format!(".L.end.{}", label);
                 self.break_stack.push(break_label.clone());
+                self.continue_stack.push(continue_label.clone());
                 if let Some(init) = init {
                     self.gen_stmt(init, function, globals);
                 }
@@ -157,15 +161,24 @@ impl Codegen {
                     self.emit_line(&format!("  je {}", break_label));
                 }
                 self.gen_stmt(body, function, globals);
+                self.emit_line(&format!("{}:", continue_label));
                 if let Some(inc) = inc {
                     self.gen_expr(inc, function, globals);
                 }
                 self.emit_line(&format!("  jmp .L.begin.{}", label));
                 self.emit_line(&format!("{}:", break_label));
                 self.break_stack.pop();
+                self.continue_stack.pop();
             }
             StmtKind::Break => {
                 if let Some(label) = self.break_stack.last() {
+                    self.emit_line(&format!("  jmp {}", label));
+                } else {
+                    self.emit_line("  jmp .L..invalid");
+                }
+            }
+            StmtKind::Continue => {
+                if let Some(label) = self.continue_stack.last() {
                     self.emit_line(&format!("  jmp {}", label));
                 } else {
                     self.emit_line("  jmp .L..invalid");
