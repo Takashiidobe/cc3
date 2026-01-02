@@ -179,7 +179,6 @@ pub enum Type {
     Long,
     Enum,
     Ptr(Box<Type>),
-    #[allow(dead_code)]
     Func(Box<Type>),
     Struct {
         members: Vec<Member>,
@@ -295,10 +294,7 @@ impl Type {
                 is_incomplete,
                 ..
             } => {
-                if *is_incomplete {
-                    return 1;
-                }
-                if members.is_empty() {
+                if *is_incomplete || members.is_empty() {
                     return 1;
                 }
                 members

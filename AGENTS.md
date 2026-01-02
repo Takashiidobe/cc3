@@ -32,6 +32,8 @@ the task.
 
 **ALWAYS** use rust edition 2024.
 
+Read docs/architecture.md for a quick overview on the project.
+
 Note that unit tests should be in a different file ending in `_test.rs`,
 so tests for the codegen should live in `codegen_test.rs`.
 
