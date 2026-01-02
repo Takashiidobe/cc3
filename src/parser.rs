@@ -961,6 +961,19 @@ impl<'a> Parser<'a> {
             self.expect_punct(Punct::Semicolon)?;
         }
 
+        // If the last element is an array of incomplete type, it's
+        // called a "flexible array member". It should behave as if
+        // it were a zero-sized array.
+        if let Some(last_member) = members.last_mut()
+            && let Type::Array { base, len } = &last_member.ty
+            && *len < 0
+        {
+            last_member.ty = Type::Array {
+                base: base.clone(),
+                len: 0,
+            };
+        }
+
         self.expect_punct(Punct::RBrace)?;
         Ok(members)
     }

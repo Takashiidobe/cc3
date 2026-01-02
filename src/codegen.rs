@@ -49,18 +49,19 @@ impl Codegen {
 
                 while pos < init_data.len() {
                     if let Some(rel) = rel_iter.peek()
-                        && rel.offset == pos {
-                            // Emit a relocation
-                            let addend_str = if rel.addend >= 0 {
-                                format!("+{}", rel.addend)
-                            } else {
-                                format!("{}", rel.addend)
-                            };
-                            self.emit_line(&format!("  .quad {}{}", rel.label, addend_str));
-                            pos += 8;
-                            rel_iter.next();
-                            continue;
-                        }
+                        && rel.offset == pos
+                    {
+                        // Emit a relocation
+                        let addend_str = if rel.addend >= 0 {
+                            format!("+{}", rel.addend)
+                        } else {
+                            format!("{}", rel.addend)
+                        };
+                        self.emit_line(&format!("  .quad {}{}", rel.label, addend_str));
+                        pos += 8;
+                        rel_iter.next();
+                        continue;
+                    }
 
                     // Emit a regular byte
                     self.emit_line(&format!("  .byte {}", init_data[pos]));
