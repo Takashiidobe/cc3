@@ -208,6 +208,7 @@ pub enum Type {
     Ptr(Box<Type>),
     Func {
         return_ty: Box<Type>,
+        params: Vec<(String, Type)>,
         is_variadic: bool,
     },
     Struct {
@@ -340,9 +341,10 @@ impl Type {
     }
 
     // Helper constructors to centralize creation and make future changes easier
-    pub fn func(return_ty: Type, is_variadic: bool) -> Type {
+    pub fn func(return_ty: Type, params: Vec<(String, Type)>, is_variadic: bool) -> Type {
         Type::Func {
             return_ty: Box::new(return_ty),
+            params,
             is_variadic,
         }
     }

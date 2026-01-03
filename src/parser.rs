@@ -284,73 +284,57 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_function_with_basety(&mut self, basety: Type, attr: &VarAttr) -> CompileResult<()> {
-        let name = self.expect_ident()?;
+        // Parse declarator (function name + parameters)
+        let (ty, name_token) = self.parse_declarator(basety.clone())?;
+        let name = match name_token.kind {
+            TokenKind::Ident(name) => name,
+            _ => unreachable!("parse_declarator returns identifier"),
+        };
 
-        self.expect_punct(Punct::LParen)?;
-
-        self.locals.clear();
-        self.enter_scope();
-
-        // Parse function parameters
-        let mut param_indices = Vec::new();
-        let mut is_variadic = false;
-
-        // Check for void parameter list: foo(void)
-        if self.consume_keyword(Keyword::Void) && self.check_punct(Punct::RParen) {
-            // void parameter list means no parameters
-            // param_indices remains empty
-        } else if !self.check_punct(Punct::RParen) {
-            loop {
-                // Check for "..."
-                if self.consume_punct(Punct::Ellipsis) {
-                    is_variadic = true;
-                    break;
-                }
-
-                let param_basety = self.parse_declspec(None)?;
-                let (param_ty, param_token) = self.parse_declarator(param_basety)?;
-                let param_ty = match param_ty {
-                    Type::Array { base, .. } => Type::Ptr(base),
-                    other => other,
-                };
-                let param_name = match param_token.kind {
-                    TokenKind::Ident(name) => name,
-                    _ => unreachable!("parse_declarator only returns identifiers"),
-                };
-                // Use new_lvar to assign correct offset
-                let idx = self.new_lvar(param_name.clone(), param_ty);
-                param_indices.push(idx);
-
-                if !self.consume_punct(Punct::Comma) {
-                    break;
-                }
-            }
-        }
-
-        self.expect_punct(Punct::RParen)?;
+        // Extract is_variadic and params from the function type
+        let (is_variadic, type_params) = match &ty {
+            Type::Func {
+                is_variadic,
+                params,
+                ..
+            } => (*is_variadic, params.clone()),
+            _ => unreachable!("is_function() ensures this is a function type"),
+        };
 
         // Check if this is a declaration (;) or definition ({...})
         let is_definition = !self.consume_punct(Punct::Semicolon);
 
         if !is_definition {
             // Function declaration - no body
-            self.new_function_decl(name, Type::func(basety, is_variadic), attr.is_static);
-            self.leave_scope();
+            self.new_function_decl(name, ty, attr.is_static);
             return Ok(());
+        }
+
+        // For function definitions, we need to create local variables from the params
+        self.locals.clear();
+        self.enter_scope();
+
+        // Create local variables for each parameter
+        let mut param_indices = Vec::new();
+        for (param_name, param_ty) in type_params {
+            let idx = self.new_lvar(param_name, param_ty);
+            param_indices.push(idx);
         }
 
         self.fn_labels.clear();
         self.fn_gotos.clear();
 
         // Ensure the function is visible for recursive calls.
-        self.new_function_decl(
-            name.clone(),
-            Type::func(basety.clone(), is_variadic),
-            attr.is_static,
-        );
+        self.new_function_decl(name.clone(), ty.clone(), attr.is_static);
+
+        // Extract return type from function type
+        let return_ty = match &ty {
+            Type::Func { return_ty, .. } => return_ty.as_ref().clone(),
+            _ => unreachable!(),
+        };
 
         let prev_return = self.current_fn_return.clone();
-        self.current_fn_return = Some(basety.clone());
+        self.current_fn_return = Some(return_ty.clone());
 
         // Create __va_area__ for variadic functions
         let va_area_idx = if is_variadic {
@@ -384,7 +368,7 @@ impl<'a> Parser<'a> {
 
         self.new_function_def(
             name,
-            Type::func(basety, is_variadic),
+            ty,
             params,
             body,
             locals,
@@ -1060,27 +1044,49 @@ impl<'a> Parser<'a> {
         // Handle void parameter list: foo(void)
         if self.consume_keyword(Keyword::Void) && self.check_punct(Punct::RParen) {
             self.expect_punct(Punct::RParen)?;
-            return Ok(Type::func(return_ty, false));
+            return Ok(Type::func(return_ty, Vec::new(), false));
         }
 
-        // For now, just skip to the closing paren and return a function type
-        // The actual parameter parsing is done in parse_function_with_basety
-        // Check for "..." to detect variadic functions
-        let mut depth = 1;
+        let mut params = Vec::new();
         let mut is_variadic = false;
-        while depth > 0 && self.pos < self.tokens.len() {
-            if self.check_punct(Punct::Ellipsis) {
-                is_variadic = true;
-            }
-            if self.check_punct(Punct::LParen) {
-                depth += 1;
-            } else if self.check_punct(Punct::RParen) {
-                depth -= 1;
-            }
-            self.pos += 1;
+
+        // Empty parameter list foo() is treated as variadic (old K&R style)
+        if self.check_punct(Punct::RParen) {
+            self.expect_punct(Punct::RParen)?;
+            return Ok(Type::func(return_ty, Vec::new(), true));
         }
 
-        Ok(Type::func(return_ty, is_variadic))
+        // Parse parameter list
+        loop {
+            // Check for "..."
+            if self.consume_punct(Punct::Ellipsis) {
+                is_variadic = true;
+                break;
+            }
+
+            let param_basety = self.parse_declspec(None)?;
+            let (param_ty, param_token) = self.parse_declarator(param_basety)?;
+
+            // Decay array parameters to pointers
+            let param_ty = match param_ty {
+                Type::Array { base, .. } => Type::Ptr(base),
+                other => other,
+            };
+
+            let param_name = match param_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => String::new(), // Allow anonymous parameters in declarations
+            };
+
+            params.push((param_name, param_ty));
+
+            if !self.consume_punct(Punct::Comma) {
+                break;
+            }
+        }
+
+        self.expect_punct(Punct::RParen)?;
+        Ok(Type::func(return_ty, params, is_variadic))
     }
 
     fn parse_array_dimensions(&mut self, ty: Type) -> CompileResult<Type> {
@@ -2138,11 +2144,27 @@ impl<'a> Parser<'a> {
     }
 
     fn new_function_decl(&mut self, name: String, ty: Type, is_static: bool) {
+        // Extract params from function type
+        let params = if let Type::Func { params, .. } = &ty {
+            params
+                .iter()
+                .map(|(name, param_ty)| Obj {
+                    name: name.clone(),
+                    ty: param_ty.clone(),
+                    is_local: true,
+                    ..Default::default()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         self.globals.push(Obj {
             name,
             ty,
             is_function: true,
             is_static,
+            params,
             ..Default::default()
         });
     }
@@ -2313,23 +2335,38 @@ impl<'a> Parser<'a> {
             self.bail_at(name_token.location, "not a function")?;
         }
 
-        let params = func.params.clone();
+        // Extract param types and is_variadic from function type
+        let (param_types, is_variadic) = match &func.ty {
+            Type::Func {
+                params,
+                is_variadic,
+                ..
+            } => (params.clone(), *is_variadic),
+            _ => unreachable!("function must have function type"),
+        };
 
         self.pos += 1;
         self.expect_punct(Punct::LParen)?;
 
         let mut args = Vec::new();
-        let mut param_iter = params.iter();
+        let mut param_iter = param_types.iter();
         if !self.check_punct(Punct::RParen) {
             loop {
                 let mut arg = self.parse_assign()?;
                 self.add_type_expr(&mut arg)?;
-                if let Some(param) = param_iter.next() {
-                    if matches!(param.ty, Type::Struct { .. } | Type::Union { .. }) {
+
+                let param_opt = param_iter.next();
+                // Check for too many arguments
+                if param_opt.is_none() && !is_variadic {
+                    return self.bail_at(arg.location, "too many arguments");
+                }
+
+                if let Some((_name, param_ty)) = param_opt {
+                    if matches!(param_ty, Type::Struct { .. } | Type::Union { .. }) {
                         return self
                             .bail_at(arg.location, "passing struct or union is not supported");
                     }
-                    arg = self.cast_expr(arg, param.ty.clone());
+                    arg = self.cast_expr(arg, param_ty.clone());
                 }
                 args.push(arg);
                 if args.len() > 6 {
@@ -2343,6 +2380,11 @@ impl<'a> Parser<'a> {
                 }
                 break;
             }
+        }
+
+        // Check for too few arguments
+        if param_iter.next().is_some() {
+            return self.bail_at(name_token.location, "too few arguments");
         }
 
         self.expect_punct(Punct::RParen)?;
