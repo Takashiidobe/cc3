@@ -53,6 +53,7 @@ struct VarAttr {
     is_typedef: bool,
     is_static: bool,
     is_extern: bool,
+    align: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,6 +180,26 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            // Handle _Alignas
+            if self.consume_keyword(Keyword::Alignas) {
+                if let Some(attr) = attr.as_deref_mut() {
+                    self.expect_punct(Punct::LParen)?;
+
+                    // _Alignas can take either a typename or a constant expression
+                    if self.is_typename() {
+                        let ty = self.parse_typename()?;
+                        attr.align = ty.align() as i32;
+                    } else {
+                        attr.align = self.const_expr()? as i32;
+                    }
+
+                    self.expect_punct(Punct::RParen)?;
+                } else {
+                    return Err(self.error_here("_Alignas is not allowed in this context"));
+                }
+                continue;
+            }
+
             let token = self.peek().clone();
             let typedef_ty = self.find_typedef(&token);
             let is_struct_union_enum = matches!(
@@ -257,7 +278,8 @@ impl<'a> Parser<'a> {
                 | Keyword::Enum
                 | Keyword::Typedef
                 | Keyword::Static
-                | Keyword::Extern,
+                | Keyword::Extern
+                | Keyword::Alignas,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
@@ -394,6 +416,9 @@ impl<'a> Parser<'a> {
             };
             let var_idx = self.new_gvar(name, ty);
             self.globals[var_idx].is_definition = !attr.is_extern;
+            if attr.align != 0 {
+                self.globals[var_idx].align = attr.align;
+            }
 
             // Check for initializer
             if self.consume_punct(Punct::Assign) {
@@ -523,7 +548,7 @@ impl<'a> Parser<'a> {
 
             let init = if self.is_typename() {
                 let basety = self.parse_declspec(None)?;
-                self.parse_declaration(basety)?
+                self.parse_declaration(basety, &VarAttr::default())?
             } else {
                 self.parse_expr_stmt()?
             };
@@ -629,7 +654,7 @@ impl<'a> Parser<'a> {
         self.parse_expr_stmt()
     }
 
-    fn parse_declaration(&mut self, basety: Type) -> CompileResult<Stmt> {
+    fn parse_declaration(&mut self, basety: Type, attr: &VarAttr) -> CompileResult<Stmt> {
         let location = self.peek().location;
 
         let mut stmts = Vec::new();
@@ -647,6 +672,9 @@ impl<'a> Parser<'a> {
                 _ => unreachable!("parse_declarator only returns identifiers"),
             };
             let idx = self.new_lvar(name, ty.clone());
+            if attr.align != 0 {
+                self.locals[idx].align = attr.align;
+            }
             stmts.push(self.stmt_at(StmtKind::Decl(idx), name_token.location));
 
             if self.consume_punct(Punct::Assign) {
@@ -913,8 +941,8 @@ impl<'a> Parser<'a> {
             // Assign offsets within the struct to members
             let mut offset = 0i32;
             for member in members.iter_mut() {
-                // Align offset to member's type alignment
-                offset = align_to(offset, member.ty.align() as i32);
+                // Align offset to member's alignment
+                offset = align_to(offset, member.align);
                 member.offset = offset;
                 offset += member.ty.size() as i32;
             }
@@ -944,7 +972,8 @@ impl<'a> Parser<'a> {
         let mut members = Vec::new();
         let mut idx = 0;
         while !self.check_punct(Punct::RBrace) {
-            let basety = self.parse_declspec(None)?;
+            let mut attr = VarAttr::default();
+            let basety = self.parse_declspec(Some(&mut attr))?;
             let mut first = true;
 
             while !self.check_punct(Punct::Semicolon) {
@@ -957,11 +986,17 @@ impl<'a> Parser<'a> {
                     TokenKind::Ident(name) => name,
                     _ => return Err(self.error_at(name_token.location, "member name expected")),
                 };
+                let align = if attr.align != 0 {
+                    attr.align
+                } else {
+                    ty.align() as i32
+                };
                 members.push(Member {
                     name,
                     ty,
                     location: name_token.location,
                     idx,
+                    align,
                     offset: 0,
                 });
                 idx += 1;
@@ -1627,6 +1662,14 @@ impl<'a> Parser<'a> {
                 let size = expr.ty.as_ref().map(|ty| ty.size()).unwrap_or(8);
                 Ok(self.expr_at(ExprKind::Num(size), location))
             }
+            TokenKind::Keyword(Keyword::Alignof) => {
+                let location = token.location;
+                self.pos += 1;
+                self.expect_punct(Punct::LParen)?;
+                let ty = self.parse_typename()?;
+                self.expect_punct(Punct::RParen)?;
+                Ok(self.expr_at(ExprKind::Num(ty.align() as i64), location))
+            }
             TokenKind::Ident(ref name) => {
                 if matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LParen)) {
                     return self.parse_funcall(token);
@@ -1981,10 +2024,12 @@ impl<'a> Parser<'a> {
 
     fn new_lvar(&mut self, name: String, ty: Type) -> usize {
         let idx = self.locals.len();
+        let align = ty.align() as i32;
         self.locals.push(Obj {
             name,
             ty,
             is_local: true,
+            align,
             offset: 0,
             is_function: false,
             is_definition: false,
@@ -2002,10 +2047,12 @@ impl<'a> Parser<'a> {
 
     fn new_gvar(&mut self, name: String, ty: Type) -> usize {
         let idx = self.globals.len();
+        let align = ty.align() as i32;
         self.globals.push(Obj {
             name,
             ty,
             is_local: false,
+            align,
             offset: 0,
             is_function: false,
             is_definition: true,
@@ -2026,6 +2073,7 @@ impl<'a> Parser<'a> {
             name,
             ty,
             is_local: false,
+            align: 0,
             offset: 0,
             is_function: true,
             is_definition: false,
@@ -2054,6 +2102,7 @@ impl<'a> Parser<'a> {
             name,
             ty,
             is_local: false,
+            align: 0,
             offset: 0,
             is_function: true,
             is_definition: true,
@@ -2179,7 +2228,7 @@ impl<'a> Parser<'a> {
                     continue;
                 }
 
-                stmts.push(self.parse_declaration(basety)?);
+                stmts.push(self.parse_declaration(basety, &attr)?);
                 continue;
             }
 
@@ -3436,7 +3485,7 @@ fn assign_lvar_offsets(locals: &mut [Obj]) -> i32 {
     let mut offset = 0i32;
     for var in locals.iter_mut().rev() {
         offset += var.ty.size() as i32;
-        offset = align_to(offset, var.ty.align() as i32);
+        offset = align_to(offset, var.align);
         var.offset = -offset;
     }
     align_to(offset, 16)

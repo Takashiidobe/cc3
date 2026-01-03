@@ -11,6 +11,7 @@ pub struct Member {
     pub ty: Type,
     pub location: SourceLocation,
     pub idx: usize,
+    pub align: i32,
     pub offset: i32,
 }
 
@@ -161,6 +162,7 @@ pub struct Obj {
     pub name: String,
     pub ty: Type,
     pub is_local: bool,
+    pub align: i32,
 
     // Local variable
     pub offset: i32,
@@ -319,7 +321,7 @@ impl Type {
                 }
                 members
                     .iter()
-                    .map(|member| member.ty.align())
+                    .map(|member| member.align as i64)
                     .max()
                     .unwrap_or(1)
             }
