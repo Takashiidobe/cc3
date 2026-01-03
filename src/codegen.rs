@@ -177,8 +177,8 @@ impl Codegen {
         self.depth += 1;
     }
 
-    fn popf(&mut self, reg: &str) {
-        self.emit_line(&format!("  movsd (%rsp), {}", reg));
+    fn popf(&mut self, reg: i32) {
+        self.emit_line(&format!("  movsd (%rsp), %xmm{}", reg));
         self.emit_line("  add $8, %rsp");
         self.depth -= 1;
     }
@@ -190,6 +190,24 @@ impl Codegen {
     fn next_label(&mut self) -> usize {
         self.label_counter += 1;
         self.label_counter
+    }
+
+    fn push_args(&mut self, args: &[Expr], function: &Obj, globals: &[Obj]) {
+        if !args.is_empty() {
+            // Recursively push arguments from right to left
+            self.push_args(&args[1..], function, globals);
+
+            self.gen_expr(&args[0], function, globals);
+            if let Some(ty) = &args[0].ty {
+                if matches!(ty, Type::Float | Type::Double) {
+                    self.pushf();
+                } else {
+                    self.push();
+                }
+            } else {
+                self.push();
+            }
+        }
     }
 
     fn gen_stmt(&mut self, stmt: &Stmt, function: &Obj, globals: &[Obj]) {
@@ -415,16 +433,24 @@ impl Codegen {
                 self.cast(from, ty);
             }
             ExprKind::Call { name, args } => {
-                let mut nargs = 0;
+                self.push_args(args, function, globals);
+
+                let mut gp = 0;
+                let mut fp = 0;
                 for arg in args {
-                    self.gen_expr(arg, function, globals);
-                    self.push();
-                    nargs += 1;
+                    if let Some(ty) = &arg.ty {
+                        if matches!(ty, Type::Float | Type::Double) {
+                            self.popf(fp);
+                            fp += 1;
+                        } else {
+                            self.pop(ARG_REGS_64[gp]);
+                            gp += 1;
+                        }
+                    } else {
+                        self.pop(ARG_REGS_64[gp]);
+                        gp += 1;
+                    }
                 }
-                for i in (0..nargs).rev() {
-                    self.pop(ARG_REGS_64[i]);
-                }
-                self.emit_line("  mov $0, %rax");
 
                 if self.depth.is_multiple_of(2) {
                     self.emit_line(&format!("  call {}", name));
@@ -555,7 +581,7 @@ impl Codegen {
                         self.gen_expr(rhs, function, globals);
                         self.pushf();
                         self.gen_expr(lhs, function, globals);
-                        self.popf("%xmm1");
+                        self.popf(1);
 
                         let sz = if matches!(lhs_ty, Type::Float) {
                             "ss"
