@@ -205,7 +205,10 @@ pub enum Type {
     Long,
     Enum,
     Ptr(Box<Type>),
-    Func(Box<Type>),
+    Func {
+        return_ty: Box<Type>,
+        is_variadic: bool,
+    },
     Struct {
         members: Vec<Member>,
         tag: Option<String>,
@@ -254,7 +257,7 @@ impl Type {
             Type::Long => 8,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
-            Type::Func(_) => 8,
+            Type::Func { .. } => 8,
             Type::Struct {
                 members,
                 is_incomplete,
@@ -311,7 +314,7 @@ impl Type {
             Type::Long => 8,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
-            Type::Func(_) => 8,
+            Type::Func { .. } => 8,
             Type::Struct {
                 members,
                 is_incomplete,

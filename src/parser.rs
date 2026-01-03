@@ -293,6 +293,7 @@ impl<'a> Parser<'a> {
 
         // Parse function parameters
         let mut param_indices = Vec::new();
+        let mut is_variadic = false;
 
         // Check for void parameter list: foo(void)
         if self.consume_keyword(Keyword::Void) && self.check_punct(Punct::RParen) {
@@ -300,6 +301,12 @@ impl<'a> Parser<'a> {
             // param_indices remains empty
         } else if !self.check_punct(Punct::RParen) {
             loop {
+                // Check for "..."
+                if self.consume_punct(Punct::Ellipsis) {
+                    is_variadic = true;
+                    break;
+                }
+
                 let param_basety = self.parse_declspec(None)?;
                 let (param_ty, param_token) = self.parse_declarator(param_basety)?;
                 let param_ty = match param_ty {
@@ -327,7 +334,14 @@ impl<'a> Parser<'a> {
 
         if !is_definition {
             // Function declaration - no body
-            self.new_function_decl(name, Type::Func(Box::new(basety)), attr.is_static);
+            self.new_function_decl(
+                name,
+                Type::Func {
+                    return_ty: Box::new(basety),
+                    is_variadic,
+                },
+                attr.is_static,
+            );
             self.leave_scope();
             return Ok(());
         }
@@ -338,7 +352,10 @@ impl<'a> Parser<'a> {
         // Ensure the function is visible for recursive calls.
         self.new_function_decl(
             name.clone(),
-            Type::Func(Box::new(basety.clone())),
+            Type::Func {
+                return_ty: Box::new(basety.clone()),
+                is_variadic,
+            },
             attr.is_static,
         );
 
@@ -370,7 +387,10 @@ impl<'a> Parser<'a> {
 
         self.new_function_def(
             name,
-            Type::Func(Box::new(basety)),
+            Type::Func {
+                return_ty: Box::new(basety),
+                is_variadic,
+            },
             params,
             body,
             locals,
@@ -392,7 +412,7 @@ impl<'a> Parser<'a> {
         self.pos = saved_pos; // restore position
 
         match result {
-            Ok((ty, _)) => Ok(matches!(ty, Type::Func(_))),
+            Ok((ty, _)) => Ok(matches!(ty, Type::Func { .. })),
             Err(_) => Ok(false),
         }
     }
@@ -1078,13 +1098,21 @@ impl<'a> Parser<'a> {
         // Handle void parameter list: foo(void)
         if self.consume_keyword(Keyword::Void) && self.check_punct(Punct::RParen) {
             self.expect_punct(Punct::RParen)?;
-            return Ok(Type::Func(Box::new(return_ty)));
+            return Ok(Type::Func {
+                return_ty: Box::new(return_ty),
+                is_variadic: false,
+            });
         }
 
         // For now, just skip to the closing paren and return a function type
         // The actual parameter parsing is done in parse_function_with_basety
+        // Check for "..." to detect variadic functions
         let mut depth = 1;
+        let mut is_variadic = false;
         while depth > 0 && self.pos < self.tokens.len() {
+            if self.check_punct(Punct::Ellipsis) {
+                is_variadic = true;
+            }
             if self.check_punct(Punct::LParen) {
                 depth += 1;
             } else if self.check_punct(Punct::RParen) {
@@ -1093,7 +1121,10 @@ impl<'a> Parser<'a> {
             self.pos += 1;
         }
 
-        Ok(Type::Func(Box::new(return_ty)))
+        Ok(Type::Func {
+            return_ty: Box::new(return_ty),
+            is_variadic,
+        })
     }
 
     fn parse_array_dimensions(&mut self, ty: Type) -> CompileResult<Type> {
@@ -3280,9 +3311,9 @@ impl<'a> Parser<'a> {
                 }
                 if let Some(func) = self.find_global(name)
                     && func.is_function
-                    && let Type::Func(ret) = &func.ty
+                    && let Type::Func { return_ty, .. } = &func.ty
                 {
-                    ret.as_ref().clone()
+                    return_ty.as_ref().clone()
                 } else {
                     Type::Int
                 }
@@ -3506,7 +3537,7 @@ impl<'a> Parser<'a> {
                 } else {
                     &self.globals[*idx]
                 };
-                if !var.ty.is_array() && !matches!(var.ty, Type::Func(_)) {
+                if !var.ty.is_array() && !matches!(var.ty, Type::Func { .. }) {
                     self.bail_at(expr.location, "invalid initializer")?
                 }
                 if let Some(label_ref) = label {

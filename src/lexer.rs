@@ -53,6 +53,7 @@ pub enum Punct {
     Slash,
     Mod,
     Dot,
+    Ellipsis,
     Arrow,
     LParen,
     RParen,
@@ -103,6 +104,7 @@ impl std::fmt::Display for Punct {
             Punct::Slash => "/",
             Punct::Mod => "%",
             Punct::Dot => ".",
+            Punct::Ellipsis => "...",
             Punct::Arrow => "->",
             Punct::LParen => "(",
             Punct::RParen => ")",
@@ -531,6 +533,9 @@ fn is_ident_continue(b: u8) -> bool {
 }
 
 fn read_punct(input: &str) -> Option<(Punct, usize)> {
+    if input.starts_with("...") {
+        return Some((Punct::Ellipsis, 3));
+    }
     if input.starts_with("<<=") {
         return Some((Punct::ShlAssign, 3));
     }
