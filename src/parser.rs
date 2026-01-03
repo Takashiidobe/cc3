@@ -1943,6 +1943,14 @@ impl<'a> Parser<'a> {
         if let Some(base) = ty1.base() {
             return Type::Ptr(Box::new(base.clone()));
         }
+
+        if matches!(ty1, Type::Double) || matches!(ty2, Type::Double) {
+            return Type::Double;
+        }
+        if matches!(ty1, Type::Float) || matches!(ty2, Type::Float) {
+            return Type::Float;
+        }
+
         let mut ty1 = ty1.clone();
         let mut ty2 = ty2.clone();
 

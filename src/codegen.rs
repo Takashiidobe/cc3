@@ -171,6 +171,18 @@ impl Codegen {
         self.depth -= 1;
     }
 
+    fn pushf(&mut self) {
+        self.emit_line("  sub $8, %rsp");
+        self.emit_line("  movsd %xmm0, (%rsp)");
+        self.depth += 1;
+    }
+
+    fn popf(&mut self, reg: &str) {
+        self.emit_line(&format!("  movsd (%rsp), {}", reg));
+        self.emit_line("  add $8, %rsp");
+        self.depth -= 1;
+    }
+
     fn label_symbol(&self, function: &Obj, label: &str) -> String {
         format!(".L.{}.{}", function.name, label)
     }
@@ -498,6 +510,52 @@ impl Codegen {
                         self.emit_line(&format!(".L.end.{}:", c));
                     }
                     return;
+                }
+
+                // Handle floating-point comparisons
+                if matches!(
+                    op,
+                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le
+                ) {
+                    let lhs_ty = lhs.ty.as_ref().unwrap_or(&Type::Int);
+                    if matches!(lhs_ty, Type::Float | Type::Double) {
+                        self.gen_expr(rhs, function, globals);
+                        self.pushf();
+                        self.gen_expr(lhs, function, globals);
+                        self.popf("%xmm1");
+
+                        let sz = if matches!(lhs_ty, Type::Float) {
+                            "ss"
+                        } else {
+                            "sd"
+                        };
+
+                        self.emit_line(&format!("  ucomi{} %xmm0, %xmm1", sz));
+
+                        match op {
+                            BinaryOp::Eq => {
+                                self.emit_line("  sete %al");
+                                self.emit_line("  setnp %dl");
+                                self.emit_line("  and %dl, %al");
+                            }
+                            BinaryOp::Ne => {
+                                self.emit_line("  setne %al");
+                                self.emit_line("  setp %dl");
+                                self.emit_line("  or %dl, %al");
+                            }
+                            BinaryOp::Lt => {
+                                self.emit_line("  seta %al");
+                            }
+                            BinaryOp::Le => {
+                                self.emit_line("  setae %al");
+                            }
+                            _ => unreachable!(),
+                        }
+
+                        self.emit_line("  and $1, %al");
+                        self.emit_line("  movzb %al, %rax");
+                        return;
+                    }
                 }
 
                 // Handle other binary operators
