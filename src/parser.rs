@@ -4,7 +4,7 @@ use crate::ast::{
 };
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
-use std::mem;
+use std::{fmt, mem};
 
 pub fn parse(tokens: &[Token]) -> CompileResult<Program> {
     let mut parser = Parser::new(tokens);
@@ -27,7 +27,7 @@ struct Parser<'a> {
     current_switch: Option<SwitchContext>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 struct VarScope {
     name: String,
     idx: Option<usize>,
@@ -36,7 +36,7 @@ struct VarScope {
     enum_val: Option<i64>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 struct TagScope {
     name: String,
     ty: Type,
@@ -169,13 +169,10 @@ impl<'a> Parser<'a> {
                     }
 
                     if attr.is_typedef && (attr.is_static || attr.is_extern) {
-                        return Err(self
-                            .error_here("typedef may not be used together with static or extern"));
+                        self.bail_here("typedef may not be used together with static or extern")?;
                     }
                 } else {
-                    return Err(
-                        self.error_here("storage class specifier is not allowed in this context")
-                    );
+                    self.bail_here("storage class specifier is not allowed in this context")?;
                 }
                 continue;
             }
@@ -195,7 +192,7 @@ impl<'a> Parser<'a> {
 
                     self.expect_punct(Punct::RParen)?;
                 } else {
-                    return Err(self.error_here("_Alignas is not allowed in this context"));
+                    self.bail_here("_Alignas is not allowed in this context")?;
                 }
                 continue;
             }
@@ -239,7 +236,7 @@ impl<'a> Parser<'a> {
             } else if self.consume_keyword(Keyword::Long) {
                 counter += LONG;
             } else {
-                return Err(self.error_at(location, "invalid type"));
+                self.bail_at(location, "invalid type")?;
             }
 
             ty = match counter {
@@ -249,12 +246,12 @@ impl<'a> Parser<'a> {
                 SHORT | SHORT_INT => Type::Short,
                 INT => Type::Int,
                 LONG | LONG_INT | LONG_LONG | LONG_LONG_INT => Type::Long,
-                _ => return Err(self.error_at(location, "invalid type")),
+                _ => self.bail_at(location, "invalid type")?,
             };
         }
 
         if !saw_typename {
-            return Err(self.error_here("typename expected"));
+            self.bail_here("typename expected")?;
         }
 
         Ok(ty)
@@ -412,7 +409,7 @@ impl<'a> Parser<'a> {
             let (ty, name_token) = self.parse_declarator(basety.clone())?;
             let name = match name_token.kind {
                 TokenKind::Ident(name) => name,
-                _ => return Err(self.error_at(name_token.location, "variable name expected")),
+                _ => self.bail_at(name_token.location, "variable name expected")?,
             };
             let var_idx = self.new_gvar(name, ty);
             self.globals[var_idx].is_definition = !attr.is_extern;
@@ -505,7 +502,7 @@ impl<'a> Parser<'a> {
                     label: label.clone(),
                 });
             } else {
-                return Err(self.error_at(location, "stray case"));
+                self.bail_at(location, "stray case")?;
             }
 
             let stmt = self.parse_stmt()?;
@@ -527,7 +524,7 @@ impl<'a> Parser<'a> {
             if let Some(ctx) = self.current_switch.as_mut() {
                 ctx.default_label = Some(label.clone());
             } else {
-                return Err(self.error_at(location, "stray default"));
+                self.bail_at(location, "stray default")?;
             }
 
             let stmt = self.parse_stmt()?;
@@ -602,7 +599,7 @@ impl<'a> Parser<'a> {
 
         if self.consume_keyword(Keyword::Break) {
             if self.break_depth == 0 {
-                return Err(self.error_here("stray break"));
+                self.bail_here("stray break")?;
             }
             self.expect_punct(Punct::Semicolon)?;
             return Ok(self.stmt_last(StmtKind::Break));
@@ -610,7 +607,7 @@ impl<'a> Parser<'a> {
 
         if self.consume_keyword(Keyword::Continue) {
             if self.loop_depth == 0 {
-                return Err(self.error_here("stray continue"));
+                self.bail_here("stray continue")?;
             }
             self.expect_punct(Punct::Semicolon)?;
             return Ok(self.stmt_last(StmtKind::Continue));
@@ -671,6 +668,24 @@ impl<'a> Parser<'a> {
                 TokenKind::Ident(name) => name,
                 _ => unreachable!("parse_declarator only returns identifiers"),
             };
+            if ty == Type::Void {
+                self.bail_at(name_token.location, "variable declared void")?;
+            }
+
+            // Handle static local variables
+            if attr.is_static {
+                // Static local variables are stored as globals with anonymous names,
+                // but are scoped locally with the user-visible name.
+                let idx = self.new_anon_gvar(ty.clone());
+                self.globals[idx].is_static = true;
+                self.push_scope_var_named(name.clone(), idx, false);
+
+                if self.consume_punct(Punct::Assign) {
+                    self.parse_gvar_initializer(idx)?;
+                }
+                continue;
+            }
+
             let idx = self.new_lvar(name, ty.clone());
             if attr.align != 0 {
                 self.locals[idx].align = attr.align;
@@ -686,16 +701,10 @@ impl<'a> Parser<'a> {
             // Check for incomplete type after initialization (which may determine array length)
             let var = &self.locals[idx];
             if var.ty.size() < 0 {
-                return Err(CompileError::at(
-                    "variable has incomplete type",
-                    name_token.location,
-                ));
+                self.bail_at(name_token.location, "variable has incomplete type")?;
             }
             if var.ty == Type::Void {
-                return Err(CompileError::at(
-                    "variable declared void",
-                    name_token.location,
-                ));
+                self.bail_at(name_token.location, "variable declared void")?;
             }
         }
 
@@ -789,9 +798,9 @@ impl<'a> Parser<'a> {
             };
             let ty = self
                 .find_tag(name)
-                .ok_or_else(|| self.error_at(tag_token.location, "unknown enum type"))?;
+                .ok_or_else(|| self.err_at(tag_token.location, "unknown enum type"))?;
             if ty != Type::Enum {
-                return Err(self.error_at(tag_token.location, "not an enum tag"));
+                self.bail_at(tag_token.location, "not an enum tag")?;
             }
             return Ok(ty);
         }
@@ -984,7 +993,7 @@ impl<'a> Parser<'a> {
                 let (ty, name_token) = self.parse_declarator(basety.clone())?;
                 let name = match name_token.kind {
                     TokenKind::Ident(name) => name,
-                    _ => return Err(self.error_at(name_token.location, "member name expected")),
+                    _ => self.bail_at(name_token.location, "member name expected")?,
                 };
                 let align = if attr.align != 0 {
                     attr.align
@@ -1116,7 +1125,7 @@ impl<'a> Parser<'a> {
 
         if self.consume_punct(Punct::Assign) {
             if !self.is_lvalue(&expr) {
-                return Err(self.error_here("invalid assignment target"));
+                self.bail_here("invalid assignment target")?;
             }
             let location = self.last_location();
             let rhs = self.parse_assign()?;
@@ -1145,7 +1154,7 @@ impl<'a> Parser<'a> {
         for (punct, op) in compound_ops {
             if self.consume_punct(punct) {
                 if !self.is_lvalue(&expr) {
-                    return Err(self.error_here("invalid assignment target"));
+                    self.bail_here("invalid assignment target")?;
                 }
                 let location = self.last_location();
                 let rhs = self.parse_assign()?;
@@ -1171,7 +1180,7 @@ impl<'a> Parser<'a> {
         let lhs_ty = lhs
             .ty
             .clone()
-            .ok_or_else(|| self.error_at(location, "lhs has no type"))?;
+            .ok_or_else(|| self.err_at(location, "lhs has no type"))?;
         let ptr_ty = Type::Ptr(Box::new(lhs_ty));
 
         // Create temporary pointer variable
@@ -1516,7 +1525,7 @@ impl<'a> Parser<'a> {
         let node_ty = node
             .ty
             .clone()
-            .ok_or_else(|| self.error_at(location, "node has no type"))?;
+            .ok_or_else(|| self.err_at(location, "node has no type"))?;
 
         // Convert to assignment using the binary add expression
         // This transforms: (i + 1) or (i + (-1))
@@ -1606,17 +1615,17 @@ impl<'a> Parser<'a> {
                 _ => members,
             },
             Type::Struct { members, .. } | Type::Union { members, .. } => members,
-            _ => return Err(self.error_at(lhs.location, "not a struct nor a union")),
+            _ => self.bail_at(lhs.location, "not a struct nor a union")?,
         };
         let name = match name_token.kind {
             TokenKind::Ident(name) => name,
-            _ => return Err(self.error_at(name_token.location, "member name expected")),
+            _ => self.bail_at(name_token.location, "member name expected")?,
         };
         let member = members
             .iter()
             .find(|member| member.name == name)
             .cloned()
-            .ok_or_else(|| self.error_at(name_token.location, "no such member"))?;
+            .ok_or_else(|| self.err_at(name_token.location, "no such member"))?;
         Ok(self.expr_at(
             ExprKind::Member {
                 lhs: Box::new(lhs),
@@ -1673,7 +1682,7 @@ impl<'a> Parser<'a> {
                     self.expect_punct(Punct::LParen)?;
                     let ty = self.parse_typename()?;
                     self.expect_punct(Punct::RParen)?;
-                    return Ok(self.expr_at(ExprKind::Num(ty.align() as i64), location));
+                    return Ok(self.expr_at(ExprKind::Num(ty.align()), location));
                 }
 
                 // Otherwise, parse as _Alignof unary (GNU extension)
@@ -1690,7 +1699,7 @@ impl<'a> Parser<'a> {
                 let name = name.clone();
                 let scope = self
                     .find_var_scope(&name)
-                    .ok_or_else(|| self.error_at(token.location, "undefined variable"))?;
+                    .ok_or_else(|| self.err_at(token.location, "undefined variable"))?;
                 let expr = if let Some(idx) = scope.idx {
                     self.expr_at(
                         ExprKind::Var {
@@ -1704,7 +1713,7 @@ impl<'a> Parser<'a> {
                     expr.ty = Some(Type::Enum);
                     expr
                 } else {
-                    return Err(self.error_at(token.location, "undefined variable"));
+                    self.bail_at(token.location, "undefined variable")?
                 };
                 self.pos += 1;
                 Ok(expr)
@@ -1724,7 +1733,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(self.expr_at(ExprKind::Num(value), token.location))
             }
-            _ => Err(self.error_expected("a primary expression")),
+            _ => self.bail_expected("a primary expression"),
         }
     }
 
@@ -1808,7 +1817,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(name)
             }
-            _ => Err(self.error_expected("identifier")),
+            _ => self.bail_expected("identifier"),
         }
     }
 
@@ -1819,7 +1828,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(token)
             }
-            _ => Err(self.error_expected("a variable name")),
+            _ => self.bail_expected("a variable name"),
         }
     }
 
@@ -1830,7 +1839,7 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(())
             }
-            _ => Err(self.error_expected(format!("'{punct}'"))),
+            _ => self.bail_expected(format!("'{punct}'")),
         }
     }
 
@@ -1913,19 +1922,28 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn error_here(&self, message: impl Into<String>) -> CompileError {
-        let location = self.peek().location;
+    fn err_at(&self, location: SourceLocation, message: impl Into<String>) -> CompileError {
         CompileError::at(message, location)
     }
 
-    fn error_at(&self, location: SourceLocation, message: impl Into<String>) -> CompileError {
-        CompileError::at(message, location)
-    }
-
-    fn error_expected(&self, expected: impl Into<String>) -> CompileError {
-        let expected = expected.into();
+    fn err_expected(&self, expected: impl Into<String> + fmt::Display) -> CompileError {
         let found = self.token_desc(self.peek());
-        self.error_here(format!("expected {expected}, found {found}"))
+        self.err_at(
+            self.peek().location,
+            format!("expected {expected}, found {found}"),
+        )
+    }
+
+    fn bail_at<T>(&self, location: SourceLocation, message: impl Into<String>) -> CompileResult<T> {
+        Err(self.err_at(location, message))
+    }
+
+    fn bail_here<T>(&self, message: impl Into<String>) -> CompileResult<T> {
+        self.bail_at(self.peek().location, message)
+    }
+
+    fn bail_expected<T>(&self, expected: impl Into<String> + fmt::Display) -> CompileResult<T> {
+        Err(self.err_expected(expected))
     }
 
     fn token_desc(&self, token: &Token) -> String {
@@ -2107,12 +2125,12 @@ impl<'a> Parser<'a> {
         let mut labels = std::collections::HashMap::new();
         for (label, location) in &self.fn_labels {
             if labels.insert(label.clone(), *location).is_some() {
-                return Err(self.error_at(*location, "duplicate label"));
+                self.bail_at(*location, "duplicate label")?;
             }
         }
         for (label, location) in &self.fn_gotos {
             if !labels.contains_key(label) {
-                return Err(self.error_at(*location, "use of undeclared label"));
+                self.bail_at(*location, "use of undeclared label")?;
             }
         }
         Ok(())
@@ -2145,13 +2163,16 @@ impl<'a> Parser<'a> {
         } else {
             self.globals[idx].name.clone()
         };
+        self.push_scope_var_named(name, idx, is_local);
+    }
+
+    fn push_scope_var_named(&mut self, name: String, idx: usize, is_local: bool) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.vars.push(VarScope {
                 name,
                 idx: Some(idx),
                 is_local,
-                type_def: None,
-                enum_val: None,
+                ..Default::default()
             });
         }
     }
@@ -2160,10 +2181,8 @@ impl<'a> Parser<'a> {
         if let Some(scope) = self.scopes.last_mut() {
             scope.vars.push(VarScope {
                 name,
-                idx: None,
-                is_local: false,
                 type_def: Some(ty),
-                enum_val: None,
+                ..Default::default()
             });
         }
     }
@@ -2172,10 +2191,8 @@ impl<'a> Parser<'a> {
         if let Some(scope) = self.scopes.last_mut() {
             scope.vars.push(VarScope {
                 name,
-                idx: None,
-                is_local: false,
-                type_def: None,
                 enum_val: Some(val),
+                ..Default::default()
             });
         }
     }
@@ -2227,15 +2244,14 @@ impl<'a> Parser<'a> {
         };
 
         if self.find_var_scope(&name).is_some() {
-            return Err(self.error_at(name_token.location, "not a function"));
+            self.bail_at(name_token.location, "not a function")?;
         }
 
-        let func = self.find_global(&name);
-        let Some(func) = func else {
-            return Err(self.error_at(name_token.location, "implicit declaration of a function"));
-        };
+        let func = self.find_global(&name).ok_or_else(|| {
+            self.err_at(name_token.location, "implicit declaration of a function")
+        })?;
         if !func.is_function {
-            return Err(self.error_at(name_token.location, "not a function"));
+            self.bail_at(name_token.location, "not a function")?;
         }
 
         let params = func.params.clone();
@@ -2251,18 +2267,17 @@ impl<'a> Parser<'a> {
                 self.add_type_expr(&mut arg)?;
                 if let Some(param) = param_iter.next() {
                     if matches!(param.ty, Type::Struct { .. } | Type::Union { .. }) {
-                        return Err(
-                            self.error_at(arg.location, "passing struct or union is not supported")
-                        );
+                        return self
+                            .bail_at(arg.location, "passing struct or union is not supported");
                     }
                     arg = self.cast_expr(arg, param.ty.clone());
                 }
                 args.push(arg);
                 if args.len() > 6 {
-                    return Err(self.error_at(
+                    self.bail_at(
                         name_token.location,
                         "function call can have up to 6 arguments",
-                    ));
+                    )?;
                 }
                 if self.consume_punct(Punct::Comma) {
                     continue;
@@ -2303,7 +2318,7 @@ impl<'a> Parser<'a> {
         let rhs_has_base = rhs_ty.base().is_some();
 
         if lhs_has_base && rhs_has_base {
-            return Err(self.error_at(location, "invalid operands"));
+            self.bail_at(location, "invalid operands")?;
         }
 
         if !lhs_has_base && rhs_has_base {
@@ -2406,7 +2421,7 @@ impl<'a> Parser<'a> {
             return Ok(expr);
         }
 
-        Err(self.error_at(location, "invalid operands"))
+        self.bail_at(location, "invalid operands")
     }
 
     /// Create a new initializer tree for the given type.
@@ -2772,7 +2787,7 @@ impl<'a> Parser<'a> {
                 is_incomplete,
                 is_flexible,
             } => Type::Struct {
-                members: members.iter().map(|m| m.clone()).collect(),
+                members: members.to_vec(),
                 tag,
                 is_incomplete,
                 is_flexible,
@@ -2783,7 +2798,7 @@ impl<'a> Parser<'a> {
                 is_incomplete,
                 is_flexible,
             } => Type::Union {
-                members: members.iter().map(|m| m.clone()).collect(),
+                members: members.to_vec(),
                 tag,
                 is_incomplete,
                 is_flexible,
@@ -3222,23 +3237,19 @@ impl<'a> Parser<'a> {
                 match expr_ty.base() {
                     Some(base) => {
                         if *base == Type::Void {
-                            return Err(
-                                self.error_at(expr.location, "dereferencing a void pointer")
-                            );
+                            self.bail_at(expr.location, "dereferencing a void pointer")?;
                         }
                         base.clone()
                     }
-                    None => {
-                        return Err(self.error_at(expr.location, "invalid pointer dereference"));
-                    }
+                    None => self.bail_at(expr.location, "invalid pointer dereference")?,
                 }
             }
             ExprKind::StmtExpr(stmts) => {
                 if stmts.is_empty() {
-                    return Err(self.error_at(
+                    self.bail_at(
                         expr.location,
                         "statement expression returning void is not supported",
-                    ));
+                    )?
                 }
                 for stmt in stmts.iter_mut() {
                     self.add_type_stmt(stmt)?;
@@ -3249,12 +3260,10 @@ impl<'a> Parser<'a> {
                         self.add_type_expr(expr)?;
                         expr.ty.clone().unwrap_or(Type::Int)
                     }
-                    _ => {
-                        return Err(self.error_at(
-                            expr.location,
-                            "statement expression returning void is not supported",
-                        ));
-                    }
+                    _ => self.bail_at(
+                        expr.location,
+                        "statement expression returning void is not supported",
+                    )?,
                 }
             }
             ExprKind::Assign { lhs, rhs } => {
@@ -3263,7 +3272,7 @@ impl<'a> Parser<'a> {
                 let lhs_ty = lhs.ty.clone().unwrap_or(Type::Int);
                 // Arrays are not assignable
                 if lhs_ty.is_array() {
-                    return Err(self.error_at(lhs.location, "not an lvalue"));
+                    self.bail_at(lhs.location, "not an lvalue")?
                 }
                 if !matches!(lhs_ty, Type::Struct { .. }) {
                     self.cast_expr_in_place(rhs, lhs_ty.clone());
@@ -3399,17 +3408,17 @@ impl<'a> Parser<'a> {
             ExprKind::Addr(inner) => self.eval_rval(inner, label),
             ExprKind::Member { lhs, member } => {
                 if label.is_none() {
-                    return Err(self.error_at(expr.location, "not a compile-time constant"));
+                    self.bail_at(expr.location, "not a compile-time constant")?
                 }
                 if !member.ty.is_array() {
-                    return Err(self.error_at(expr.location, "invalid initializer"));
+                    self.bail_at(expr.location, "invalid initializer")?
                 }
                 let offset = self.eval_rval(lhs, label)?;
                 Ok(offset + member.offset as i64)
             }
             ExprKind::Var { idx, is_local } => {
                 if label.is_none() {
-                    return Err(self.error_at(expr.location, "not a compile-time constant"));
+                    self.bail_at(expr.location, "not a compile-time constant")?
                 }
                 let var = if *is_local {
                     &self.locals[*idx]
@@ -3417,14 +3426,14 @@ impl<'a> Parser<'a> {
                     &self.globals[*idx]
                 };
                 if !var.ty.is_array() && !matches!(var.ty, Type::Func(_)) {
-                    return Err(self.error_at(expr.location, "invalid initializer"));
+                    self.bail_at(expr.location, "invalid initializer")?
                 }
                 if let Some(label_ref) = label {
                     *label_ref = Some(var.name.clone());
                 }
                 Ok(0)
             }
-            _ => Err(self.error_at(expr.location, "not a compile-time constant")),
+            _ => self.bail_at(expr.location, "not a compile-time constant"),
         }
     }
 
@@ -3434,7 +3443,7 @@ impl<'a> Parser<'a> {
         match &mut expr.kind {
             ExprKind::Var { idx, is_local } => {
                 if *is_local {
-                    return Err(self.error_at(expr.location, "not a compile-time constant"));
+                    self.bail_at(expr.location, "not a compile-time constant")?
                 }
                 let var = &self.globals[*idx];
                 if let Some(label_ref) = label {
@@ -3447,7 +3456,7 @@ impl<'a> Parser<'a> {
                 let offset = self.eval_rval(lhs, label)?;
                 Ok(offset + member.offset as i64)
             }
-            _ => Err(self.error_at(expr.location, "invalid initializer")),
+            _ => self.bail_at(expr.location, "invalid initializer"),
         }
     }
 
