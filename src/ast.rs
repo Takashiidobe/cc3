@@ -337,4 +337,55 @@ impl Type {
             Type::Array { base, .. } => base.align(),
         }
     }
+
+    // Helper constructors to centralize creation and make future changes easier
+    pub fn func(return_ty: Type, is_variadic: bool) -> Type {
+        Type::Func {
+            return_ty: Box::new(return_ty),
+            is_variadic,
+        }
+    }
+
+    pub fn array(base: Type, len: i32) -> Type {
+        Type::Array {
+            base: Box::new(base),
+            len,
+        }
+    }
+
+    pub fn incomplete_struct(tag: Option<String>) -> Type {
+        Type::Struct {
+            members: Vec::new(),
+            tag,
+            is_incomplete: true,
+            is_flexible: false,
+        }
+    }
+
+    pub fn complete_struct(members: Vec<Member>, tag: Option<String>, is_flexible: bool) -> Type {
+        Type::Struct {
+            members,
+            tag,
+            is_incomplete: false,
+            is_flexible,
+        }
+    }
+
+    pub fn incomplete_union(tag: Option<String>) -> Type {
+        Type::Union {
+            members: Vec::new(),
+            tag,
+            is_incomplete: true,
+            is_flexible: false,
+        }
+    }
+
+    pub fn complete_union(members: Vec<Member>, tag: Option<String>, is_flexible: bool) -> Type {
+        Type::Union {
+            members,
+            tag,
+            is_incomplete: false,
+            is_flexible,
+        }
+    }
 }

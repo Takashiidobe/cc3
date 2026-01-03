@@ -334,14 +334,7 @@ impl<'a> Parser<'a> {
 
         if !is_definition {
             // Function declaration - no body
-            self.new_function_decl(
-                name,
-                Type::Func {
-                    return_ty: Box::new(basety),
-                    is_variadic,
-                },
-                attr.is_static,
-            );
+            self.new_function_decl(name, Type::func(basety, is_variadic), attr.is_static);
             self.leave_scope();
             return Ok(());
         }
@@ -352,10 +345,7 @@ impl<'a> Parser<'a> {
         // Ensure the function is visible for recursive calls.
         self.new_function_decl(
             name.clone(),
-            Type::Func {
-                return_ty: Box::new(basety.clone()),
-                is_variadic,
-            },
+            Type::func(basety.clone(), is_variadic),
             attr.is_static,
         );
 
@@ -387,10 +377,7 @@ impl<'a> Parser<'a> {
 
         self.new_function_def(
             name,
-            Type::Func {
-                return_ty: Box::new(basety),
-                is_variadic,
-            },
+            Type::func(basety, is_variadic),
             params,
             body,
             locals,
@@ -909,18 +896,8 @@ impl<'a> Parser<'a> {
             }
 
             let ty = match kind {
-                RecordKind::Struct => Type::Struct {
-                    members: Vec::new(),
-                    tag: Some(name.clone()),
-                    is_incomplete: true,
-                    is_flexible: false,
-                },
-                RecordKind::Union => Type::Union {
-                    members: Vec::new(),
-                    tag: Some(name.clone()),
-                    is_incomplete: true,
-                    is_flexible: false,
-                },
+                RecordKind::Struct => Type::incomplete_struct(Some(name.clone())),
+                RecordKind::Union => Type::incomplete_union(Some(name.clone())),
             };
             self.push_tag_scope(name, ty.clone());
             return Ok(ty);
@@ -932,18 +909,8 @@ impl<'a> Parser<'a> {
             && self.find_tag_in_current_scope(name).is_none()
         {
             let ty = match kind {
-                RecordKind::Struct => Type::Struct {
-                    members: Vec::new(),
-                    tag: Some(name.clone()),
-                    is_incomplete: true,
-                    is_flexible: false,
-                },
-                RecordKind::Union => Type::Union {
-                    members: Vec::new(),
-                    tag: Some(name.clone()),
-                    is_incomplete: true,
-                    is_flexible: false,
-                },
+                RecordKind::Struct => Type::incomplete_struct(Some(name.clone())),
+                RecordKind::Union => Type::incomplete_union(Some(name.clone())),
             };
             self.push_tag_scope(name.clone(), ty);
         }
@@ -953,18 +920,8 @@ impl<'a> Parser<'a> {
         let (members, is_flexible) = self.parse_struct_members()?;
 
         let ty = match kind {
-            RecordKind::Struct => Type::Struct {
-                members,
-                tag: tag_name.clone(),
-                is_incomplete: false,
-                is_flexible,
-            },
-            RecordKind::Union => Type::Union {
-                members,
-                tag: tag_name.clone(),
-                is_incomplete: false,
-                is_flexible,
-            },
+            RecordKind::Struct => Type::complete_struct(members, tag_name.clone(), is_flexible),
+            RecordKind::Union => Type::complete_union(members, tag_name.clone(), is_flexible),
         };
 
         // Register the struct/union type if a tag was given.
@@ -1066,10 +1023,7 @@ impl<'a> Parser<'a> {
             && let Type::Array { base, len } = &last_member.ty
             && *len < 0
         {
-            last_member.ty = Type::Array {
-                base: base.clone(),
-                len: 0,
-            };
+            last_member.ty = Type::array(*base.clone(), 0);
             is_flexible = true;
         }
 
@@ -1098,10 +1052,7 @@ impl<'a> Parser<'a> {
         // Handle void parameter list: foo(void)
         if self.consume_keyword(Keyword::Void) && self.check_punct(Punct::RParen) {
             self.expect_punct(Punct::RParen)?;
-            return Ok(Type::Func {
-                return_ty: Box::new(return_ty),
-                is_variadic: false,
-            });
+            return Ok(Type::func(return_ty, false));
         }
 
         // For now, just skip to the closing paren and return a function type
@@ -1121,10 +1072,7 @@ impl<'a> Parser<'a> {
             self.pos += 1;
         }
 
-        Ok(Type::Func {
-            return_ty: Box::new(return_ty),
-            is_variadic,
-        })
+        Ok(Type::func(return_ty, is_variadic))
     }
 
     fn parse_array_dimensions(&mut self, ty: Type) -> CompileResult<Type> {
@@ -1142,10 +1090,7 @@ impl<'a> Parser<'a> {
         let ty = self.parse_type_suffix(ty)?;
 
         // Build array type with the result
-        Ok(Type::Array {
-            base: Box::new(ty),
-            len,
-        })
+        Ok(Type::array(ty, len))
     }
 
     fn parse_expr_stmt(&mut self) -> CompileResult<Stmt> {
@@ -2592,10 +2537,7 @@ impl<'a> Parser<'a> {
         if init.is_flexible
             && let Type::Array { base, .. } = &init.ty
         {
-            let new_ty = Type::Array {
-                base: base.clone(),
-                len: str_bytes.len() as i32,
-            };
+            let new_ty = Type::array(*base.clone(), str_bytes.len() as i32);
             *init = self.new_initializer(new_ty, false);
         }
 
@@ -2674,10 +2616,7 @@ impl<'a> Parser<'a> {
             self.pos = saved_pos;
 
             // Create a new initializer with the determined length
-            let new_ty = Type::Array {
-                base: base.clone(),
-                len: count as i32,
-            };
+            let new_ty = Type::array(*base.clone(), count as i32);
             *init = self.new_initializer(new_ty, false);
         }
 
@@ -2717,10 +2656,7 @@ impl<'a> Parser<'a> {
             let count = self.count_array_init_elements(base)?;
             self.pos = saved_pos;
 
-            let new_ty = Type::Array {
-                base: base.clone(),
-                len: count as i32,
-            };
+            let new_ty = Type::array(*base.clone(), count as i32);
             *init = self.new_initializer(new_ty, false);
         }
 
