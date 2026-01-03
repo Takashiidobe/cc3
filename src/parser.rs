@@ -195,6 +195,11 @@ impl<'a> Parser<'a> {
                 continue;
             }
 
+            // Ignore qualifiers and non-semantic specifiers.
+            if self.consume_type_qualifier() {
+                continue;
+            }
+
             // Handle _Alignas
             if self.consume_keyword(Keyword::Alignas) {
                 if let Some(attr) = attr.as_deref_mut() {
@@ -307,11 +312,26 @@ impl<'a> Parser<'a> {
                 | Keyword::Extern
                 | Keyword::Alignas
                 | Keyword::Signed
-                | Keyword::Unsigned,
+                | Keyword::Unsigned
+                | Keyword::Const
+                | Keyword::Volatile
+                | Keyword::Auto
+                | Keyword::Register
+                | Keyword::Restrict
+                | Keyword::Noreturn,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
         }
+    }
+
+    fn consume_type_qualifier(&mut self) -> bool {
+        self.consume_keyword(Keyword::Const)
+            || self.consume_keyword(Keyword::Volatile)
+            || self.consume_keyword(Keyword::Auto)
+            || self.consume_keyword(Keyword::Register)
+            || self.consume_keyword(Keyword::Restrict)
+            || self.consume_keyword(Keyword::Noreturn)
     }
 
     fn parse_function_with_basety(&mut self, basety: Type, attr: &VarAttr) -> CompileResult<()> {
@@ -767,9 +787,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_declarator(&mut self, mut ty: Type) -> CompileResult<(Type, Token)> {
-        while self.consume_punct(Punct::Star) {
-            ty = Type::Ptr(Box::new(ty));
-        }
+        ty = self.parse_pointers(ty);
 
         // Handle nested declarators: "(" declarator ")"
         if self.check_punct(Punct::LParen) {
@@ -807,9 +825,7 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_abstract_declarator(&mut self, mut ty: Type) -> CompileResult<Type> {
-        while self.consume_punct(Punct::Star) {
-            ty = Type::Ptr(Box::new(ty));
-        }
+        ty = self.parse_pointers(ty);
 
         if self.check_punct(Punct::LParen) {
             let start_pos = self.pos;
@@ -829,6 +845,17 @@ impl<'a> Parser<'a> {
         }
 
         self.parse_type_suffix(ty)
+    }
+
+    fn parse_pointers(&mut self, mut ty: Type) -> Type {
+        while self.consume_punct(Punct::Star) {
+            ty = Type::Ptr(Box::new(ty));
+            while self.consume_keyword(Keyword::Const)
+                || self.consume_keyword(Keyword::Volatile)
+                || self.consume_keyword(Keyword::Restrict)
+            {}
+        }
+        ty
     }
 
     fn parse_typename(&mut self) -> CompileResult<Type> {

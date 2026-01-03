@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "({ const x = 5; x; }) => 5\n({ const x = 8; int *const y=&x; *y; }) => 8\n({ const x = 6; *(const * const)&x; }) => 6\nOK\n"
+status: 0

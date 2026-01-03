@@ -32,6 +32,12 @@ pub enum Keyword {
     Default,
     Signed,
     Unsigned,
+    Const,
+    Volatile,
+    Auto,
+    Register,
+    Restrict,
+    Noreturn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -410,6 +416,14 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 "default" => TokenKind::Keyword(Keyword::Default),
                 "signed" => TokenKind::Keyword(Keyword::Signed),
                 "unsigned" => TokenKind::Keyword(Keyword::Unsigned),
+                "const" => TokenKind::Keyword(Keyword::Const),
+                "volatile" => TokenKind::Keyword(Keyword::Volatile),
+                "auto" => TokenKind::Keyword(Keyword::Auto),
+                "register" => TokenKind::Keyword(Keyword::Register),
+                "restrict" => TokenKind::Keyword(Keyword::Restrict),
+                "__restrict" => TokenKind::Keyword(Keyword::Restrict),
+                "__restrict__" => TokenKind::Keyword(Keyword::Restrict),
+                "_Noreturn" => TokenKind::Keyword(Keyword::Noreturn),
                 _ => TokenKind::Ident(word.to_string()),
             };
             tokens.push(Token { kind, location });
