@@ -351,6 +351,24 @@ impl Codegen {
                     self.emit_line(&format!("  call {}", name));
                     self.emit_line("  add $8, %rsp");
                 }
+
+                // It looks like the most significant 48 or 56 bits in RAX may
+                // contain garbage if a function return type is short or bool/char,
+                // respectively. We clear the upper bits here.
+                if let Some(ty) = &expr.ty {
+                    match ty {
+                        Type::Bool => {
+                            self.emit_line("  movzx %al, %eax");
+                        }
+                        Type::Char => {
+                            self.emit_line("  movsbl %al, %eax");
+                        }
+                        Type::Short => {
+                            self.emit_line("  movswl %ax, %eax");
+                        }
+                        _ => {}
+                    }
+                }
             }
             ExprKind::Addr(expr) => {
                 self.gen_lvalue(expr, function, globals);
