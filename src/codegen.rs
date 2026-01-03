@@ -119,13 +119,21 @@ impl Codegen {
 
         // Save arg registers if function is variadic
         if let Some(va_area_idx) = function.va_area {
-            let gp = function.params.len();
+            let mut gp = 0;
+            let mut fp = 0;
+            for param in &function.params {
+                if param.ty.is_flonum() {
+                    fp += 1;
+                } else {
+                    gp += 1;
+                }
+            }
             let va_area = &function.locals[va_area_idx];
             let off = va_area.offset;
 
             // va_elem
             self.emit_line(&format!("  movl ${}, {}(%rbp)", gp * 8, off));
-            self.emit_line(&format!("  movl $0, {}(%rbp)", off + 4));
+            self.emit_line(&format!("  movl ${}, {}(%rbp)", fp * 8 + 48, off + 4));
             self.emit_line(&format!("  movq %rbp, {}(%rbp)", off + 16));
             self.emit_line(&format!("  addq ${}, {}(%rbp)", off + 24, off + 16));
 
