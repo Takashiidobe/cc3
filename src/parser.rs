@@ -1755,14 +1755,14 @@ impl<'a> Parser<'a> {
                     self.expect_punct(Punct::LParen)?;
                     let ty = self.parse_typename()?;
                     self.expect_punct(Punct::RParen)?;
-                    return Ok(self.expr_at(ExprKind::Num(ty.size()), location));
+                    return Ok(self.new_ulong_expr(ty.size(), location));
                 }
 
                 self.pos += 1;
                 let mut expr = self.parse_unary()?;
                 self.add_type_expr(&mut expr)?;
                 let size = expr.ty.as_ref().map(|ty| ty.size()).unwrap_or(8);
-                Ok(self.expr_at(ExprKind::Num(size), location))
+                Ok(self.new_ulong_expr(size, location))
             }
             TokenKind::Keyword(Keyword::Alignof) => {
                 let location = token.location;
@@ -1775,14 +1775,14 @@ impl<'a> Parser<'a> {
                     self.expect_punct(Punct::LParen)?;
                     let ty = self.parse_typename()?;
                     self.expect_punct(Punct::RParen)?;
-                    return Ok(self.expr_at(ExprKind::Num(ty.align()), location));
+                    return Ok(self.new_ulong_expr(ty.align(), location));
                 }
 
                 // Otherwise, parse as _Alignof unary (GNU extension)
                 let mut expr = self.parse_unary()?;
                 self.add_type_expr(&mut expr)?;
                 let align = expr.ty.as_ref().map(|ty| ty.align()).unwrap_or(1);
-                Ok(self.expr_at(ExprKind::Num(align), location))
+                Ok(self.new_ulong_expr(align, location))
             }
             TokenKind::Ident(ref name) => {
                 if matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LParen)) {
@@ -2014,6 +2014,12 @@ impl<'a> Parser<'a> {
             location,
             ty: None,
         }
+    }
+
+    fn new_ulong_expr(&self, value: i64, location: SourceLocation) -> Expr {
+        let mut expr = self.expr_at(ExprKind::Num(value), location);
+        expr.ty = Some(Type::ULong);
+        expr
     }
 
     fn err_at(&self, location: SourceLocation, message: impl Into<String>) -> CompileError {
@@ -2541,7 +2547,7 @@ impl<'a> Parser<'a> {
                 },
                 location,
             );
-            sub_expr.ty = Some(Type::Int);
+            sub_expr.ty = Some(Type::Long);
             let mut expr = self.expr_at(
                 ExprKind::Binary {
                     op: BinaryOp::Div,
