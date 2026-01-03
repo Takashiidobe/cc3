@@ -143,6 +143,7 @@ impl<'a> Parser<'a> {
         const OTHER: i32 = 1 << 12;
         const FLOAT: i32 = 1 << 16;
         const DOUBLE: i32 = 1 << 18;
+        const LONG_DOUBLE: i32 = LONG + DOUBLE;
         const SIGNED: i32 = 1 << 13;
         const UNSIGNED: i32 = 1 << 14;
         const SIGNED_CHAR: i32 = SIGNED + CHAR;
@@ -287,7 +288,7 @@ impl<'a> Parser<'a> {
                     Type::ULong
                 }
                 FLOAT => Type::Float,
-                DOUBLE => Type::Double,
+                DOUBLE | LONG_DOUBLE => Type::Double,
                 _ => self.bail_at(location, "invalid type")?,
             };
         }
