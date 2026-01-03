@@ -58,7 +58,9 @@ bd sync               # Sync with git
    ```bash
    cargo test
    ```
-   - **If the test harness fails, fix them**
+   - **If the test harness returns a non-zero status, fix errors in the
+     compiler**
+   - **Never change the tests in test/*.c**
    - **Accept new snapshots**
    ```bash
    cargo insta accept
