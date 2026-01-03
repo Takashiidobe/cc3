@@ -5,6 +5,7 @@ const ARG_REGS_16: [&str; 6] = ["%di", "%si", "%dx", "%cx", "%r8w", "%r9w"];
 const ARG_REGS_32: [&str; 6] = ["%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"];
 const ARG_REGS_64: [&str; 6] = ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"];
 
+#[derive(Default)]
 pub struct Codegen {
     buffer: String,
     label_counter: usize,
@@ -15,13 +16,7 @@ pub struct Codegen {
 
 impl Codegen {
     pub fn new() -> Self {
-        Self {
-            buffer: String::new(),
-            label_counter: 0,
-            current_fn: None,
-            break_stack: Vec::new(),
-            continue_stack: Vec::new(),
-        }
+        Self::default()
     }
 
     pub fn generate(mut self, program: &Program) -> String {

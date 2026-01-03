@@ -2,5 +2,5 @@
 source: tests/codegen.rs
 expression: "&mine"
 ---
-stdout: "ext1 => 5\n*ext2 => 5\nOK\n"
+stdout: "ext1 => 5\n*ext2 => 5\next3 => 7\next_fn1(5) => 5\next_fn2(8) => 8\nOK\n"
 status: 0

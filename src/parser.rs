@@ -326,14 +326,8 @@ impl<'a> Parser<'a> {
         self.current_fn_return = Some(basety.clone());
 
         self.expect_punct(Punct::LBrace)?;
-        self.enter_scope();
 
-        let mut body = Vec::new();
-        while !self.check_punct(Punct::RBrace) {
-            body.push(self.parse_stmt()?);
-        }
-
-        self.expect_punct(Punct::RBrace)?;
+        let mut body = self.parse_block_items()?;
         self.leave_scope();
         self.current_fn_return = prev_return;
 
@@ -363,7 +357,6 @@ impl<'a> Parser<'a> {
             stack_size,
             attr.is_static,
         );
-        self.leave_scope();
         Ok(())
     }
 
@@ -2159,6 +2152,17 @@ impl<'a> Parser<'a> {
                     self.parse_typedef(basety)?;
                     continue;
                 }
+
+                if self.is_function()? {
+                    self.parse_function_with_basety(basety, &attr)?;
+                    continue;
+                }
+
+                if attr.is_extern {
+                    self.parse_global_variable(basety, &attr)?;
+                    continue;
+                }
+
                 stmts.push(self.parse_declaration(basety)?);
                 continue;
             }
