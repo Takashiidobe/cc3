@@ -38,7 +38,7 @@ pub enum Keyword {
 pub enum TokenKind {
     Keyword(Keyword),
     Ident(String),
-    Num(i64),
+    Num { value: i64, ty: Type },
     Str { bytes: Vec<u8>, ty: Type },
     Punct(Punct),
     Eof,
@@ -227,14 +227,14 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             let (base, prefix_len) = if i + 1 < bytes.len() && bytes[i] == b'0' {
                 if bytes[i + 1] == b'x' || bytes[i + 1] == b'X' {
                     // Hexadecimal: 0x or 0X
-                    if i + 2 < bytes.len() && bytes[i + 2].is_ascii_alphanumeric() {
+                    if i + 2 < bytes.len() && bytes[i + 2].is_ascii_hexdigit() {
                         (16, 2)
                     } else {
                         (10, 0) // Just "0x" without digits - parse as 0
                     }
                 } else if bytes[i + 1] == b'b' || bytes[i + 1] == b'B' {
                     // Binary: 0b or 0B
-                    if i + 2 < bytes.len() && bytes[i + 2].is_ascii_alphanumeric() {
+                    if i + 2 < bytes.len() && (bytes[i + 2] == b'0' || bytes[i + 2] == b'1') {
                         (2, 2)
                     } else {
                         (10, 0) // Just "0b" without digits - parse as 0
@@ -268,6 +268,47 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 }
             }
 
+            let num_str = &input[digits_start..i];
+            let value = u128::from_str_radix(num_str, base).map_err(|err| {
+                CompileError::at(format!("invalid number literal: {err}"), location)
+            })?;
+            let value = value.min(u64::MAX as u128) as u64;
+
+            // Read U, L or LL suffixes.
+            let mut has_long = false;
+            let mut has_unsigned = false;
+            let suffix = &input[i..];
+
+            if suffix.starts_with("LLU")
+                || suffix.starts_with("LLu")
+                || suffix.starts_with("llU")
+                || suffix.starts_with("llu")
+                || suffix.starts_with("ULL")
+                || suffix.starts_with("Ull")
+                || suffix.starts_with("uLL")
+                || suffix.starts_with("ull")
+            {
+                i += 3;
+                has_long = true;
+                has_unsigned = true;
+            } else if suffix.len() >= 2
+                && (suffix[..2].eq_ignore_ascii_case("lu")
+                    || suffix[..2].eq_ignore_ascii_case("ul"))
+            {
+                i += 2;
+                has_long = true;
+                has_unsigned = true;
+            } else if suffix.starts_with("LL") || suffix.starts_with("ll") {
+                i += 2;
+                has_long = true;
+            } else if suffix.starts_with('L') || suffix.starts_with('l') {
+                i += 1;
+                has_long = true;
+            } else if suffix.starts_with('U') || suffix.starts_with('u') {
+                i += 1;
+                has_unsigned = true;
+            }
+
             // Check for invalid trailing alphanumeric
             if i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
                 return Err(CompileError::at(
@@ -276,13 +317,51 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 ));
             }
 
-            let num_str = &input[digits_start..i];
-            let value = i64::from_str_radix(num_str, base).map_err(|err| {
-                CompileError::at(format!("invalid number literal: {err}"), location)
-            })?;
+            let ty = if base == 10 {
+                if has_long && has_unsigned {
+                    Type::ULong
+                } else if has_long {
+                    Type::Long
+                } else if has_unsigned {
+                    if (value >> 32) != 0 {
+                        Type::ULong
+                    } else {
+                        Type::UInt
+                    }
+                } else if (value >> 31) != 0 {
+                    Type::Long
+                } else {
+                    Type::Int
+                }
+            } else if has_long && has_unsigned {
+                Type::ULong
+            } else if has_long {
+                if (value >> 63) != 0 {
+                    Type::ULong
+                } else {
+                    Type::Long
+                }
+            } else if has_unsigned {
+                if (value >> 32) != 0 {
+                    Type::ULong
+                } else {
+                    Type::UInt
+                }
+            } else if (value >> 63) != 0 {
+                Type::ULong
+            } else if (value >> 32) != 0 {
+                Type::Long
+            } else if (value >> 31) != 0 {
+                Type::UInt
+            } else {
+                Type::Int
+            };
 
             tokens.push(Token {
-                kind: TokenKind::Num(value),
+                kind: TokenKind::Num {
+                    value: value as i64,
+                    ty,
+                },
                 location,
             });
             column += i - start;
@@ -405,7 +484,10 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             i += 1;
 
             tokens.push(Token {
-                kind: TokenKind::Num(value),
+                kind: TokenKind::Num {
+                    value,
+                    ty: Type::Int,
+                },
                 location,
             });
             column += i - start;

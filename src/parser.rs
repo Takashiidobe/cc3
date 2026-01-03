@@ -1822,9 +1822,11 @@ impl<'a> Parser<'a> {
                     token.location,
                 ))
             }
-            TokenKind::Num(value) => {
+            TokenKind::Num { value, ty } => {
                 self.pos += 1;
-                Ok(self.expr_at(ExprKind::Num(value), token.location))
+                let mut expr = self.expr_at(ExprKind::Num(value), token.location);
+                expr.ty = Some(ty);
+                Ok(expr)
             }
             _ => self.bail_expected("a primary expression"),
         }
@@ -2042,7 +2044,7 @@ impl<'a> Parser<'a> {
         match &token.kind {
             TokenKind::Keyword(kw) => format!("keyword '{kw:?}'"),
             TokenKind::Ident(name) => format!("identifier '{name}'"),
-            TokenKind::Num(value) => format!("number {value}"),
+            TokenKind::Num { value, .. } => format!("number {value}"),
             TokenKind::Str { .. } => "string literal".to_string(),
             TokenKind::Punct(punct) => format!("'{punct}'"),
             TokenKind::Eof => "end of file".to_string(),
@@ -3308,13 +3310,7 @@ impl<'a> Parser<'a> {
         let ty = match &mut expr.kind {
             ExprKind::Null => Type::Void,
             ExprKind::Memzero { .. } => Type::Void,
-            ExprKind::Num(value) => {
-                if i32::try_from(*value).is_ok() {
-                    Type::Int
-                } else {
-                    Type::Long
-                }
-            }
+            ExprKind::Num(_) => Type::Int,
             ExprKind::Var { idx, is_local } => {
                 let map = if *is_local {
                     &self.locals
