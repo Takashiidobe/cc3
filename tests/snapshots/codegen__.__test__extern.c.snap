@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "ext1 => 5\n*ext2 => 5\nOK\n"
+status: 0

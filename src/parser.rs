@@ -52,6 +52,7 @@ struct Scope {
 struct VarAttr {
     is_typedef: bool,
     is_static: bool,
+    is_extern: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,7 +121,7 @@ impl<'a> Parser<'a> {
             }
 
             // Global variable
-            self.parse_global_variable(basety)?;
+            self.parse_global_variable(basety, &attr)?;
         }
         Ok(Program {
             globals: mem::take(&mut self.globals),
@@ -151,19 +152,23 @@ impl<'a> Parser<'a> {
             let token = self.peek();
             let is_typedef_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Typedef));
             let is_static_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Static));
+            let is_extern_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Extern));
 
-            if is_typedef_kw || is_static_kw {
+            if is_typedef_kw || is_static_kw || is_extern_kw {
                 if let Some(attr) = attr.as_deref_mut() {
                     if is_typedef_kw {
                         self.consume_keyword(Keyword::Typedef);
                         attr.is_typedef = true;
-                    } else {
+                    } else if is_static_kw {
                         self.consume_keyword(Keyword::Static);
                         attr.is_static = true;
+                    } else {
+                        self.consume_keyword(Keyword::Extern);
+                        attr.is_extern = true;
                     }
 
-                    if attr.is_typedef && attr.is_static {
-                        return Err(self.error_here("typedef and static may not be used together"));
+                    if attr.is_typedef && (attr.is_static || attr.is_extern) {
+                        return Err(self.error_here("typedef may not be used together with static or extern"));
                     }
                 } else {
                     return Err(
@@ -250,7 +255,8 @@ impl<'a> Parser<'a> {
                 | Keyword::Union
                 | Keyword::Enum
                 | Keyword::Typedef
-                | Keyword::Static,
+                | Keyword::Static
+                | Keyword::Extern,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
@@ -381,7 +387,7 @@ impl<'a> Parser<'a> {
         Ok(false)
     }
 
-    fn parse_global_variable(&mut self, basety: Type) -> CompileResult<()> {
+    fn parse_global_variable(&mut self, basety: Type, attr: &VarAttr) -> CompileResult<()> {
         let mut first = true;
 
         while !self.check_punct(Punct::Semicolon) {
@@ -396,6 +402,7 @@ impl<'a> Parser<'a> {
                 _ => return Err(self.error_at(name_token.location, "variable name expected")),
             };
             let var_idx = self.new_gvar(name, ty);
+            self.globals[var_idx].is_definition = !attr.is_extern;
 
             // Check for initializer
             if self.consume_punct(Punct::Assign) {
@@ -1992,7 +1999,7 @@ impl<'a> Parser<'a> {
             is_local: false,
             offset: 0,
             is_function: false,
-            is_definition: false,
+            is_definition: true,
             is_static: false,
             init_data: None,
             relocations: Vec::new(),
