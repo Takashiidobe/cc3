@@ -3496,19 +3496,56 @@ impl<'a> Parser<'a> {
                 _ => {
                     let lval = self.eval(lhs)?;
                     let rval = self.eval(rhs)?;
+                    let expr_ty = expr.ty.as_ref().unwrap_or(&Type::Int);
+                    let lhs_is_unsigned = lhs
+                        .ty
+                        .as_ref()
+                        .is_some_and(|ty| ty.is_unsigned() || matches!(ty, Type::Ptr(_)));
                     match op {
                         BinaryOp::Mul => Ok(lval * rval),
-                        BinaryOp::Div => Ok(lval / rval),
-                        BinaryOp::Mod => Ok(lval % rval),
+                        BinaryOp::Div => {
+                            if expr_ty.is_unsigned() {
+                                Ok(((lval as u64) / (rval as u64)) as i64)
+                            } else {
+                                Ok(lval / rval)
+                            }
+                        }
+                        BinaryOp::Mod => {
+                            if expr_ty.is_unsigned() {
+                                Ok(((lval as u64) % (rval as u64)) as i64)
+                            } else {
+                                Ok(lval % rval)
+                            }
+                        }
                         BinaryOp::BitAnd => Ok(lval & rval),
                         BinaryOp::BitOr => Ok(lval | rval),
                         BinaryOp::BitXor => Ok(lval ^ rval),
                         BinaryOp::Shl => Ok(lval << rval),
-                        BinaryOp::Shr => Ok(lval >> rval),
+                        BinaryOp::Shr => {
+                            if expr_ty.is_unsigned() && expr_ty.size() == 8 {
+                                Ok(((lval as u64) >> (rval as u64)) as i64)
+                            } else {
+                                Ok(lval >> rval)
+                            }
+                        }
                         BinaryOp::Eq => Ok(if lval == rval { 1 } else { 0 }),
                         BinaryOp::Ne => Ok(if lval != rval { 1 } else { 0 }),
-                        BinaryOp::Lt => Ok(if lval < rval { 1 } else { 0 }),
-                        BinaryOp::Le => Ok(if lval <= rval { 1 } else { 0 }),
+                        BinaryOp::Lt => {
+                            let result = if lhs_is_unsigned {
+                                (lval as u64) < (rval as u64)
+                            } else {
+                                lval < rval
+                            };
+                            Ok(if result { 1 } else { 0 })
+                        }
+                        BinaryOp::Le => {
+                            let result = if lhs_is_unsigned {
+                                (lval as u64) <= (rval as u64)
+                            } else {
+                                lval <= rval
+                            };
+                            Ok(if result { 1 } else { 0 })
+                        }
                         BinaryOp::LogAnd => Ok(if lval != 0 && rval != 0 { 1 } else { 0 }),
                         BinaryOp::LogOr => Ok(if lval != 0 || rval != 0 { 1 } else { 0 }),
                         _ => unreachable!(),
@@ -3528,9 +3565,21 @@ impl<'a> Parser<'a> {
                 let val = self.eval2(expr, label)?;
                 if ty.is_integer() {
                     match ty.size() {
-                        1 => Ok(val as u8 as i64),
-                        2 => Ok(val as u16 as i64),
-                        4 => Ok(val as u32 as i64),
+                        1 => Ok(if ty.is_unsigned() {
+                            val as u8 as i64
+                        } else {
+                            val as i8 as i64
+                        }),
+                        2 => Ok(if ty.is_unsigned() {
+                            val as u16 as i64
+                        } else {
+                            val as i16 as i64
+                        }),
+                        4 => Ok(if ty.is_unsigned() {
+                            val as u32 as i64
+                        } else {
+                            val as i32 as i64
+                        }),
                         _ => Ok(val),
                     }
                 } else {
