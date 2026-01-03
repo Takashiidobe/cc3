@@ -95,6 +95,14 @@ impl Codegen {
         }
     }
 
+    fn store_fp(&mut self, r: usize, offset: i32, sz: i64) {
+        match sz {
+            4 => self.emit_line(&format!("  movss %xmm{}, {}(%rbp)", r, offset)),
+            8 => self.emit_line(&format!("  movsd %xmm{}, {}(%rbp)", r, offset)),
+            _ => unreachable!(),
+        }
+    }
+
     fn generate_function(&mut self, function: &Obj, globals: &[Obj]) {
         self.current_fn = Some(function.name.clone());
 
@@ -139,8 +147,16 @@ impl Codegen {
         }
 
         // Save passed-by-register arguments to the stack
-        for (i, param) in function.params.iter().enumerate() {
-            self.store_gp(i, param.offset, param.ty.size());
+        let mut gp = 0;
+        let mut fp = 0;
+        for param in &function.params {
+            if param.ty.is_flonum() {
+                self.store_fp(fp, param.offset, param.ty.size());
+                fp += 1;
+            } else {
+                self.store_gp(gp, param.offset, param.ty.size());
+                gp += 1;
+            }
         }
 
         let mut last_was_return = false;

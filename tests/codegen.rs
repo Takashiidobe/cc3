@@ -7,13 +7,23 @@ use std::{
     process::{Command as StdCommand, Output, Stdio},
 };
 
+fn cc_command() -> StdCommand {
+    if cfg!(target_arch = "x86_64") {
+        StdCommand::new("clang")
+    } else {
+        let mut cmd = StdCommand::new("zig");
+        cmd.arg("cc").arg("--target=x86_64-linux-musl").arg("-static");
+        cmd
+    }
+}
+
 fn compile(
     src: &Path,
     exe: &Path,
     extra_objs: &[&Path],
     extra_args: &[String],
 ) -> io::Result<Output> {
-    let mut cmd = StdCommand::new("clang");
+    let mut cmd = cc_command();
     cmd.arg("-o").arg(exe).arg(src);
     for arg in extra_args {
         cmd.arg(arg);
@@ -25,8 +35,30 @@ fn compile(
 }
 
 fn run_exe(exe: &Path) -> io::Result<Output> {
-    StdCommand::new(exe)
-        .stdout(Stdio::piped())
+    let mut cmd = if cfg!(target_arch = "x86_64") {
+        StdCommand::new(exe)
+    } else {
+        let qemu = std::env::var("CC3_QEMU_X86_64")
+            .or_else(|_| std::env::var("QEMU_X86_64"))
+            .unwrap_or_else(|_| "qemu-x86_64".to_string());
+        let mut cmd = StdCommand::new(qemu);
+        let prefix = std::env::var("CC3_QEMU_LD_PREFIX")
+            .or_else(|_| std::env::var("QEMU_LD_PREFIX"))
+            .ok()
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                let candidate = Path::new(env!("CARGO_MANIFEST_DIR")).join("qemu-rootfs");
+                candidate
+                    .is_dir()
+                    .then_some(candidate.to_string_lossy().into_owned())
+            });
+        if let Some(prefix) = prefix {
+            cmd.arg("-L").arg(prefix);
+        }
+        cmd.arg(exe);
+        cmd
+    };
+    cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
 }
@@ -81,7 +113,7 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     ensure_success("preprocess", path, &preprocess_out);
     std::fs::write(&preprocessed_path, &preprocess_out.stdout)?;
 
-    let common_out = StdCommand::new("clang")
+    let common_out = cc_command()
         .arg("-c")
         .arg("-o")
         .arg(&common_obj)
