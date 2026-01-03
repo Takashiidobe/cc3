@@ -2030,16 +2030,7 @@ impl<'a> Parser<'a> {
             ty,
             is_local: true,
             align,
-            offset: 0,
-            is_function: false,
-            is_definition: false,
-            is_static: false,
-            init_data: None,
-            relocations: Vec::new(),
-            params: Vec::new(),
-            body: Vec::new(),
-            locals: Vec::new(),
-            stack_size: 0,
+            ..Default::default()
         });
         self.push_scope_var(idx, true);
         idx
@@ -2051,18 +2042,9 @@ impl<'a> Parser<'a> {
         self.globals.push(Obj {
             name,
             ty,
-            is_local: false,
             align,
-            offset: 0,
-            is_function: false,
             is_definition: true,
-            is_static: false,
-            init_data: None,
-            relocations: Vec::new(),
-            params: Vec::new(),
-            body: Vec::new(),
-            locals: Vec::new(),
-            stack_size: 0,
+            ..Default::default()
         });
         self.push_scope_var(idx, false);
         idx
@@ -2072,18 +2054,9 @@ impl<'a> Parser<'a> {
         self.globals.push(Obj {
             name,
             ty,
-            is_local: false,
-            align: 0,
-            offset: 0,
             is_function: true,
-            is_definition: false,
             is_static,
-            init_data: None,
-            relocations: Vec::new(),
-            params: vec![],
-            body: vec![],
-            locals: vec![],
-            stack_size: 0,
+            ..Default::default()
         });
     }
 
@@ -2101,18 +2074,14 @@ impl<'a> Parser<'a> {
         self.globals.push(Obj {
             name,
             ty,
-            is_local: false,
-            align: 0,
-            offset: 0,
             is_function: true,
             is_definition: true,
             is_static,
-            init_data: None,
-            relocations: Vec::new(),
             params,
             body,
             locals,
             stack_size,
+            ..Default::default()
         });
     }
 

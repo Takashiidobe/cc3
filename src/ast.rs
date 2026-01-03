@@ -61,15 +61,16 @@ pub enum StmtKind {
     Decl(usize),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Expr {
     pub kind: ExprKind,
     pub location: SourceLocation,
     pub ty: Option<Type>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub enum ExprKind {
+    #[default]
     Null,
     Num(i64),
     /// Zero-clear a stack variable (for initializers)
@@ -150,14 +151,14 @@ pub enum BinaryOp {
 /// Global variable can be initialized either by a constant expression
 /// or a pointer to another global variable. This struct represents the
 /// latter.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Relocation {
     pub offset: usize,
     pub label: String,
     pub addend: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct Obj {
     pub name: String,
     pub ty: Type,
@@ -189,8 +190,9 @@ pub struct SwitchCase {
     pub label: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub enum Type {
+    #[default]
     Void,
     Bool,
     Char,
