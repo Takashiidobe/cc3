@@ -141,6 +141,15 @@ impl<'a> Parser<'a> {
         const LONG_LONG: i32 = LONG + LONG;
         const LONG_LONG_INT: i32 = LONG + LONG + INT;
         const OTHER: i32 = 1 << 12;
+        const SIGNED: i32 = 1 << 13;
+        const SIGNED_CHAR: i32 = SIGNED + CHAR;
+        const SIGNED_SHORT: i32 = SIGNED + SHORT;
+        const SIGNED_SHORT_INT: i32 = SIGNED + SHORT_INT;
+        const SIGNED_INT: i32 = SIGNED + INT;
+        const SIGNED_LONG: i32 = SIGNED + LONG;
+        const SIGNED_LONG_INT: i32 = SIGNED + LONG_INT;
+        const SIGNED_LONG_LONG: i32 = SIGNED + LONG_LONG;
+        const SIGNED_LONG_LONG_INT: i32 = SIGNED + LONG_LONG_INT;
 
         let mut ty = Type::Int;
         let mut counter = 0i32;
@@ -235,6 +244,8 @@ impl<'a> Parser<'a> {
                 counter += INT;
             } else if self.consume_keyword(Keyword::Long) {
                 counter += LONG;
+            } else if self.consume_keyword(Keyword::Signed) {
+                counter |= SIGNED;
             } else {
                 self.bail_at(location, "invalid type")?;
             }
@@ -242,10 +253,11 @@ impl<'a> Parser<'a> {
             ty = match counter {
                 VOID => Type::Void,
                 BOOL => Type::Bool,
-                CHAR => Type::Char,
-                SHORT | SHORT_INT => Type::Short,
-                INT => Type::Int,
-                LONG | LONG_INT | LONG_LONG | LONG_LONG_INT => Type::Long,
+                CHAR | SIGNED_CHAR => Type::Char,
+                SHORT | SHORT_INT | SIGNED_SHORT | SIGNED_SHORT_INT => Type::Short,
+                INT | SIGNED | SIGNED_INT => Type::Int,
+                LONG | LONG_INT | LONG_LONG | LONG_LONG_INT | SIGNED_LONG | SIGNED_LONG_INT
+                | SIGNED_LONG_LONG | SIGNED_LONG_LONG_INT => Type::Long,
                 _ => self.bail_at(location, "invalid type")?,
             };
         }
@@ -276,7 +288,8 @@ impl<'a> Parser<'a> {
                 | Keyword::Typedef
                 | Keyword::Static
                 | Keyword::Extern
-                | Keyword::Alignas,
+                | Keyword::Alignas
+                | Keyword::Signed,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
