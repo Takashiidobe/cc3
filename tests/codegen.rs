@@ -12,7 +12,9 @@ fn cc_command() -> StdCommand {
         StdCommand::new("clang")
     } else {
         let mut cmd = StdCommand::new("zig");
-        cmd.arg("cc").arg("--target=x86_64-linux-musl").arg("-static");
+        cmd.arg("cc")
+            .arg("--target=x86_64-linux-musl")
+            .arg("-static");
         cmd
     }
 }
@@ -58,9 +60,7 @@ fn run_exe(exe: &Path) -> io::Result<Output> {
         cmd.arg(exe);
         cmd
     };
-    cmd.stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).output()
 }
 
 fn preprocess(src: &Path) -> io::Result<Output> {

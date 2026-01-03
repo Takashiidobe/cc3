@@ -2509,6 +2509,9 @@ impl<'a> Parser<'a> {
                             .bail_at(arg.location, "passing struct or union is not supported");
                     }
                     arg = self.cast_expr(arg, param_ty.clone());
+                } else if matches!(arg.ty.as_ref(), Some(Type::Float)) {
+                    // Default argument promotion: float -> double for omitted parameter types.
+                    arg = self.cast_expr(arg, Type::Double);
                 }
                 args.push(arg);
                 if args.len() > 6 {
