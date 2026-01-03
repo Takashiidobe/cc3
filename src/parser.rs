@@ -1019,13 +1019,10 @@ impl<'a> Parser<'a> {
         while depth > 0 && self.pos < self.tokens.len() {
             if self.check_punct(Punct::LParen) {
                 depth += 1;
-                self.pos += 1;
             } else if self.check_punct(Punct::RParen) {
                 depth -= 1;
-                self.pos += 1;
-            } else {
-                self.pos += 1;
             }
+            self.pos += 1;
         }
 
         Ok(Type::Func(Box::new(return_ty)))
