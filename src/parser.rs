@@ -602,6 +602,25 @@ impl<'a> Parser<'a> {
             }));
         }
 
+        if self.consume_keyword(Keyword::Do) {
+            self.break_depth += 1;
+            self.loop_depth += 1;
+            let body = self.parse_stmt()?;
+            self.loop_depth -= 1;
+            self.break_depth -= 1;
+            if !self.consume_keyword(Keyword::While) {
+                self.bail_here("expected 'while'")?;
+            }
+            self.expect_punct(Punct::LParen)?;
+            let cond = self.parse_expr()?;
+            self.expect_punct(Punct::RParen)?;
+            self.expect_punct(Punct::Semicolon)?;
+            return Ok(self.stmt_last(StmtKind::DoWhile {
+                body: Box::new(body),
+                cond,
+            }));
+        }
+
         if self.consume_keyword(Keyword::Break) {
             if self.break_depth == 0 {
                 self.bail_here("stray break")?;
@@ -3208,6 +3227,10 @@ impl<'a> Parser<'a> {
                     self.add_type_expr(inc)?;
                 }
                 self.add_type_stmt(body)?;
+            }
+            StmtKind::DoWhile { body, cond } => {
+                self.add_type_stmt(body)?;
+                self.add_type_expr(cond)?;
             }
             StmtKind::Switch { cond, body, .. } => {
                 self.add_type_expr(cond)?;

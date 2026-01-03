@@ -36,6 +36,10 @@ pub enum StmtKind {
         inc: Option<Expr>,
         body: Box<Stmt>,
     },
+    DoWhile {
+        body: Box<Stmt>,
+        cond: Expr,
+    },
     Switch {
         cond: Expr,
         body: Box<Stmt>,

@@ -197,6 +197,22 @@ impl Codegen {
                 self.break_stack.pop();
                 self.continue_stack.pop();
             }
+            StmtKind::DoWhile { body, cond } => {
+                let label = self.next_label();
+                let continue_label = format!(".L.cont.{}", label);
+                let break_label = format!(".L.end.{}", label);
+                self.break_stack.push(break_label.clone());
+                self.continue_stack.push(continue_label.clone());
+                self.emit_line(&format!(".L.begin.{}:", label));
+                self.gen_stmt(body, function, globals);
+                self.emit_line(&format!("{}:", continue_label));
+                self.gen_expr(cond, function, globals);
+                self.emit_line("  cmp $0, %rax");
+                self.emit_line(&format!("  jne .L.begin.{}", label));
+                self.emit_line(&format!("{}:", break_label));
+                self.break_stack.pop();
+                self.continue_stack.pop();
+            }
             StmtKind::Switch {
                 cond,
                 body,
