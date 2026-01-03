@@ -205,7 +205,8 @@ impl Codegen {
             StmtKind::If { cond, then, els } => {
                 let label = self.next_label();
                 self.gen_expr(cond, function, globals);
-                self.emit_line("  cmp $0, %rax");
+                let cond_ty = cond.ty.as_ref().unwrap_or(&Type::Int);
+                self.cmp_zero(cond_ty);
                 if let Some(els) = els {
                     self.emit_line(&format!("  je .L.else.{}", label));
                     self.gen_stmt(then, function, globals);
@@ -236,7 +237,8 @@ impl Codegen {
                 self.emit_line(&format!(".L.begin.{}:", label));
                 if let Some(cond) = cond {
                     self.gen_expr(cond, function, globals);
-                    self.emit_line("  cmp $0, %rax");
+                    let cond_ty = cond.ty.as_ref().unwrap_or(&Type::Int);
+                    self.cmp_zero(cond_ty);
                     self.emit_line(&format!("  je {}", break_label));
                 }
                 self.gen_stmt(body, function, globals);
@@ -259,7 +261,8 @@ impl Codegen {
                 self.gen_stmt(body, function, globals);
                 self.emit_line(&format!("{}:", continue_label));
                 self.gen_expr(cond, function, globals);
-                self.emit_line("  cmp $0, %rax");
+                let cond_ty = cond.ty.as_ref().unwrap_or(&Type::Int);
+                self.cmp_zero(cond_ty);
                 self.emit_line(&format!("  jne .L.begin.{}", label));
                 self.emit_line(&format!("{}:", break_label));
                 self.break_stack.pop();
@@ -396,7 +399,8 @@ impl Codegen {
                         }
                     }
                     UnaryOp::Not => {
-                        self.emit_line("  cmp $0, %rax");
+                        let ty = expr.ty.as_ref().unwrap_or(&Type::Int);
+                        self.cmp_zero(ty);
                         self.emit_line("  sete %al");
                         self.emit_line("  movzx %al, %rax");
                     }
@@ -483,7 +487,8 @@ impl Codegen {
             ExprKind::Cond { cond, then, els } => {
                 let label = self.next_label();
                 self.gen_expr(cond, function, globals);
-                self.emit_line("  cmp $0, %rax");
+                let cond_ty = cond.ty.as_ref().unwrap_or(&Type::Int);
+                self.cmp_zero(cond_ty);
                 self.emit_line(&format!("  je .L.else.{}", label));
                 self.gen_expr(then, function, globals);
                 self.emit_line(&format!("  jmp .L.end.{}", label));
@@ -502,10 +507,12 @@ impl Codegen {
                     if matches!(op, BinaryOp::LogAnd) {
                         // Logical AND: false if either operand is false
                         self.gen_expr(lhs, function, globals);
-                        self.emit_line("  cmp $0, %rax");
+                        let lhs_ty = lhs.ty.as_ref().unwrap_or(&Type::Int);
+                        self.cmp_zero(lhs_ty);
                         self.emit_line(&format!("  je .L.false.{}", c));
                         self.gen_expr(rhs, function, globals);
-                        self.emit_line("  cmp $0, %rax");
+                        let rhs_ty = rhs.ty.as_ref().unwrap_or(&Type::Int);
+                        self.cmp_zero(rhs_ty);
                         self.emit_line(&format!("  je .L.false.{}", c));
                         self.emit_line("  mov $1, %rax");
                         self.emit_line(&format!("  jmp .L.end.{}", c));
@@ -515,10 +522,12 @@ impl Codegen {
                     } else {
                         // Logical OR: true if either operand is true
                         self.gen_expr(lhs, function, globals);
-                        self.emit_line("  cmp $0, %rax");
+                        let lhs_ty = lhs.ty.as_ref().unwrap_or(&Type::Int);
+                        self.cmp_zero(lhs_ty);
                         self.emit_line(&format!("  jne .L.true.{}", c));
                         self.gen_expr(rhs, function, globals);
-                        self.emit_line("  cmp $0, %rax");
+                        let rhs_ty = rhs.ty.as_ref().unwrap_or(&Type::Int);
+                        self.cmp_zero(rhs_ty);
                         self.emit_line(&format!("  jne .L.true.{}", c));
                         self.emit_line("  mov $0, %rax");
                         self.emit_line(&format!("  jmp .L.end.{}", c));
@@ -798,6 +807,20 @@ impl Codegen {
     }
 
     fn cmp_zero(&mut self, ty: &Type) {
+        match ty {
+            Type::Float => {
+                self.emit_line("  xorps %xmm1, %xmm1");
+                self.emit_line("  ucomiss %xmm1, %xmm0");
+                return;
+            }
+            Type::Double => {
+                self.emit_line("  xorpd %xmm1, %xmm1");
+                self.emit_line("  ucomisd %xmm1, %xmm0");
+                return;
+            }
+            _ => {}
+        }
+
         if ty.is_integer() && ty.size() <= 4 {
             self.emit_line("  cmp $0, %eax");
         } else {
