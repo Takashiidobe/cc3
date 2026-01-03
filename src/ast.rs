@@ -201,9 +201,13 @@ pub enum Type {
     Void,
     Bool,
     Char,
+    UChar,
     Short,
+    UShort,
     Int,
+    UInt,
     Long,
+    ULong,
     Enum,
     Ptr(Box<Type>),
     Func {
@@ -233,7 +237,16 @@ impl Type {
     pub fn is_integer(&self) -> bool {
         matches!(
             self,
-            Type::Bool | Type::Char | Type::Short | Type::Int | Type::Long | Type::Enum
+            Type::Bool
+                | Type::Char
+                | Type::UChar
+                | Type::Short
+                | Type::UShort
+                | Type::Int
+                | Type::UInt
+                | Type::Long
+                | Type::ULong
+                | Type::Enum
         )
     }
 
@@ -254,9 +267,13 @@ impl Type {
             Type::Void => 1,
             Type::Bool => 1,
             Type::Char => 1,
+            Type::UChar => 1,
             Type::Short => 2,
+            Type::UShort => 2,
             Type::Int => 4,
+            Type::UInt => 4,
             Type::Long => 8,
+            Type::ULong => 8,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func { .. } => 8,
@@ -311,9 +328,13 @@ impl Type {
             Type::Void => 1,
             Type::Bool => 1,
             Type::Char => 1,
+            Type::UChar => 1,
             Type::Short => 2,
+            Type::UShort => 2,
             Type::Int => 4,
+            Type::UInt => 4,
             Type::Long => 8,
+            Type::ULong => 8,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func { .. } => 8,
@@ -354,6 +375,10 @@ impl Type {
             base: Box::new(base),
             len,
         }
+    }
+
+    pub fn is_unsigned(&self) -> bool {
+        matches!(self, Type::UChar | Type::UShort | Type::UInt | Type::ULong)
     }
 
     pub fn incomplete_struct(tag: Option<String>) -> Type {

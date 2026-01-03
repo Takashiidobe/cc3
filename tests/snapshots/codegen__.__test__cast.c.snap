@@ -2,5 +2,5 @@
 source: tests/codegen.rs
 expression: "&mine"
 ---
-stdout: "(int)8590066177 => 131585\n(short)8590066177 => 513\n(char)8590066177 => 1\n(long)1 => 1\n(long)&*(int *)0 => 0\n({ int x=512; *(char *)&x=1; x; }) => 513\n({ int x=5; long y=(long)&x; *(int*)y; }) => 5\nOK\n"
+stdout: "(int)8590066177 => 131585\n(short)8590066177 => 513\n(char)8590066177 => 1\n(long)1 => 1\n(long)&*(int *)0 => 0\n({ int x=512; *(char *)&x=1; x; }) => 513\n({ int x=5; long y=(long)&x; *(int*)y; }) => 5\n(char)255 => -1\n(signed char)255 => -1\n(unsigned char)255 => 255\n(short)65535 => -1\n(unsigned short)65535 => 65535\n(int)0xffffffff => -1\n(unsigned)0xffffffff => -1\n-1<1 => 1\n-1<(unsigned)1 => 0\n(char)127+(char)127 => 254\n(short)32767+(short)32767 => 65534\n-1>>1 => -1\n(unsigned long)-1 => -1\n((unsigned)-1)>>1 => 2147483647\n(-100)/2 => -50\n((unsigned)-100)/2 => 2147483598\n((unsigned long)-100)/2 => -50\n((long)-1)/(unsigned)100 => 0\n(-100)%7 => -2\n((unsigned)-100)%7 => 2\n((unsigned long)-100)%9 => 6\n(int)(unsigned short)65535 => 65535\n({ unsigned short x = 65535; x; }) => 65535\n({ unsigned short x = 65535; (int)x; }) => 65535\n({ typedef short T; T x = 65535; (int)x; }) => -1\n({ typedef unsigned short T; T x = 65535; (int)x; }) => 65535\nOK\n"
 status: 0

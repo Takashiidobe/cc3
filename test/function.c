@@ -56,6 +56,12 @@ _Bool false_fn();
 char char_fn();
 short short_fn();
 
+unsigned char uchar_fn();
+unsigned short ushort_fn();
+
+char schar_fn();
+short sshort_fn();
+
 typedef struct {
   int gp_offset;
   int fp_offset;
@@ -124,6 +130,11 @@ int main() {
   ASSERT(0, false_fn());
   ASSERT(3, char_fn());
   ASSERT(5, short_fn());
+
+  ASSERT(251, uchar_fn());
+  ASSERT(65528, ushort_fn());
+  ASSERT(-5, schar_fn());
+  ASSERT(-8, sshort_fn());
 
   ASSERT(6, add_all(3,1,2,3));
   ASSERT(5, add_all(4,1,2,3,-1));

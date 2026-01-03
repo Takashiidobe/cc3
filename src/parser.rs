@@ -142,6 +142,7 @@ impl<'a> Parser<'a> {
         const LONG_LONG_INT: i32 = LONG + LONG + INT;
         const OTHER: i32 = 1 << 12;
         const SIGNED: i32 = 1 << 13;
+        const UNSIGNED: i32 = 1 << 14;
         const SIGNED_CHAR: i32 = SIGNED + CHAR;
         const SIGNED_SHORT: i32 = SIGNED + SHORT;
         const SIGNED_SHORT_INT: i32 = SIGNED + SHORT_INT;
@@ -150,6 +151,14 @@ impl<'a> Parser<'a> {
         const SIGNED_LONG_INT: i32 = SIGNED + LONG_INT;
         const SIGNED_LONG_LONG: i32 = SIGNED + LONG_LONG;
         const SIGNED_LONG_LONG_INT: i32 = SIGNED + LONG_LONG_INT;
+        const UNSIGNED_CHAR: i32 = UNSIGNED + CHAR;
+        const UNSIGNED_SHORT: i32 = UNSIGNED + SHORT;
+        const UNSIGNED_SHORT_INT: i32 = UNSIGNED + SHORT_INT;
+        const UNSIGNED_INT: i32 = UNSIGNED + INT;
+        const UNSIGNED_LONG: i32 = UNSIGNED + LONG;
+        const UNSIGNED_LONG_INT: i32 = UNSIGNED + LONG_INT;
+        const UNSIGNED_LONG_LONG: i32 = UNSIGNED + LONG_LONG;
+        const UNSIGNED_LONG_LONG_INT: i32 = UNSIGNED + LONG_LONG_INT;
 
         let mut ty = Type::Int;
         let mut counter = 0i32;
@@ -246,6 +255,8 @@ impl<'a> Parser<'a> {
                 counter += LONG;
             } else if self.consume_keyword(Keyword::Signed) {
                 counter |= SIGNED;
+            } else if self.consume_keyword(Keyword::Unsigned) {
+                counter |= UNSIGNED;
             } else {
                 self.bail_at(location, "invalid type")?;
             }
@@ -254,10 +265,16 @@ impl<'a> Parser<'a> {
                 VOID => Type::Void,
                 BOOL => Type::Bool,
                 CHAR | SIGNED_CHAR => Type::Char,
+                UNSIGNED_CHAR => Type::UChar,
                 SHORT | SHORT_INT | SIGNED_SHORT | SIGNED_SHORT_INT => Type::Short,
+                UNSIGNED_SHORT | UNSIGNED_SHORT_INT => Type::UShort,
                 INT | SIGNED | SIGNED_INT => Type::Int,
+                UNSIGNED | UNSIGNED_INT => Type::UInt,
                 LONG | LONG_INT | LONG_LONG | LONG_LONG_INT | SIGNED_LONG | SIGNED_LONG_INT
                 | SIGNED_LONG_LONG | SIGNED_LONG_LONG_INT => Type::Long,
+                UNSIGNED_LONG | UNSIGNED_LONG_INT | UNSIGNED_LONG_LONG | UNSIGNED_LONG_LONG_INT => {
+                    Type::ULong
+                }
                 _ => self.bail_at(location, "invalid type")?,
             };
         }
@@ -289,7 +306,8 @@ impl<'a> Parser<'a> {
                 | Keyword::Static
                 | Keyword::Extern
                 | Keyword::Alignas
-                | Keyword::Signed,
+                | Keyword::Signed
+                | Keyword::Unsigned,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
@@ -1833,11 +1851,21 @@ impl<'a> Parser<'a> {
         if let Some(base) = ty1.base() {
             return Type::Ptr(Box::new(base.clone()));
         }
-        if ty1.size() == 8 || ty2.size() == 8 {
-            Type::Long
-        } else {
-            Type::Int
+        let mut ty1 = ty1.clone();
+        let mut ty2 = ty2.clone();
+
+        if ty1.size() < 4 {
+            ty1 = Type::Int;
         }
+        if ty2.size() < 4 {
+            ty2 = Type::Int;
+        }
+
+        if ty1.size() != ty2.size() {
+            return if ty1.size() < ty2.size() { ty2 } else { ty1 };
+        }
+
+        if ty2.is_unsigned() { ty2 } else { ty1 }
     }
 
     fn dummy_expr(&self, location: SourceLocation) -> Expr {
@@ -1882,17 +1910,6 @@ impl<'a> Parser<'a> {
             true
         } else {
             false
-        }
-    }
-
-    fn expect_ident(&mut self) -> CompileResult<String> {
-        let token = self.peek().clone();
-        match token.kind {
-            TokenKind::Ident(name) => {
-                self.pos += 1;
-                Ok(name)
-            }
-            _ => self.bail_expected("identifier"),
         }
     }
 

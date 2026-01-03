@@ -392,8 +392,14 @@ impl Codegen {
                         Type::Char => {
                             self.emit_line("  movsbl %al, %eax");
                         }
+                        Type::UChar => {
+                            self.emit_line("  movzbl %al, %eax");
+                        }
                         Type::Short => {
                             self.emit_line("  movswl %ax, %eax");
+                        }
+                        Type::UShort => {
+                            self.emit_line("  movzwl %ax, %eax");
                         }
                         _ => {}
                     }
@@ -481,12 +487,21 @@ impl Codegen {
                 self.pop("%rdi");
                 let lhs_ty = lhs.ty.as_ref().unwrap_or(&Type::Int);
                 let rhs_ty = rhs.ty.as_ref().unwrap_or(&Type::Int);
-                let use_64 = matches!(lhs_ty, Type::Long | Type::Ptr(_) | Type::Array { .. })
-                    || matches!(rhs_ty, Type::Long | Type::Ptr(_) | Type::Array { .. });
+                let use_64 = matches!(
+                    lhs_ty,
+                    Type::Long | Type::ULong | Type::Ptr(_) | Type::Array { .. }
+                ) || matches!(
+                    rhs_ty,
+                    Type::Long | Type::ULong | Type::Ptr(_) | Type::Array { .. }
+                );
                 let ax = if use_64 { "%rax" } else { "%eax" };
                 let di = if use_64 { "%rdi" } else { "%edi" };
                 if use_64 && rhs_ty.size() < 8 {
-                    self.emit_line("  movslq %edi, %rdi");
+                    if rhs_ty.is_unsigned() {
+                        self.emit_line("  mov %edi, %edi");
+                    } else {
+                        self.emit_line("  movslq %edi, %rdi");
+                    }
                 }
                 match op {
                     BinaryOp::Add => {
@@ -499,12 +514,18 @@ impl Codegen {
                         self.emit_line(&format!("  imul {}, {}", di, ax));
                     }
                     BinaryOp::Div | BinaryOp::Mod => {
-                        if lhs_ty.size() == 8 {
-                            self.emit_line("  cqo");
+                        let dx = if use_64 { "%rdx" } else { "%edx" };
+                        if lhs_ty.is_unsigned() {
+                            self.emit_line(&format!("  mov $0, {}", dx));
+                            self.emit_line(&format!("  div {}", di));
                         } else {
-                            self.emit_line("  cdq");
+                            if lhs_ty.size() == 8 {
+                                self.emit_line("  cqo");
+                            } else {
+                                self.emit_line("  cdq");
+                            }
+                            self.emit_line(&format!("  idiv {}", di));
                         }
-                        self.emit_line(&format!("  idiv {}", di));
                         if matches!(op, BinaryOp::Mod) {
                             self.emit_line("  mov %rdx, %rax");
                         }
@@ -524,15 +545,31 @@ impl Codegen {
                     }
                     BinaryOp::Shr => {
                         self.emit_line("  mov %rdi, %rcx");
-                        self.emit_line(&format!("  sar %cl, {}", ax));
+                        if lhs_ty.is_unsigned() {
+                            self.emit_line(&format!("  shr %cl, {}", ax));
+                        } else {
+                            self.emit_line(&format!("  sar %cl, {}", ax));
+                        }
                     }
                     BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => {
                         self.emit_line(&format!("  cmp {}, {}", di, ax));
                         match op {
                             BinaryOp::Eq => self.emit_line("  sete %al"),
                             BinaryOp::Ne => self.emit_line("  setne %al"),
-                            BinaryOp::Lt => self.emit_line("  setl %al"),
-                            BinaryOp::Le => self.emit_line("  setle %al"),
+                            BinaryOp::Lt => {
+                                if lhs_ty.is_unsigned() {
+                                    self.emit_line("  setb %al");
+                                } else {
+                                    self.emit_line("  setl %al");
+                                }
+                            }
+                            BinaryOp::Le => {
+                                if lhs_ty.is_unsigned() {
+                                    self.emit_line("  setbe %al");
+                                } else {
+                                    self.emit_line("  setle %al");
+                                }
+                            }
                             _ => {}
                         }
                         self.emit_line("  movzb %al, %rax");
@@ -552,7 +589,12 @@ impl Codegen {
             Type::Short => 1,
             Type::Int => 2,
             Type::Enum => 2,
-            _ => 3,
+            Type::Long => 3,
+            Type::UChar => 4,
+            Type::UShort => 5,
+            Type::UInt => 6,
+            Type::ULong => 7,
+            _ => 7,
         }
     }
 
@@ -569,14 +611,94 @@ impl Codegen {
         }
 
         const I32I8: &str = "movsbl %al, %eax";
+        const I32U8: &str = "movzbl %al, %eax";
         const I32I16: &str = "movswl %ax, %eax";
+        const I32U16: &str = "movzwl %ax, %eax";
         const I32I64: &str = "movslq %eax, %rax";
+        const U32I64: &str = "mov %eax, %eax";
 
-        const CAST_TABLE: [[Option<&str>; 4]; 4] = [
-            [None, None, None, Some(I32I64)],
-            [Some(I32I8), None, None, Some(I32I64)],
-            [Some(I32I8), Some(I32I16), None, Some(I32I64)],
-            [Some(I32I8), Some(I32I16), None, None],
+        const CAST_TABLE: [[Option<&str>; 8]; 8] = [
+            // i8  i16     i32   i64     u8      u16     u32   u64
+            [
+                None,
+                None,
+                None,
+                Some(I32I64),
+                Some(I32U8),
+                Some(I32U16),
+                None,
+                Some(I32I64),
+            ],
+            [
+                Some(I32I8),
+                None,
+                None,
+                Some(I32I64),
+                Some(I32U8),
+                Some(I32U16),
+                None,
+                Some(I32I64),
+            ],
+            [
+                Some(I32I8),
+                Some(I32I16),
+                None,
+                Some(I32I64),
+                Some(I32U8),
+                Some(I32U16),
+                None,
+                Some(I32I64),
+            ],
+            [
+                Some(I32I8),
+                Some(I32I16),
+                None,
+                None,
+                Some(I32U8),
+                Some(I32U16),
+                None,
+                None,
+            ],
+            [
+                Some(I32I8),
+                None,
+                None,
+                Some(I32I64),
+                None,
+                None,
+                None,
+                Some(I32I64),
+            ],
+            [
+                Some(I32I8),
+                Some(I32I16),
+                None,
+                Some(I32I64),
+                Some(I32U8),
+                None,
+                None,
+                Some(I32I64),
+            ],
+            [
+                Some(I32I8),
+                Some(I32I16),
+                None,
+                Some(U32I64),
+                Some(I32U8),
+                Some(I32U16),
+                None,
+                Some(U32I64),
+            ],
+            [
+                Some(I32I8),
+                Some(I32I16),
+                None,
+                None,
+                Some(I32U8),
+                Some(I32U16),
+                None,
+                None,
+            ],
         ];
 
         let t1 = self.type_id(from);
@@ -610,8 +732,20 @@ impl Codegen {
 
         if let Some(ty) = ty {
             match ty.size() {
-                1 => self.emit_line("  movsbl (%rax), %eax"),
-                2 => self.emit_line("  movswl (%rax), %eax"),
+                1 => {
+                    if ty.is_unsigned() {
+                        self.emit_line("  movzbl (%rax), %eax");
+                    } else {
+                        self.emit_line("  movsbl (%rax), %eax");
+                    }
+                }
+                2 => {
+                    if ty.is_unsigned() {
+                        self.emit_line("  movzwl (%rax), %eax");
+                    } else {
+                        self.emit_line("  movswl (%rax), %eax");
+                    }
+                }
                 4 => self.emit_line("  movslq (%rax), %rax"),
                 8 => self.emit_line("  mov (%rax), %rax"),
                 _ => unreachable!(),

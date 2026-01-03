@@ -31,6 +31,7 @@ pub enum Keyword {
     Case,
     Default,
     Signed,
+    Unsigned,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -329,6 +330,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 "case" => TokenKind::Keyword(Keyword::Case),
                 "default" => TokenKind::Keyword(Keyword::Default),
                 "signed" => TokenKind::Keyword(Keyword::Signed),
+                "unsigned" => TokenKind::Keyword(Keyword::Unsigned),
                 _ => TokenKind::Ident(word.to_string()),
             };
             tokens.push(Token { kind, location });
