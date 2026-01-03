@@ -413,6 +413,7 @@ impl<'a> Parser<'a> {
             };
             let var_idx = self.new_gvar(name, ty);
             self.globals[var_idx].is_definition = !attr.is_extern;
+            self.globals[var_idx].is_static = attr.is_static;
             if attr.align != 0 {
                 self.globals[var_idx].align = attr.align;
             }
@@ -2125,6 +2126,7 @@ impl<'a> Parser<'a> {
             name,
             ty,
             align,
+            is_static: true,
             is_definition: true,
             ..Default::default()
         });

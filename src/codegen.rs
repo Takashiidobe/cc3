@@ -32,7 +32,11 @@ impl Codegen {
             }
 
             if !obj.name.starts_with(".L") {
-                self.emit_line(&format!("  .globl {}", obj.name));
+                if obj.is_static {
+                    self.emit_line(&format!("  .local {}", obj.name));
+                } else {
+                    self.emit_line(&format!("  .globl {}", obj.name));
+                }
                 self.emit_line(&format!("  .align {}", obj.align));
             }
 
