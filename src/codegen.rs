@@ -553,18 +553,19 @@ impl Codegen {
                     }
                     BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => {
                         self.emit_line(&format!("  cmp {}, {}", di, ax));
+                        let unsigned_cmp = lhs_ty.is_unsigned() || matches!(lhs_ty, Type::Ptr(_));
                         match op {
                             BinaryOp::Eq => self.emit_line("  sete %al"),
                             BinaryOp::Ne => self.emit_line("  setne %al"),
                             BinaryOp::Lt => {
-                                if lhs_ty.is_unsigned() {
+                                if unsigned_cmp {
                                     self.emit_line("  setb %al");
                                 } else {
                                     self.emit_line("  setl %al");
                                 }
                             }
                             BinaryOp::Le => {
-                                if lhs_ty.is_unsigned() {
+                                if unsigned_cmp {
                                     self.emit_line("  setbe %al");
                                 } else {
                                     self.emit_line("  setle %al");
