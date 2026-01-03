@@ -168,7 +168,8 @@ impl<'a> Parser<'a> {
                     }
 
                     if attr.is_typedef && (attr.is_static || attr.is_extern) {
-                        return Err(self.error_here("typedef may not be used together with static or extern"));
+                        return Err(self
+                            .error_here("typedef may not be used together with static or extern"));
                     }
                 } else {
                     return Err(
@@ -2180,9 +2181,8 @@ impl<'a> Parser<'a> {
         self.enter_scope();
         let mut stmts = Vec::new();
         while !self.check_punct(Punct::RBrace) {
-            let is_label = matches!(self.peek().kind, TokenKind::Ident(_))
-                && matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::Colon));
-            if self.is_typename() && !is_label {
+            // Skip labels (e.g., "label:") when checking for typenames
+            if self.is_typename() && !matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::Colon)) {
                 let mut attr = VarAttr::default();
                 let basety = self.parse_declspec(Some(&mut attr))?;
                 if attr.is_typedef {
