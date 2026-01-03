@@ -1,6 +1,46 @@
 use crate::ast::Type;
 use crate::error::{CompileError, CompileResult, SourceLocation};
 
+/// Parse hexadecimal floating-point literal (e.g., 0x1.2p3)
+/// Format: 0x[hex_digits][.hex_digits]p[+/-][decimal_exponent]
+fn parse_hex_float(s: &str) -> Option<f64> {
+    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))?;
+
+    // Find the 'p' or 'P' that separates mantissa from exponent
+    let (mantissa_str, exp_str) = if let Some(pos) = s.find(['p', 'P']) {
+        (&s[..pos], &s[pos + 1..])
+    } else {
+        (s, "0")
+    };
+
+    // Parse the mantissa (integer and fractional parts)
+    let (int_part, frac_part) = if let Some(dot_pos) = mantissa_str.find('.') {
+        (&mantissa_str[..dot_pos], &mantissa_str[dot_pos + 1..])
+    } else {
+        (mantissa_str, "")
+    };
+
+    // Parse integer part as hex
+    let int_value = if int_part.is_empty() {
+        0.0
+    } else {
+        u64::from_str_radix(int_part, 16).ok()? as f64
+    };
+
+    // Parse fractional part as hex
+    let mut frac_value = 0.0;
+    if !frac_part.is_empty() {
+        let frac_int = u64::from_str_radix(frac_part, 16).ok()? as f64;
+        frac_value = frac_int / 16f64.powi(frac_part.len() as i32);
+    }
+
+    // Parse binary exponent (power of 2)
+    let exponent: i32 = exp_str.parse().ok()?;
+
+    // Combine: (integer + fraction) * 2^exponent
+    Some((int_value + frac_value) * 2f64.powi(exponent))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Keyword {
     Void,
@@ -40,11 +80,11 @@ pub enum Keyword {
     Noreturn,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     Keyword(Keyword),
     Ident(String),
-    Num { value: i64, ty: Type },
+    Num { value: i64, fval: f64, ty: Type },
     Str { bytes: Vec<u8>, ty: Type },
     Punct(Punct),
     Eof,
@@ -154,7 +194,7 @@ impl std::fmt::Display for Punct {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Token {
     pub kind: TokenKind,
     pub location: SourceLocation,
@@ -221,13 +261,68 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             continue;
         }
 
-        if b.is_ascii_digit() {
+        // Handle numeric literals (including those starting with '.')
+        if b.is_ascii_digit() || (b == b'.' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit())
+        {
             let start = i;
             let location = SourceLocation {
                 line,
                 column,
                 byte: start,
             };
+
+            // If starts with '.', it's a float
+            if b == b'.' {
+                let float_str = &input[start..];
+                let end_idx = float_str
+                    .char_indices()
+                    .find(|(_, c)| {
+                        !matches!(
+                            c,
+                            '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | 'f' | 'F' | 'l' | 'L'
+                        )
+                    })
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(float_str.len());
+
+                let float_literal = &float_str[..end_idx];
+                let mut parse_str = float_literal;
+
+                // Check for suffix
+                let ty = if float_literal.ends_with('f') || float_literal.ends_with('F') {
+                    parse_str = &float_literal[..float_literal.len() - 1];
+                    Type::Float
+                } else if float_literal.ends_with('l') || float_literal.ends_with('L') {
+                    parse_str = &float_literal[..float_literal.len() - 1];
+                    Type::Double
+                } else {
+                    Type::Double
+                };
+
+                let fval = if parse_str.starts_with("0x") || parse_str.starts_with("0X") {
+                    parse_hex_float(parse_str).ok_or_else(|| {
+                        CompileError::at(
+                            format!("invalid floating-point literal: {}", parse_str),
+                            location,
+                        )
+                    })?
+                } else {
+                    parse_str.parse::<f64>().map_err(|_| {
+                        CompileError::at(
+                            format!("invalid floating-point literal: {}", parse_str),
+                            location,
+                        )
+                    })?
+                };
+
+                i = start + end_idx;
+                tokens.push(Token {
+                    kind: TokenKind::Num { value: 0, fval, ty },
+                    location,
+                });
+                column += i - start;
+                continue;
+            }
 
             // Determine base from prefix
             let (base, prefix_len) = if i + 1 < bytes.len() && bytes[i] == b'0' {
@@ -315,6 +410,61 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 has_unsigned = true;
             }
 
+            // Check if this might be a floating-point literal
+            let next_char = if i < bytes.len() {
+                bytes[i] as char
+            } else {
+                '\0'
+            };
+
+            if matches!(next_char, '.' | 'e' | 'E' | 'f' | 'F') {
+                // Parse as floating-point
+                let float_str = &input[start..];
+                let end_idx = float_str
+                    .char_indices()
+                    .find(|(_, c)| !matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | 'f' | 'F' | 'l' | 'L' | 'p' | 'P' | 'x' | 'X' | 'a'..='d' | 'A'..='D'))
+                    .map(|(idx, _)| idx)
+                    .unwrap_or(float_str.len());
+
+                let float_literal = &float_str[..end_idx];
+                let mut parse_str = float_literal;
+
+                // Check for suffix
+                let ty = if float_literal.ends_with('f') || float_literal.ends_with('F') {
+                    parse_str = &float_literal[..float_literal.len() - 1];
+                    Type::Float
+                } else if float_literal.ends_with('l') || float_literal.ends_with('L') {
+                    parse_str = &float_literal[..float_literal.len() - 1];
+                    Type::Double
+                } else {
+                    Type::Double
+                };
+
+                let fval = if parse_str.starts_with("0x") || parse_str.starts_with("0X") {
+                    parse_hex_float(parse_str).ok_or_else(|| {
+                        CompileError::at(
+                            format!("invalid floating-point literal: {}", parse_str),
+                            location,
+                        )
+                    })?
+                } else {
+                    parse_str.parse::<f64>().map_err(|_| {
+                        CompileError::at(
+                            format!("invalid floating-point literal: {}", parse_str),
+                            location,
+                        )
+                    })?
+                };
+
+                i = start + end_idx;
+                tokens.push(Token {
+                    kind: TokenKind::Num { value: 0, fval, ty },
+                    location,
+                });
+                column += i - start;
+                continue;
+            }
+
             // Check for invalid trailing alphanumeric
             if i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
                 return Err(CompileError::at(
@@ -366,6 +516,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             tokens.push(Token {
                 kind: TokenKind::Num {
                     value: value as i64,
+                    fval: 0.0,
                     ty,
                 },
                 location,
@@ -500,6 +651,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             tokens.push(Token {
                 kind: TokenKind::Num {
                     value,
+                    fval: 0.0,
                     ty: Type::Int,
                 },
                 location,

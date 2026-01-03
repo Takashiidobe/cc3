@@ -1,6 +1,6 @@
 use crate::error::SourceLocation;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Program {
     pub globals: Vec<Obj>,
 }
@@ -15,13 +15,13 @@ pub struct Member {
     pub offset: i32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Stmt {
     pub kind: StmtKind,
     pub location: SourceLocation,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
     Return(Option<Expr>),
     Block(Vec<Stmt>),
@@ -65,18 +65,21 @@ pub enum StmtKind {
     Decl(usize),
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct Expr {
     pub kind: ExprKind,
     pub location: SourceLocation,
     pub ty: Option<Type>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub enum ExprKind {
     #[default]
     Null,
-    Num(i64),
+    Num {
+        value: i64,
+        fval: f64,
+    },
     /// Zero-clear a stack variable (for initializers)
     Memzero {
         idx: usize,
@@ -162,7 +165,7 @@ pub struct Relocation {
     pub addend: i64,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub struct Obj {
     pub name: String,
     pub ty: Type,
@@ -208,6 +211,8 @@ pub enum Type {
     UInt,
     Long,
     ULong,
+    Float,
+    Double,
     Enum,
     Ptr(Box<Type>),
     Func {
@@ -274,6 +279,8 @@ impl Type {
             Type::UInt => 4,
             Type::Long => 8,
             Type::ULong => 8,
+            Type::Float => 4,
+            Type::Double => 8,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func { .. } => 8,
@@ -335,6 +342,8 @@ impl Type {
             Type::UInt => 4,
             Type::Long => 8,
             Type::ULong => 8,
+            Type::Float => 4,
+            Type::Double => 8,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func { .. } => 8,
@@ -379,6 +388,10 @@ impl Type {
 
     pub fn is_unsigned(&self) -> bool {
         matches!(self, Type::UChar | Type::UShort | Type::UInt | Type::ULong)
+    }
+
+    pub fn is_flonum(&self) -> bool {
+        matches!(self, Type::Float | Type::Double)
     }
 
     pub fn incomplete_struct(tag: Option<String>) -> Type {

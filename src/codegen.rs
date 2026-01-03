@@ -337,8 +337,28 @@ impl Codegen {
                 self.emit_line("  mov $0, %al");
                 self.emit_line("  rep stosb");
             }
-            ExprKind::Num(value) => {
-                self.emit_line(&format!("  mov ${}, %rax", value));
+            ExprKind::Num { value, fval } => {
+                if let Some(ty) = &expr.ty {
+                    match ty {
+                        Type::Float => {
+                            // Convert f32 to u32 to get bit pattern
+                            let bits = (*fval as f32).to_bits();
+                            self.emit_line(&format!("  mov ${}, %eax  # float {}", bits, fval));
+                            self.emit_line("  movq %rax, %xmm0");
+                        }
+                        Type::Double => {
+                            // Convert f64 to u64 to get bit pattern
+                            let bits = fval.to_bits();
+                            self.emit_line(&format!("  mov ${}, %rax  # double {}", bits, fval));
+                            self.emit_line("  movq %rax, %xmm0");
+                        }
+                        _ => {
+                            self.emit_line(&format!("  mov ${}, %rax", value));
+                        }
+                    }
+                } else {
+                    self.emit_line(&format!("  mov ${}, %rax", value));
+                }
             }
             ExprKind::Unary { op, expr } => {
                 self.gen_expr(expr, function, globals);

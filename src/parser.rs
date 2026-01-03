@@ -1597,7 +1597,13 @@ impl<'a> Parser<'a> {
         if self.consume_punct(Punct::Inc) {
             let location = self.last_location();
             let expr = self.parse_unary()?;
-            let one = self.expr_at(ExprKind::Num(1), location);
+            let one = self.expr_at(
+                ExprKind::Num {
+                    value: 1,
+                    fval: 0.0,
+                },
+                location,
+            );
             return self.to_assign(expr, one, BinaryOp::Add, location);
         }
 
@@ -1605,7 +1611,13 @@ impl<'a> Parser<'a> {
         if self.consume_punct(Punct::Dec) {
             let location = self.last_location();
             let expr = self.parse_unary()?;
-            let one = self.expr_at(ExprKind::Num(1), location);
+            let one = self.expr_at(
+                ExprKind::Num {
+                    value: 1,
+                    fval: 0.0,
+                },
+                location,
+            );
             return self.to_assign(expr, one, BinaryOp::Sub, location);
         }
 
@@ -1631,7 +1643,13 @@ impl<'a> Parser<'a> {
         // Into: (tmp = &i, *tmp = *tmp + addend)
         let assign_result = self.to_assign(
             node,
-            self.expr_at(ExprKind::Num(addend), location),
+            self.expr_at(
+                ExprKind::Num {
+                    value: addend,
+                    fval: 0.0,
+                },
+                location,
+            ),
             BinaryOp::Add,
             location,
         )?;
@@ -1639,7 +1657,13 @@ impl<'a> Parser<'a> {
         // Subtract addend from assignment result to get original value
         // For i++: (i + 1) - 1 = i
         // For i--: (i - 1) - (-1) = i
-        let neg_addend = self.expr_at(ExprKind::Num(-addend), location);
+        let neg_addend = self.expr_at(
+            ExprKind::Num {
+                value: -addend,
+                fval: 0.0,
+            },
+            location,
+        );
         let result = self.new_add(assign_result, neg_addend, location)?;
 
         // Cast back to original type
@@ -1847,7 +1871,13 @@ impl<'a> Parser<'a> {
                         token.location,
                     )
                 } else if let Some(val) = scope.enum_val {
-                    let mut expr = self.expr_at(ExprKind::Num(val), token.location);
+                    let mut expr = self.expr_at(
+                        ExprKind::Num {
+                            value: val,
+                            fval: 0.0,
+                        },
+                        token.location,
+                    );
                     expr.ty = Some(Type::Enum);
                     expr
                 } else {
@@ -1867,10 +1897,15 @@ impl<'a> Parser<'a> {
                     token.location,
                 ))
             }
-            TokenKind::Num { value, ty } => {
+            TokenKind::Num { value, fval, ty } => {
                 self.pos += 1;
-                let mut expr = self.expr_at(ExprKind::Num(value), token.location);
-                expr.ty = Some(ty);
+                let expr_kind = if ty.is_flonum() {
+                    ExprKind::Num { value: 0, fval }
+                } else {
+                    ExprKind::Num { value, fval: 0.0 }
+                };
+                let mut expr = self.expr_at(expr_kind, token.location);
+                expr.ty = Some(ty.clone());
                 Ok(expr)
             }
             _ => self.bail_expected("a primary expression"),
@@ -1916,7 +1951,13 @@ impl<'a> Parser<'a> {
     }
 
     fn dummy_expr(&self, location: SourceLocation) -> Expr {
-        self.expr_at(ExprKind::Num(0), location)
+        self.expr_at(
+            ExprKind::Num {
+                value: 0,
+                fval: 0.0,
+            },
+            location,
+        )
     }
 
     fn cast_expr(&self, expr: Expr, ty: Type) -> Expr {
@@ -2062,7 +2103,7 @@ impl<'a> Parser<'a> {
     }
 
     fn new_ulong_expr(&self, value: i64, location: SourceLocation) -> Expr {
-        let mut expr = self.expr_at(ExprKind::Num(value), location);
+        let mut expr = self.expr_at(ExprKind::Num { value, fval: 0.0 }, location);
         expr.ty = Some(Type::ULong);
         expr
     }
@@ -2511,7 +2552,13 @@ impl<'a> Parser<'a> {
         }
 
         let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
-        let mut scale = self.expr_at(ExprKind::Num(base_size), location);
+        let mut scale = self.expr_at(
+            ExprKind::Num {
+                value: base_size,
+                fval: 0.0,
+            },
+            location,
+        );
         scale.ty = Some(Type::Long);
         let rhs = self.expr_at(
             ExprKind::Binary {
@@ -2558,7 +2605,13 @@ impl<'a> Parser<'a> {
 
         if lhs_ty.base().is_some() && rhs_ty.is_integer() {
             let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
-            let mut scale = self.expr_at(ExprKind::Num(base_size), location);
+            let mut scale = self.expr_at(
+                ExprKind::Num {
+                    value: base_size,
+                    fval: 0.0,
+                },
+                location,
+            );
             scale.ty = Some(Type::Long);
             let rhs = self.expr_at(
                 ExprKind::Binary {
@@ -2582,7 +2635,13 @@ impl<'a> Parser<'a> {
 
         if lhs_ty.base().is_some() && rhs_ty.base().is_some() {
             let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
-            let mut scale = self.expr_at(ExprKind::Num(base_size), location);
+            let mut scale = self.expr_at(
+                ExprKind::Num {
+                    value: base_size,
+                    fval: 0.0,
+                },
+                location,
+            );
             scale.ty = Some(Type::Long);
             let mut sub_expr = self.expr_at(
                 ExprKind::Binary {
@@ -2690,7 +2749,10 @@ impl<'a> Parser<'a> {
 
         (0..len).for_each(|i| {
             init.children[i].expr = Some(self.expr_at(
-                ExprKind::Num(str_bytes[i] as i64),
+                ExprKind::Num {
+                    value: str_bytes[i] as i64,
+                    fval: 0.0,
+                },
                 SourceLocation {
                     line: 0,
                     column: 0,
@@ -3048,7 +3110,13 @@ impl<'a> Parser<'a> {
                 );
             } else {
                 // Array index: x[idx]
-                let idx_expr = self.expr_at(ExprKind::Num(desg.idx as i64), location);
+                let idx_expr = self.expr_at(
+                    ExprKind::Num {
+                        value: desg.idx as i64,
+                        fval: 0.0,
+                    },
+                    location,
+                );
                 // Use new_add to properly handle pointer arithmetic
                 expr = self.new_add(expr, idx_expr, location)?;
                 expr = self.expr_at(ExprKind::Deref(Box::new(expr)), location);
@@ -3361,7 +3429,7 @@ impl<'a> Parser<'a> {
         let ty = match &mut expr.kind {
             ExprKind::Null => Type::Void,
             ExprKind::Memzero { .. } => Type::Void,
-            ExprKind::Num(_) => Type::Int,
+            ExprKind::Num { .. } => Type::Int,
             ExprKind::Var { idx, is_local } => {
                 let map = if *is_local {
                     &self.locals
@@ -3518,7 +3586,7 @@ impl<'a> Parser<'a> {
         self.add_type_expr(expr)?;
 
         match &mut expr.kind {
-            ExprKind::Num(val) => Ok(*val),
+            ExprKind::Num { value: val, .. } => Ok(*val),
             ExprKind::Unary { op, expr } => {
                 let val = self.eval2(expr, label)?;
                 match op {
