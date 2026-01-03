@@ -1213,37 +1213,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_binary_op<F>(
-        &mut self,
-        mut parse_next: F,
-        punct: Punct,
-        op: BinaryOp,
-    ) -> CompileResult<Expr>
-    where
-        F: FnMut(&mut Self) -> CompileResult<Expr>,
-    {
-        let mut expr = parse_next(self)?;
-
-        loop {
-            if self.consume_punct(punct) {
-                let location = self.last_location();
-                let rhs = parse_next(self)?;
-                expr = self.expr_at(
-                    ExprKind::Binary {
-                        op,
-                        lhs: Box::new(expr),
-                        rhs: Box::new(rhs),
-                    },
-                    location,
-                );
-            } else {
-                break;
-            }
-        }
-
-        Ok(expr)
-    }
-
     fn parse_binary_ops<F>(
         &mut self,
         mut parse_next: F,
@@ -1292,7 +1261,10 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_logor(&mut self) -> CompileResult<Expr> {
-        self.parse_binary_op(Self::parse_logand, Punct::LogOr, BinaryOp::LogOr)
+        self.parse_binary_ops(
+            Self::parse_logand,
+            &[(Punct::LogOr, BinaryOp::LogOr, false)],
+        )
     }
 
     fn parse_conditional(&mut self) -> CompileResult<Expr> {
@@ -1318,19 +1290,28 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_logand(&mut self) -> CompileResult<Expr> {
-        self.parse_binary_op(Self::parse_bitor, Punct::LogAnd, BinaryOp::LogAnd)
+        self.parse_binary_ops(
+            Self::parse_bitor,
+            &[(Punct::LogAnd, BinaryOp::LogAnd, false)],
+        )
     }
 
     fn parse_bitor(&mut self) -> CompileResult<Expr> {
-        self.parse_binary_op(Self::parse_bitxor, Punct::Pipe, BinaryOp::BitOr)
+        self.parse_binary_ops(Self::parse_bitxor, &[(Punct::Pipe, BinaryOp::BitOr, false)])
     }
 
     fn parse_bitxor(&mut self) -> CompileResult<Expr> {
-        self.parse_binary_op(Self::parse_bitand, Punct::Caret, BinaryOp::BitXor)
+        self.parse_binary_ops(
+            Self::parse_bitand,
+            &[(Punct::Caret, BinaryOp::BitXor, false)],
+        )
     }
 
     fn parse_bitand(&mut self) -> CompileResult<Expr> {
-        self.parse_binary_op(Self::parse_equality, Punct::Amp, BinaryOp::BitAnd)
+        self.parse_binary_ops(
+            Self::parse_equality,
+            &[(Punct::Amp, BinaryOp::BitAnd, false)],
+        )
     }
 
     fn parse_equality(&mut self) -> CompileResult<Expr> {
@@ -2182,7 +2163,8 @@ impl<'a> Parser<'a> {
         let mut stmts = Vec::new();
         while !self.check_punct(Punct::RBrace) {
             // Skip labels (e.g., "label:") when checking for typenames
-            if self.is_typename() && !matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::Colon)) {
+            if self.is_typename() && !matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::Colon))
+            {
                 let mut attr = VarAttr::default();
                 let basety = self.parse_declspec(Some(&mut attr))?;
                 if attr.is_typedef {
