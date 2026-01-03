@@ -1150,6 +1150,11 @@ impl<'a> Parser<'a> {
     fn parse_array_dimensions(&mut self, ty: Type) -> CompileResult<Type> {
         self.expect_punct(Punct::LBracket)?;
 
+        while self.consume_keyword(Keyword::Static)
+            || self.consume_keyword(Keyword::Restrict)
+            || self.consume_keyword(Keyword::Const)
+        {}
+
         let len = if self.consume_punct(Punct::RBracket) {
             -1
         } else {
