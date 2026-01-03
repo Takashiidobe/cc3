@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "add(2, 3) => 5\nmul(2, 3) => 6\nsub(3, 2) => 1\nOK\n"
+status: 0

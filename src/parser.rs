@@ -339,7 +339,7 @@ impl<'a> Parser<'a> {
         let (ty, name_token) = self.parse_declarator(basety.clone())?;
         let name = match name_token.kind {
             TokenKind::Ident(name) => name,
-            _ => unreachable!("parse_declarator returns identifier"),
+            _ => self.bail_at(name_token.location, "function name omitted")?,
         };
 
         // Extract is_variadic and params from the function type
@@ -368,6 +368,9 @@ impl<'a> Parser<'a> {
         // Create local variables for each parameter
         let mut param_indices = Vec::new();
         for (param_name, param_ty) in type_params {
+            if param_name.is_empty() {
+                self.bail_at(name_token.location, "parameter name omitted")?;
+            }
             let idx = self.new_lvar(param_name, param_ty);
             param_indices.push(idx);
         }
@@ -740,7 +743,7 @@ impl<'a> Parser<'a> {
             let (ty, name_token) = self.parse_declarator(basety.clone())?;
             let name = match name_token.kind {
                 TokenKind::Ident(name) => name,
-                _ => unreachable!("parse_declarator only returns identifiers"),
+                _ => self.bail_at(name_token.location, "variable name omitted")?,
             };
             if ty == Type::Void {
                 self.bail_at(name_token.location, "variable declared void")?;
@@ -816,7 +819,11 @@ impl<'a> Parser<'a> {
             return Ok((final_ty, ident_token));
         }
 
-        let token = self.expect_ident_token()?;
+        // Try to consume an identifier, but allow it to be omitted
+        let token = self.peek().clone();
+        if matches!(token.kind, TokenKind::Ident(_)) {
+            self.pos += 1;
+        }
 
         // Parse type suffixes (arrays, functions) recursively
         ty = self.parse_type_suffix(ty)?;
@@ -1100,7 +1107,13 @@ impl<'a> Parser<'a> {
         self.expect_punct(Punct::LParen)?;
 
         // Handle void parameter list: foo(void)
-        if self.consume_keyword(Keyword::Void) && self.check_punct(Punct::RParen) {
+        if matches!(self.peek().kind, TokenKind::Keyword(Keyword::Void))
+            && self
+                .tokens
+                .get(self.pos + 1)
+                .is_some_and(|t| matches!(t.kind, TokenKind::Punct(Punct::RParen)))
+        {
+            self.consume_keyword(Keyword::Void);
             self.expect_punct(Punct::RParen)?;
             return Ok(Type::func(return_ty, Vec::new(), false));
         }
@@ -1874,7 +1887,7 @@ impl<'a> Parser<'a> {
             let (ty, name_token) = self.parse_declarator(basety.clone())?;
             let name = match name_token.kind {
                 TokenKind::Ident(name) => name,
-                _ => unreachable!("parse_declarator only returns identifiers"),
+                _ => self.bail_at(name_token.location, "typedef name omitted")?,
             };
             self.push_scope_typedef(name, ty);
         }
