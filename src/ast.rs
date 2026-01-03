@@ -23,7 +23,7 @@ pub struct Stmt {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StmtKind {
-    Return(Expr),
+    Return(Option<Expr>),
     Block(Vec<Stmt>),
     If {
         cond: Expr,

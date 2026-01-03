@@ -429,6 +429,10 @@ impl<'a> Parser<'a> {
 
     fn parse_stmt(&mut self) -> CompileResult<Stmt> {
         if self.consume_keyword(Keyword::Return) {
+            if self.consume_punct(Punct::Semicolon) {
+                return Ok(self.stmt_last(StmtKind::Return(None)));
+            }
+
             let expr = self.parse_expr()?;
             self.expect_punct(Punct::Semicolon)?;
             let expr = if let Some(ret_ty) = self.current_fn_return.clone() {
@@ -436,7 +440,7 @@ impl<'a> Parser<'a> {
             } else {
                 expr
             };
-            return Ok(self.stmt_last(StmtKind::Return(expr)));
+            return Ok(self.stmt_last(StmtKind::Return(Some(expr))));
         }
 
         if self.consume_keyword(Keyword::If) {
@@ -3169,7 +3173,11 @@ impl<'a> Parser<'a> {
 
     fn add_type_stmt(&self, stmt: &mut Stmt) -> CompileResult<()> {
         match &mut stmt.kind {
-            StmtKind::Return(expr) => self.add_type_expr(expr)?,
+            StmtKind::Return(expr) => {
+                if let Some(expr) = expr {
+                    self.add_type_expr(expr)?;
+                }
+            }
             StmtKind::Block(stmts) => {
                 for stmt in stmts {
                     self.add_type_stmt(stmt)?;

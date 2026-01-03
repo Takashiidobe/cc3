@@ -140,7 +140,9 @@ impl Codegen {
         self.emit_line(&format!("  .loc 1 {}", stmt.location.line));
         match &stmt.kind {
             StmtKind::Return(expr) => {
-                self.gen_expr(expr, function, globals);
+                if let Some(expr) = expr {
+                    self.gen_expr(expr, function, globals);
+                }
                 self.emit_epilogue();
                 self.emit_line("  ret");
             }
