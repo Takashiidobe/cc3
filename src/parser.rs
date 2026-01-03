@@ -360,56 +360,21 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn is_function(&self) -> CompileResult<bool> {
-        // Look ahead to see if this is a function or variable declaration
-        // Need to find the identifier first, then check what follows it
-        let mut pos = self.pos;
-        let mut paren_depth = 0;
-        let mut bracket_depth = 0;
-
-        // Skip pointer stars and parentheses to find the identifier
-        while pos < self.tokens.len() {
-            match &self.tokens[pos].kind {
-                TokenKind::Punct(Punct::Star) => pos += 1,
-                TokenKind::Punct(Punct::LParen) => {
-                    paren_depth += 1;
-                    pos += 1;
-                }
-                TokenKind::Punct(Punct::RParen) => {
-                    paren_depth -= 1;
-                    pos += 1;
-                }
-                TokenKind::Ident(_) if paren_depth == 0 => {
-                    // Found the identifier at top level, check what follows
-                    pos += 1;
-                    // Now see what comes after the identifier
-                    while pos < self.tokens.len() {
-                        match &self.tokens[pos].kind {
-                            TokenKind::Punct(Punct::LParen) if bracket_depth == 0 => {
-                                return Ok(true);
-                            }
-                            TokenKind::Punct(Punct::LBracket) => {
-                                bracket_depth += 1;
-                                pos += 1;
-                            }
-                            TokenKind::Punct(Punct::RBracket) => {
-                                bracket_depth -= 1;
-                                pos += 1;
-                            }
-                            TokenKind::Punct(Punct::Assign)
-                            | TokenKind::Punct(Punct::Semicolon)
-                            | TokenKind::Punct(Punct::Comma) => {
-                                return Ok(false);
-                            }
-                            _ => pos += 1,
-                        }
-                    }
-                    return Ok(false);
-                }
-                _ => pos += 1,
-            }
+    fn is_function(&mut self) -> CompileResult<bool> {
+        // Like chibicc: parse the declarator and check if it's a function type
+        if self.check_punct(Punct::Semicolon) {
+            return Ok(false);
         }
-        Ok(false)
+
+        let saved_pos = self.pos;
+        let dummy_type = Type::Int; // dummy base type
+        let result = self.parse_declarator(dummy_type);
+        self.pos = saved_pos; // restore position
+
+        match result {
+            Ok((ty, _)) => Ok(matches!(ty, Type::Func(_))),
+            Err(_) => Ok(false),
+        }
     }
 
     fn parse_global_variable(&mut self, basety: Type, attr: &VarAttr) -> CompileResult<()> {
@@ -726,9 +691,9 @@ impl<'a> Parser<'a> {
             // Skip ')'
             self.expect_punct(Punct::RParen)?;
 
-            // Parse the suffix (arrays, etc.) and apply to current type
+            // Parse the suffix (arrays, functions, etc.) and apply to current type
             // Save position after suffix - this is where the caller should continue
-            ty = self.parse_array_suffix(ty)?;
+            ty = self.parse_type_suffix(ty)?;
             let final_pos = self.pos;
 
             // Second pass: re-parse the declarator with the suffix-applied type
@@ -743,8 +708,8 @@ impl<'a> Parser<'a> {
 
         let token = self.expect_ident_token()?;
 
-        // Parse array suffixes recursively to get correct nesting order
-        ty = self.parse_array_suffix(ty)?;
+        // Parse type suffixes (arrays, functions) recursively
+        ty = self.parse_type_suffix(ty)?;
 
         Ok((ty, token))
     }
@@ -762,7 +727,7 @@ impl<'a> Parser<'a> {
             let _ = self.parse_abstract_declarator(dummy)?;
             self.expect_punct(Punct::RParen)?;
 
-            ty = self.parse_array_suffix(ty)?;
+            ty = self.parse_type_suffix(ty)?;
             let final_pos = self.pos;
 
             self.pos = start_pos + 1;
@@ -771,7 +736,7 @@ impl<'a> Parser<'a> {
             return Ok(ty);
         }
 
-        self.parse_array_suffix(ty)
+        self.parse_type_suffix(ty)
     }
 
     fn parse_typename(&mut self) -> CompileResult<Type> {
@@ -1023,10 +988,50 @@ impl<'a> Parser<'a> {
         Ok((members, is_flexible))
     }
 
-    fn parse_array_suffix(&mut self, ty: Type) -> CompileResult<Type> {
-        if !self.consume_punct(Punct::LBracket) {
-            return Ok(ty);
+    fn parse_type_suffix(&mut self, ty: Type) -> CompileResult<Type> {
+        // Handle function parameters: (...)
+        if self.check_punct(Punct::LParen) {
+            return self.parse_func_params(ty);
         }
+
+        // Handle array dimensions: [...]
+        if self.check_punct(Punct::LBracket) {
+            return self.parse_array_dimensions(ty);
+        }
+
+        // No suffix
+        Ok(ty)
+    }
+
+    fn parse_func_params(&mut self, return_ty: Type) -> CompileResult<Type> {
+        self.expect_punct(Punct::LParen)?;
+
+        // Handle void parameter list: foo(void)
+        if self.consume_keyword(Keyword::Void) && self.check_punct(Punct::RParen) {
+            self.expect_punct(Punct::RParen)?;
+            return Ok(Type::Func(Box::new(return_ty)));
+        }
+
+        // For now, just skip to the closing paren and return a function type
+        // The actual parameter parsing is done in parse_function_with_basety
+        let mut depth = 1;
+        while depth > 0 && self.pos < self.tokens.len() {
+            if self.check_punct(Punct::LParen) {
+                depth += 1;
+                self.pos += 1;
+            } else if self.check_punct(Punct::RParen) {
+                depth -= 1;
+                self.pos += 1;
+            } else {
+                self.pos += 1;
+            }
+        }
+
+        Ok(Type::Func(Box::new(return_ty)))
+    }
+
+    fn parse_array_dimensions(&mut self, ty: Type) -> CompileResult<Type> {
+        self.expect_punct(Punct::LBracket)?;
 
         let len = if self.consume_punct(Punct::RBracket) {
             -1
@@ -1036,8 +1041,8 @@ impl<'a> Parser<'a> {
             len
         };
 
-        // Recursively parse remaining array suffixes
-        let ty = self.parse_array_suffix(ty)?;
+        // Recursively parse remaining suffixes (could be more arrays or functions)
+        let ty = self.parse_type_suffix(ty)?;
 
         // Build array type with the result
         Ok(Type::Array {
