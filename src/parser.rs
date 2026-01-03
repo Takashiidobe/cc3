@@ -3343,6 +3343,28 @@ impl<'a> Parser<'a> {
             return Ok(relocations);
         }
 
+        if let Type::Float = &init.ty
+            && let Some(expr) = &init.expr
+        {
+            let mut expr_clone = expr.clone();
+            let val = self.eval_double(&mut expr_clone)?;
+            let bytes = (val as f32).to_le_bytes();
+            let end = offset + bytes.len();
+            buf[offset..end].copy_from_slice(&bytes);
+            return Ok(Vec::new());
+        }
+
+        if let Type::Double = &init.ty
+            && let Some(expr) = &init.expr
+        {
+            let mut expr_clone = expr.clone();
+            let val = self.eval_double(&mut expr_clone)?;
+            let bytes = val.to_le_bytes();
+            let end = offset + bytes.len();
+            buf[offset..end].copy_from_slice(&bytes);
+            return Ok(Vec::new());
+        }
+
         if let Some(expr) = &init.expr {
             let mut expr_clone = expr.clone();
             let mut label = None;
@@ -3606,6 +3628,10 @@ impl<'a> Parser<'a> {
     fn eval2(&self, expr: &mut Expr, label: Option<&mut Option<String>>) -> CompileResult<i64> {
         self.add_type_expr(expr)?;
 
+        if expr.ty.as_ref().is_some_and(|ty| ty.is_flonum()) {
+            return Ok(self.eval_double(expr)? as i64);
+        }
+
         match &mut expr.kind {
             ExprKind::Num { value: val, .. } => Ok(*val),
             ExprKind::Unary { op, expr } => {
@@ -3748,6 +3774,49 @@ impl<'a> Parser<'a> {
                 }
                 Ok(0)
             }
+            _ => self.bail_at(expr.location, "not a compile-time constant"),
+        }
+    }
+
+    fn eval_double(&self, expr: &mut Expr) -> CompileResult<f64> {
+        self.add_type_expr(expr)?;
+
+        if expr.ty.as_ref().is_some_and(|ty| ty.is_integer()) {
+            let val = self.eval(expr)?;
+            if expr.ty.as_ref().is_some_and(|ty| ty.is_unsigned()) {
+                return Ok(val as u64 as f64);
+            }
+            return Ok(val as f64);
+        }
+
+        match &mut expr.kind {
+            ExprKind::Binary { op, lhs, rhs } => match op {
+                BinaryOp::Add => Ok(self.eval_double(lhs)? + self.eval_double(rhs)?),
+                BinaryOp::Sub => Ok(self.eval_double(lhs)? - self.eval_double(rhs)?),
+                BinaryOp::Mul => Ok(self.eval_double(lhs)? * self.eval_double(rhs)?),
+                BinaryOp::Div => Ok(self.eval_double(lhs)? / self.eval_double(rhs)?),
+                _ => self.bail_at(expr.location, "not a compile-time constant"),
+            },
+            ExprKind::Unary { op, expr } => match op {
+                UnaryOp::Neg => Ok(-self.eval_double(expr)?),
+                _ => self.bail_at(expr.location, "not a compile-time constant"),
+            },
+            ExprKind::Cond { cond, then, els } => {
+                if self.eval_double(cond)? != 0.0 {
+                    self.eval_double(then)
+                } else {
+                    self.eval_double(els)
+                }
+            }
+            ExprKind::Comma { lhs: _, rhs } => self.eval_double(rhs),
+            ExprKind::Cast { expr, .. } => {
+                if expr.ty.as_ref().is_some_and(|ty| ty.is_flonum()) {
+                    self.eval_double(expr)
+                } else {
+                    Ok(self.eval(expr)? as f64)
+                }
+            }
+            ExprKind::Num { fval, .. } => Ok(*fval),
             _ => self.bail_at(expr.location, "not a compile-time constant"),
         }
     }
