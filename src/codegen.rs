@@ -605,17 +605,19 @@ impl Codegen {
 
     fn type_id(&self, ty: &Type) -> usize {
         match ty {
-            Type::Bool => 0,
-            Type::Char => 0,
-            Type::Short => 1,
-            Type::Int => 2,
-            Type::Enum => 2,
-            Type::Long => 3,
-            Type::UChar => 4,
-            Type::UShort => 5,
-            Type::UInt => 6,
-            Type::ULong => 7,
-            _ => 7,
+            Type::Bool => 0,   // I8
+            Type::Char => 0,   // I8
+            Type::Short => 1,  // I16
+            Type::Int => 2,    // I32
+            Type::Enum => 2,   // I32
+            Type::Long => 3,   // I64
+            Type::UChar => 4,  // U8
+            Type::UShort => 5, // U16
+            Type::UInt => 6,   // U32
+            Type::ULong => 7,  // U64
+            Type::Float => 8,  // F32
+            Type::Double => 9, // F64
+            _ => 7,            // U64
         }
     }
 
@@ -635,91 +637,55 @@ impl Codegen {
         const I32U8: &str = "movzbl %al, %eax";
         const I32I16: &str = "movswl %ax, %eax";
         const I32U16: &str = "movzwl %ax, %eax";
+        const I32F32: &str = "cvtsi2ssl %eax, %xmm0";
         const I32I64: &str = "movslq %eax, %rax";
-        const U32I64: &str = "mov %eax, %eax";
+        const I32F64: &str = "cvtsi2sdl %eax, %xmm0";
 
-        const CAST_TABLE: [[Option<&str>; 8]; 8] = [
-            // i8  i16     i32   i64     u8      u16     u32   u64
-            [
-                None,
-                None,
-                None,
-                Some(I32I64),
-                Some(I32U8),
-                Some(I32U16),
-                None,
-                Some(I32I64),
-            ],
-            [
-                Some(I32I8),
-                None,
-                None,
-                Some(I32I64),
-                Some(I32U8),
-                Some(I32U16),
-                None,
-                Some(I32I64),
-            ],
-            [
-                Some(I32I8),
-                Some(I32I16),
-                None,
-                Some(I32I64),
-                Some(I32U8),
-                Some(I32U16),
-                None,
-                Some(I32I64),
-            ],
-            [
-                Some(I32I8),
-                Some(I32I16),
-                None,
-                None,
-                Some(I32U8),
-                Some(I32U16),
-                None,
-                None,
-            ],
-            [
-                Some(I32I8),
-                None,
-                None,
-                Some(I32I64),
-                None,
-                None,
-                None,
-                Some(I32I64),
-            ],
-            [
-                Some(I32I8),
-                Some(I32I16),
-                None,
-                Some(I32I64),
-                Some(I32U8),
-                None,
-                None,
-                Some(I32I64),
-            ],
-            [
-                Some(I32I8),
-                Some(I32I16),
-                None,
-                Some(U32I64),
-                Some(I32U8),
-                Some(I32U16),
-                None,
-                Some(U32I64),
-            ],
-            [
-                Some(I32I8),
-                Some(I32I16),
-                None,
-                None,
-                Some(I32U8),
-                Some(I32U16),
-                None,
-                None,
-            ],
+        const U32F32: &str = "mov %eax, %eax; cvtsi2ssq %rax, %xmm0";
+        const U32I64: &str = "mov %eax, %eax";
+        const U32F64: &str = "mov %eax, %eax; cvtsi2sdq %rax, %xmm0";
+
+        const I64F32: &str = "cvtsi2ssq %rax, %xmm0";
+        const I64F64: &str = "cvtsi2sdq %rax, %xmm0";
+
+        const U64F32: &str = "cvtsi2ssq %rax, %xmm0";
+        const U64F64: &str = "test %rax,%rax; js 1f; pxor %xmm0,%xmm0; cvtsi2sd %rax,%xmm0; jmp 2f; 1: mov %rax,%rdi; and $1,%eax; pxor %xmm0,%xmm0; shr %rdi; or %rax,%rdi; cvtsi2sd %rdi,%xmm0; addsd %xmm0,%xmm0; 2:";
+
+        const F32I8: &str = "cvttss2sil %xmm0, %eax; movsbl %al, %eax";
+        const F32U8: &str = "cvttss2sil %xmm0, %eax; movzbl %al, %eax";
+        const F32I16: &str = "cvttss2sil %xmm0, %eax; movswl %ax, %eax";
+        const F32U16: &str = "cvttss2sil %xmm0, %eax; movzwl %ax, %eax";
+        const F32I32: &str = "cvttss2sil %xmm0, %eax";
+        const F32U32: &str = "cvttss2siq %xmm0, %rax";
+        const F32I64: &str = "cvttss2siq %xmm0, %rax";
+        const F32U64: &str = "cvttss2siq %xmm0, %rax";
+        const F32F64: &str = "cvtss2sd %xmm0, %xmm0";
+
+        const F64I8: &str = "cvttsd2sil %xmm0, %eax; movsbl %al, %eax";
+        const F64U8: &str = "cvttsd2sil %xmm0, %eax; movzbl %al, %eax";
+        const F64I16: &str = "cvttsd2sil %xmm0, %eax; movswl %ax, %eax";
+        const F64U16: &str = "cvttsd2sil %xmm0, %eax; movzwl %ax, %eax";
+        const F64I32: &str = "cvttsd2sil %xmm0, %eax";
+        const F64U32: &str = "cvttsd2siq %xmm0, %rax";
+        const F64F32: &str = "cvtsd2ss %xmm0, %xmm0";
+        const F64I64: &str = "cvttsd2siq %xmm0, %rax";
+        const F64U64: &str = "cvttsd2siq %xmm0, %rax";
+
+        #[rustfmt::skip]
+        const CAST_TABLE: [[Option<&str>; 10]; 10] = [
+            // i8            i16            i32            i64            u8             u16            u32            u64            f32            f64
+            [None,          None,          None,          Some(I32I64),  Some(I32U8),   Some(I32U16),  None,          Some(I32I64),  Some(I32F32),  Some(I32F64)], // i8
+            [Some(I32I8),   None,          None,          Some(I32I64),  Some(I32U8),   Some(I32U16),  None,          Some(I32I64),  Some(I32F32),  Some(I32F64)], // i16
+            [Some(I32I8),   Some(I32I16),  None,          Some(I32I64),  Some(I32U8),   Some(I32U16),  None,          Some(I32I64),  Some(I32F32),  Some(I32F64)], // i32
+            [Some(I32I8),   Some(I32I16),  None,          None,          Some(I32U8),   Some(I32U16),  None,          None,          Some(I64F32),  Some(I64F64)], // i64
+
+            [Some(I32I8),   None,          None,          Some(I32I64),  None,          None,          None,          Some(I32I64),  Some(I32F32),  Some(I32F64)], // u8
+            [Some(I32I8),   Some(I32I16),  None,          Some(I32I64),  Some(I32U8),   None,          None,          Some(I32I64),  Some(I32F32),  Some(I32F64)], // u16
+            [Some(I32I8),   Some(I32I16),  None,          Some(U32I64),  Some(I32U8),   Some(I32U16),  None,          Some(U32I64),  Some(U32F32),  Some(U32F64)], // u32
+            [Some(I32I8),   Some(I32I16),  None,          None,          Some(I32U8),   Some(I32U16),  None,          None,          Some(U64F32),  Some(U64F64)], // u64
+
+            [Some(F32I8),   Some(F32I16),  Some(F32I32),  Some(F32I64),  Some(F32U8),   Some(F32U16),  Some(F32U32),  Some(F32U64),  None,          Some(F32F64)], // f32
+            [Some(F64I8),   Some(F64I16),  Some(F64I32),  Some(F64I64),  Some(F64U8),   Some(F64U16),  Some(F64U32),  Some(F64U64),  Some(F64F32),  None        ], // f64
         ];
 
         let t1 = self.type_id(from);
@@ -739,19 +705,27 @@ impl Codegen {
 
     fn load(&mut self, ty: Option<&crate::ast::Type>) {
         use crate::ast::Type;
-        // If it is an array, struct, or union, do not attempt to load a value to the
-        // register because in general we can't load an entire aggregate to a
-        // register. As a result, the result of an evaluation of an array/struct/union
-        // becomes not the value itself but the address.
-        // This is where "array is automatically converted to a pointer to
-        // the first element of the array in C" occurs.
-        if let Some(ty) = ty
-            && let Type::Array { .. } | Type::Struct { .. } | Type::Union { .. } = ty
-        {
-            return;
-        }
 
         if let Some(ty) = ty {
+            match ty {
+                // If it is an array, struct, or union, do not attempt to load a value to the
+                // register because in general we can't load an entire aggregate to a
+                // register. As a result, the result of an evaluation of an array/struct/union
+                // becomes not the value itself but the address.
+                // This is where "array is automatically converted to a pointer to
+                // the first element of the array in C" occurs.
+                Type::Array { .. } | Type::Struct { .. } | Type::Union { .. } => return,
+                Type::Float => {
+                    self.emit_line("  movss (%rax), %xmm0");
+                    return;
+                }
+                Type::Double => {
+                    self.emit_line("  movsd (%rax), %xmm0");
+                    return;
+                }
+                _ => {}
+            }
+
             match ty.size() {
                 1 => {
                     if ty.is_unsigned() {
@@ -786,6 +760,14 @@ impl Codegen {
                         self.emit_line(&format!("  mov {}(%rax), %r8b", i));
                         self.emit_line(&format!("  mov %r8b, {}(%rdi)", i));
                     }
+                    return;
+                }
+                Type::Float => {
+                    self.emit_line("  movss %xmm0, (%rdi)");
+                    return;
+                }
+                Type::Double => {
+                    self.emit_line("  movsd %xmm0, (%rdi)");
                     return;
                 }
                 _ => {}

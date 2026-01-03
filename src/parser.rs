@@ -141,6 +141,8 @@ impl<'a> Parser<'a> {
         const LONG_LONG: i32 = LONG + LONG;
         const LONG_LONG_INT: i32 = LONG + LONG + INT;
         const OTHER: i32 = 1 << 12;
+        const FLOAT: i32 = 1 << 16;
+        const DOUBLE: i32 = 1 << 18;
         const SIGNED: i32 = 1 << 13;
         const UNSIGNED: i32 = 1 << 14;
         const SIGNED_CHAR: i32 = SIGNED + CHAR;
@@ -258,6 +260,10 @@ impl<'a> Parser<'a> {
                 counter += INT;
             } else if self.consume_keyword(Keyword::Long) {
                 counter += LONG;
+            } else if self.consume_keyword(Keyword::Float) {
+                counter += FLOAT;
+            } else if self.consume_keyword(Keyword::Double) {
+                counter += DOUBLE;
             } else if self.consume_keyword(Keyword::Signed) {
                 counter |= SIGNED;
             } else if self.consume_keyword(Keyword::Unsigned) {
@@ -280,6 +286,8 @@ impl<'a> Parser<'a> {
                 UNSIGNED_LONG | UNSIGNED_LONG_INT | UNSIGNED_LONG_LONG | UNSIGNED_LONG_LONG_INT => {
                     Type::ULong
                 }
+                FLOAT => Type::Float,
+                DOUBLE => Type::Double,
                 _ => self.bail_at(location, "invalid type")?,
             };
         }
@@ -304,6 +312,8 @@ impl<'a> Parser<'a> {
                 | Keyword::Short
                 | Keyword::Int
                 | Keyword::Long
+                | Keyword::Float
+                | Keyword::Double
                 | Keyword::Struct
                 | Keyword::Union
                 | Keyword::Enum
