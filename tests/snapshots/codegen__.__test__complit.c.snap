@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "(int){1} => 1\n((int[]){0,1,2})[2] => 2\n((struct {char a; int b;}){'a', 3}).a => 97\n({ int x=3; (int){x}; }) => 3\ntree->val => 1\ntree->lhs->val => 2\ntree->lhs->lhs->val => 3\ntree->lhs->rhs->val => 4\nOK\n"
+status: 0

@@ -1425,10 +1425,19 @@ impl<'a> Parser<'a> {
 
     fn parse_cast(&mut self) -> CompileResult<Expr> {
         if self.check_punct(Punct::LParen) && self.is_typename_token(self.peek_n(1)) {
+            let start_pos = self.pos;
             self.expect_punct(Punct::LParen)?;
             let location = self.last_location();
             let ty = self.parse_typename()?;
             self.expect_punct(Punct::RParen)?;
+
+            // compound literal
+            if self.check_punct(Punct::LBrace) {
+                self.pos = start_pos;
+                return self.parse_unary();
+            }
+
+            // type cast
             let expr = self.parse_cast()?;
             return Ok(self.expr_at(
                 ExprKind::Cast {
@@ -1548,6 +1557,45 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_postfix(&mut self) -> CompileResult<Expr> {
+        // Compound literal: (typename) { initializer }
+        if self.check_punct(Punct::LParen) && self.is_typename_token(self.peek_n(1)) {
+            let location = self.peek().location;
+            self.expect_punct(Punct::LParen)?;
+            let ty = self.parse_typename()?;
+            self.expect_punct(Punct::RParen)?;
+
+            if self.scopes.len() == 1 {
+                // Global scope
+                let var_idx = self.new_anon_gvar(ty);
+                self.parse_gvar_initializer(var_idx)?;
+                return Ok(self.expr_at(
+                    ExprKind::Var {
+                        idx: var_idx,
+                        is_local: false,
+                    },
+                    location,
+                ));
+            }
+
+            // Local scope
+            let var_idx = self.new_lvar(String::new(), ty.clone());
+            let lhs = self.parse_lvar_initializer(var_idx, true, ty, location)?;
+            let rhs = self.expr_at(
+                ExprKind::Var {
+                    idx: var_idx,
+                    is_local: true,
+                },
+                location,
+            );
+            return Ok(self.expr_at(
+                ExprKind::Comma {
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            ));
+        }
+
         let mut expr = self.parse_primary()?;
 
         // Handle array subscript: x[y] is equivalent to *(x+y)
