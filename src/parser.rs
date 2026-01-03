@@ -362,16 +362,48 @@ impl<'a> Parser<'a> {
 
     fn is_function(&self) -> CompileResult<bool> {
         // Look ahead to see if this is a function or variable declaration
-        // A function has '(' after the identifier, a variable has '=', ',' or ';'
+        // Need to find the identifier first, then check what follows it
         let mut pos = self.pos;
+        let mut paren_depth = 0;
+        let mut bracket_depth = 0;
 
-        // Skip past the declarator to find LParen (function) or assign/semicolon/comma (variable)
+        // Skip pointer stars and parentheses to find the identifier
         while pos < self.tokens.len() {
             match &self.tokens[pos].kind {
-                TokenKind::Punct(Punct::LParen) => return Ok(true),
-                TokenKind::Punct(Punct::Assign)
-                | TokenKind::Punct(Punct::Semicolon)
-                | TokenKind::Punct(Punct::Comma) => {
+                TokenKind::Punct(Punct::Star) => pos += 1,
+                TokenKind::Punct(Punct::LParen) => {
+                    paren_depth += 1;
+                    pos += 1;
+                }
+                TokenKind::Punct(Punct::RParen) => {
+                    paren_depth -= 1;
+                    pos += 1;
+                }
+                TokenKind::Ident(_) if paren_depth == 0 => {
+                    // Found the identifier at top level, check what follows
+                    pos += 1;
+                    // Now see what comes after the identifier
+                    while pos < self.tokens.len() {
+                        match &self.tokens[pos].kind {
+                            TokenKind::Punct(Punct::LParen) if bracket_depth == 0 => {
+                                return Ok(true);
+                            }
+                            TokenKind::Punct(Punct::LBracket) => {
+                                bracket_depth += 1;
+                                pos += 1;
+                            }
+                            TokenKind::Punct(Punct::RBracket) => {
+                                bracket_depth -= 1;
+                                pos += 1;
+                            }
+                            TokenKind::Punct(Punct::Assign)
+                            | TokenKind::Punct(Punct::Semicolon)
+                            | TokenKind::Punct(Punct::Comma) => {
+                                return Ok(false);
+                            }
+                            _ => pos += 1,
+                        }
+                    }
                     return Ok(false);
                 }
                 _ => pos += 1,
