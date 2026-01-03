@@ -185,6 +185,7 @@ pub struct Obj {
     pub params: Vec<Obj>,
     pub body: Vec<Stmt>,
     pub locals: Vec<Obj>,
+    pub va_area: Option<usize>,
     pub stack_size: i32,
 }
 

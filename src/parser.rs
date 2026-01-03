@@ -352,6 +352,13 @@ impl<'a> Parser<'a> {
         let prev_return = self.current_fn_return.clone();
         self.current_fn_return = Some(basety.clone());
 
+        // Create __va_area__ for variadic functions
+        let va_area_idx = if is_variadic {
+            Some(self.new_lvar("__va_area__".to_string(), Type::array(Type::Char, 136)))
+        } else {
+            None
+        };
+
         self.expect_punct(Punct::LBrace)?;
 
         let mut body = self.parse_block_items()?;
@@ -381,6 +388,7 @@ impl<'a> Parser<'a> {
             params,
             body,
             locals,
+            va_area_idx,
             stack_size,
             attr.is_static,
         );
@@ -2147,6 +2155,7 @@ impl<'a> Parser<'a> {
         params: Vec<Obj>,
         body: Vec<Stmt>,
         locals: Vec<Obj>,
+        va_area: Option<usize>,
         stack_size: i32,
         is_static: bool,
     ) {
@@ -2159,6 +2168,7 @@ impl<'a> Parser<'a> {
             params,
             body,
             locals,
+            va_area,
             stack_size,
             ..Default::default()
         });

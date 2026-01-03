@@ -109,6 +109,35 @@ impl Codegen {
         self.emit_line("  mov %rsp, %rbp");
         self.emit_line(&format!("  sub ${}, %rsp", function.stack_size));
 
+        // Save arg registers if function is variadic
+        if let Some(va_area_idx) = function.va_area {
+            let gp = function.params.len();
+            let va_area = &function.locals[va_area_idx];
+            let off = va_area.offset;
+
+            // va_elem
+            self.emit_line(&format!("  movl ${}, {}(%rbp)", gp * 8, off));
+            self.emit_line(&format!("  movl $0, {}(%rbp)", off + 4));
+            self.emit_line(&format!("  movq %rbp, {}(%rbp)", off + 16));
+            self.emit_line(&format!("  addq ${}, {}(%rbp)", off + 24, off + 16));
+
+            // __reg_save_area__
+            self.emit_line(&format!("  movq %rdi, {}(%rbp)", off + 24));
+            self.emit_line(&format!("  movq %rsi, {}(%rbp)", off + 32));
+            self.emit_line(&format!("  movq %rdx, {}(%rbp)", off + 40));
+            self.emit_line(&format!("  movq %rcx, {}(%rbp)", off + 48));
+            self.emit_line(&format!("  movq %r8, {}(%rbp)", off + 56));
+            self.emit_line(&format!("  movq %r9, {}(%rbp)", off + 64));
+            self.emit_line(&format!("  movsd %xmm0, {}(%rbp)", off + 72));
+            self.emit_line(&format!("  movsd %xmm1, {}(%rbp)", off + 80));
+            self.emit_line(&format!("  movsd %xmm2, {}(%rbp)", off + 88));
+            self.emit_line(&format!("  movsd %xmm3, {}(%rbp)", off + 96));
+            self.emit_line(&format!("  movsd %xmm4, {}(%rbp)", off + 104));
+            self.emit_line(&format!("  movsd %xmm5, {}(%rbp)", off + 112));
+            self.emit_line(&format!("  movsd %xmm6, {}(%rbp)", off + 120));
+            self.emit_line(&format!("  movsd %xmm7, {}(%rbp)", off + 128));
+        }
+
         // Save passed-by-register arguments to the stack
         for (i, param) in function.params.iter().enumerate() {
             self.store_gp(i, param.offset, param.ty.size());
