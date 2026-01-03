@@ -1665,10 +1665,22 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(Keyword::Alignof) => {
                 let location = token.location;
                 self.pos += 1;
-                self.expect_punct(Punct::LParen)?;
-                let ty = self.parse_typename()?;
-                self.expect_punct(Punct::RParen)?;
-                Ok(self.expr_at(ExprKind::Num(ty.align() as i64), location))
+
+                // Check if it's _Alignof(typename)
+                if matches!(self.peek().kind, TokenKind::Punct(Punct::LParen))
+                    && self.is_typename_token(self.peek_n(1))
+                {
+                    self.expect_punct(Punct::LParen)?;
+                    let ty = self.parse_typename()?;
+                    self.expect_punct(Punct::RParen)?;
+                    return Ok(self.expr_at(ExprKind::Num(ty.align() as i64), location));
+                }
+
+                // Otherwise, parse as _Alignof unary (GNU extension)
+                let mut expr = self.parse_unary()?;
+                self.add_type_expr(&mut expr)?;
+                let align = expr.ty.as_ref().map(|ty| ty.align()).unwrap_or(1);
+                Ok(self.expr_at(ExprKind::Num(align), location))
             }
             TokenKind::Ident(ref name) => {
                 if matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LParen)) {
