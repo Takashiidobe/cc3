@@ -276,16 +276,23 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             // If starts with '.', it's a float
             if b == b'.' {
                 let float_str = &input[start..];
-                let end_idx = float_str
-                    .char_indices()
-                    .find(|(_, c)| {
-                        !matches!(
-                            c,
-                            '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | 'f' | 'F' | 'l' | 'L'
-                        )
-                    })
-                    .map(|(idx, _)| idx)
-                    .unwrap_or(float_str.len());
+                let mut end_idx = 0;
+                let mut prev_char = '\0';
+                for (idx, c) in float_str.char_indices() {
+                    // Allow '+' or '-' only immediately after 'e', 'E', 'p', or 'P'
+                    if matches!(c, '+' | '-') {
+                        if !matches!(prev_char, 'e' | 'E' | 'p' | 'P') {
+                            break;
+                        }
+                    } else if !matches!(c, '0'..='9' | '.' | 'e' | 'E' | 'f' | 'F' | 'l' | 'L') {
+                        break;
+                    }
+                    end_idx = idx + c.len_utf8();
+                    prev_char = c;
+                }
+                if end_idx == 0 {
+                    end_idx = float_str.len();
+                }
 
                 let float_literal = &float_str[..end_idx];
                 let mut parse_str = float_literal;
@@ -422,11 +429,24 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             if matches!(next_char, '.' | 'e' | 'E' | 'f' | 'F') {
                 // Parse as floating-point
                 let float_str = &input[start..];
-                let end_idx = float_str
-                    .char_indices()
-                    .find(|(_, c)| !matches!(c, '0'..='9' | '.' | 'e' | 'E' | '+' | '-' | 'f' | 'F' | 'l' | 'L' | 'p' | 'P' | 'x' | 'X' | 'a'..='d' | 'A'..='D'))
-                    .map(|(idx, _)| idx)
-                    .unwrap_or(float_str.len());
+                let mut end_idx = 0;
+                let mut prev_char = '\0';
+                for (idx, c) in float_str.char_indices() {
+                    // Allow '+' or '-' only immediately after 'e', 'E', 'p', or 'P'
+                    if matches!(c, '+' | '-') {
+                        if !matches!(prev_char, 'e' | 'E' | 'p' | 'P') {
+                            break;
+                        }
+                    } else if !matches!(c, '0'..='9' | '.' | 'e' | 'E' | 'f' | 'F' | 'l' | 'L' | 'p' | 'P' | 'x' | 'X' | 'a'..='d' | 'A'..='D')
+                    {
+                        break;
+                    }
+                    end_idx = idx + c.len_utf8();
+                    prev_char = c;
+                }
+                if end_idx == 0 {
+                    end_idx = float_str.len();
+                }
 
                 let float_literal = &float_str[..end_idx];
                 let mut parse_str = float_literal;

@@ -2545,7 +2545,7 @@ impl<'a> Parser<'a> {
         let mut lhs_ty = lhs.ty.clone().unwrap_or(Type::Int);
         let mut rhs_ty = rhs.ty.clone().unwrap_or(Type::Int);
 
-        if lhs_ty.is_integer() && rhs_ty.is_integer() {
+        if lhs_ty.is_numeric() && rhs_ty.is_numeric() {
             return Ok(self.expr_at(
                 ExprKind::Binary {
                     op: BinaryOp::Add,
@@ -2610,7 +2610,7 @@ impl<'a> Parser<'a> {
         let lhs_ty = lhs.ty.clone().unwrap_or(Type::Int);
         let rhs_ty = rhs.ty.clone().unwrap_or(Type::Int);
 
-        if lhs_ty.is_integer() && rhs_ty.is_integer() {
+        if lhs_ty.is_numeric() && rhs_ty.is_numeric() {
             return Ok(self.expr_at(
                 ExprKind::Binary {
                     op: BinaryOp::Sub,

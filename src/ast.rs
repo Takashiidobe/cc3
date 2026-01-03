@@ -394,6 +394,10 @@ impl Type {
         matches!(self, Type::Float | Type::Double)
     }
 
+    pub fn is_numeric(&self) -> bool {
+        self.is_integer() || self.is_flonum()
+    }
+
     pub fn incomplete_struct(tag: Option<String>) -> Type {
         Type::Struct {
             members: Vec::new(),

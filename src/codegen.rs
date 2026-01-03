@@ -376,7 +376,24 @@ impl Codegen {
                 self.gen_expr(expr, function, globals);
                 match op {
                     UnaryOp::Neg => {
-                        self.emit_line("  neg %rax");
+                        let ty = expr.ty.as_ref().unwrap_or(&Type::Int);
+                        match ty {
+                            Type::Float => {
+                                self.emit_line("  mov $1, %rax");
+                                self.emit_line("  shl $31, %rax");
+                                self.emit_line("  movq %rax, %xmm1");
+                                self.emit_line("  xorps %xmm1, %xmm0");
+                            }
+                            Type::Double => {
+                                self.emit_line("  mov $1, %rax");
+                                self.emit_line("  shl $63, %rax");
+                                self.emit_line("  movq %rax, %xmm1");
+                                self.emit_line("  xorpd %xmm1, %xmm0");
+                            }
+                            _ => {
+                                self.emit_line("  neg %rax");
+                            }
+                        }
                     }
                     UnaryOp::Not => {
                         self.emit_line("  cmp $0, %rax");
@@ -512,10 +529,17 @@ impl Codegen {
                     return;
                 }
 
-                // Handle floating-point comparisons
+                // Handle floating-point operations
                 if matches!(
                     op,
-                    BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le
+                    BinaryOp::Add
+                        | BinaryOp::Sub
+                        | BinaryOp::Mul
+                        | BinaryOp::Div
+                        | BinaryOp::Eq
+                        | BinaryOp::Ne
+                        | BinaryOp::Lt
+                        | BinaryOp::Le
                 ) {
                     let lhs_ty = lhs.ty.as_ref().unwrap_or(&Type::Int);
                     if matches!(lhs_ty, Type::Float | Type::Double) {
@@ -529,6 +553,26 @@ impl Codegen {
                         } else {
                             "sd"
                         };
+
+                        match op {
+                            BinaryOp::Add => {
+                                self.emit_line(&format!("  add{} %xmm1, %xmm0", sz));
+                                return;
+                            }
+                            BinaryOp::Sub => {
+                                self.emit_line(&format!("  sub{} %xmm1, %xmm0", sz));
+                                return;
+                            }
+                            BinaryOp::Mul => {
+                                self.emit_line(&format!("  mul{} %xmm1, %xmm0", sz));
+                                return;
+                            }
+                            BinaryOp::Div => {
+                                self.emit_line(&format!("  div{} %xmm1, %xmm0", sz));
+                                return;
+                            }
+                            _ => {}
+                        }
 
                         self.emit_line(&format!("  ucomi{} %xmm0, %xmm1", sz));
 
