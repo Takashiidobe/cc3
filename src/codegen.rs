@@ -12,6 +12,7 @@ pub struct Codegen {
     current_fn: Option<String>,
     break_stack: Vec<String>,
     continue_stack: Vec<String>,
+    depth: usize,
 }
 
 impl Codegen {
@@ -129,6 +130,16 @@ impl Codegen {
     fn emit_line(&mut self, line: &str) {
         self.buffer.push_str(line);
         self.buffer.push('\n');
+    }
+
+    fn push(&mut self) {
+        self.emit_line("  push %rax");
+        self.depth += 1;
+    }
+
+    fn pop(&mut self, reg: &str) {
+        self.emit_line(&format!("  pop {}", reg));
+        self.depth -= 1;
     }
 
     fn label_symbol(&self, function: &Obj, label: &str) -> String {
@@ -325,14 +336,21 @@ impl Codegen {
                 let mut nargs = 0;
                 for arg in args {
                     self.gen_expr(arg, function, globals);
-                    self.emit_line("  push %rax");
+                    self.push();
                     nargs += 1;
                 }
                 for i in (0..nargs).rev() {
-                    self.emit_line(&format!("  pop {}", ARG_REGS_64[i]));
+                    self.pop(ARG_REGS_64[i]);
                 }
                 self.emit_line("  mov $0, %rax");
-                self.emit_line(&format!("  call {}", name));
+
+                if self.depth.is_multiple_of(2) {
+                    self.emit_line(&format!("  call {}", name));
+                } else {
+                    self.emit_line("  sub $8, %rsp");
+                    self.emit_line(&format!("  call {}", name));
+                    self.emit_line("  add $8, %rsp");
+                }
             }
             ExprKind::Addr(expr) => {
                 self.gen_lvalue(expr, function, globals);
@@ -356,7 +374,7 @@ impl Codegen {
             }
             ExprKind::Assign { lhs, rhs } => {
                 self.gen_lvalue(lhs, function, globals);
-                self.emit_line("  push %rax");
+                self.push();
                 self.gen_expr(rhs, function, globals);
                 self.store(expr.ty.as_ref());
             }
@@ -411,9 +429,9 @@ impl Codegen {
 
                 // Handle other binary operators
                 self.gen_expr(rhs, function, globals);
-                self.emit_line("  push %rax");
+                self.push();
                 self.gen_expr(lhs, function, globals);
-                self.emit_line("  pop %rdi");
+                self.pop("%rdi");
                 let lhs_ty = lhs.ty.as_ref().unwrap_or(&Type::Int);
                 let rhs_ty = rhs.ty.as_ref().unwrap_or(&Type::Int);
                 let use_64 = matches!(lhs_ty, Type::Long | Type::Ptr(_) | Type::Array { .. })
@@ -556,7 +574,7 @@ impl Codegen {
 
     fn store(&mut self, ty: Option<&crate::ast::Type>) {
         use crate::ast::Type;
-        self.emit_line("  pop %rdi");
+        self.pop("%rdi");
 
         // For struct/union, copy bytes one by one
         if let Some(ty) = ty {
