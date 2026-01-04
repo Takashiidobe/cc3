@@ -769,6 +769,35 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
             continue;
         }
 
+        if b == b'L' && i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+            let start = i;
+            let location = SourceLocation {
+                line,
+                column,
+                byte: start,
+                file_no,
+            };
+            let (value, end) = read_char_literal(bytes, start, start + 1, location)?;
+            tokens.push(Token {
+                kind: TokenKind::Num {
+                    value,
+                    fval: 0.0,
+                    ty: Type::Int,
+                },
+                location,
+                at_bol,
+                has_space,
+                len: end - start,
+                hideset: HideSet::default(),
+                origin: None,
+            });
+            at_bol = false;
+            has_space = false;
+            i = end;
+            column += i - start;
+            continue;
+        }
+
         if is_ident_start(b) {
             let start = i;
             let location = SourceLocation {
@@ -893,27 +922,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 byte: start,
                 file_no,
             };
-            i += 1;
-            if i >= bytes.len() {
-                return Err(CompileError::at("unclosed char literal", location));
-            }
-
-            let value = if bytes[i] == b'\\' {
-                let mut escaped_pos = i + 1;
-                let escaped = read_escaped_char(bytes, &mut escaped_pos, location)?;
-                i = escaped_pos;
-                escaped as i8 as i64
-            } else {
-                let escaped = bytes[i];
-                i += 1;
-                escaped as i8 as i64
-            };
-
-            if i >= bytes.len() || bytes[i] != b'\'' {
-                return Err(CompileError::at("unclosed char literal", location));
-            }
-            i += 1;
-
+            let (value, end) = read_char_literal(bytes, start, start, location)?;
             tokens.push(Token {
                 kind: TokenKind::Num {
                     value,
@@ -923,12 +932,13 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 location,
                 at_bol,
                 has_space,
-                len: i - start,
+                len: end - start,
                 hideset: HideSet::default(),
                 origin: None,
             });
             at_bol = false;
             has_space = false;
+            i = end;
             column += i - start;
             continue;
         }
@@ -1029,6 +1039,36 @@ fn read_escaped_char(input: &[u8], pos: &mut usize, location: SourceLocation) ->
         b'e' => 27,
         _ => b,
     })
+}
+
+fn read_char_literal(
+    input: &[u8],
+    _start: usize,
+    quote: usize,
+    location: SourceLocation,
+) -> CompileResult<(i64, usize)> {
+    let mut i = quote + 1;
+    if i >= input.len() {
+        return Err(CompileError::at("unclosed char literal", location));
+    }
+
+    let value = if input[i] == b'\\' {
+        let mut escaped_pos = i + 1;
+        let escaped = read_escaped_char(input, &mut escaped_pos, location)?;
+        i = escaped_pos;
+        escaped as i8 as i64
+    } else {
+        let escaped = input[i];
+        i += 1;
+        escaped as i8 as i64
+    };
+
+    if i >= input.len() || input[i] != b'\'' {
+        return Err(CompileError::at("unclosed char literal", location));
+    }
+    i += 1;
+
+    Ok((value, i))
 }
 
 fn string_literal_end(

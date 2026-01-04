@@ -4,6 +4,8 @@ int main() {
   ASSERT(97, 'a');
   ASSERT(10, '\n');
   ASSERT(-128, '\x80');
+  ASSERT(4, sizeof(L'\0'));
+  ASSERT(97, L'a');
 
   ASSERT(511, 0777);
   ASSERT(0, 0x0);
