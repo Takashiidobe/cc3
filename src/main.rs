@@ -17,15 +17,21 @@ struct Args {
     /// Run cc1 (compiler proper).
     #[arg(long = "cc1", action = clap::ArgAction::SetTrue, hide = true)]
     cc1: bool,
+    /// Input for cc1 mode.
+    #[arg(long = "cc1-input", hide = true)]
+    cc1_input: Option<PathBuf>,
+    /// Output for cc1 mode.
+    #[arg(long = "cc1-output", hide = true)]
+    cc1_output: Option<PathBuf>,
     /// Print subprocess command lines.
     #[arg(long = "hash-hash-hash", action = clap::ArgAction::SetTrue, hide = true)]
     hash_hash_hash: bool,
     /// Emit assembly instead of object code.
     #[arg(short = 'S', action = clap::ArgAction::SetTrue)]
     emit_asm: bool,
-    /// Input C source file.
-    input: PathBuf,
-    /// Output assembly file. Writes to stdout if omitted.
+    /// Input C source file(s).
+    inputs: Vec<PathBuf>,
+    /// Output file. Writes to stdout if omitted in cc1 mode.
     #[arg(short = 'o', long = "output")]
     output: Option<PathBuf>,
 }
@@ -35,8 +41,20 @@ fn main() {
     let args = Args::parse_from(preprocess_args(&raw_args));
 
     if args.cc1 {
-        if let Err(err) = run_cc1(&args) {
-            eprintln!("{}", format_diagnostic(&err, args.input.as_path()));
+        let input = match args.cc1_input.as_ref().or_else(|| args.inputs.first()) {
+            Some(path) => path,
+            None => {
+                eprintln!("error: no input files");
+                std::process::exit(1);
+            }
+        };
+        let output = args
+            .cc1_output
+            .as_ref()
+            .or(args.output.as_ref())
+            .map(|path| path.as_path());
+        if let Err(err) = run_cc1(input, output) {
+            eprintln!("{}", format_diagnostic(&err, input.as_path()));
             std::process::exit(1);
         }
         return;
@@ -52,6 +70,8 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
     args.iter()
         .map(|arg| match arg.as_str() {
             "-cc1" => "--cc1".to_string(),
+            "-cc1-input" => "--cc1-input".to_string(),
+            "-cc1-output" => "--cc1-output".to_string(),
             "-###" => "--hash-hash-hash".to_string(),
             _ => arg.clone(),
         })
@@ -71,62 +91,74 @@ fn run_subprocess(argv: &[String], show_cmd: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn run_cc1_subprocess(input: &Path, output: &Path, show_cmd: bool) -> io::Result<()> {
+fn run_cc1_subprocess(input: &Path, output: Option<&Path>, show_cmd: bool) -> io::Result<()> {
     let exe = std::env::args()
         .next()
         .ok_or_else(|| io::Error::other("missing argv[0]"))?;
-    let argv = vec![
-        exe,
-        "-cc1".to_string(),
-        input.display().to_string(),
-        "-o".to_string(),
-        output.display().to_string(),
-    ];
+    let mut argv = vec![exe, "-cc1".to_string()];
+    argv.push("-cc1-input".to_string());
+    argv.push(input.display().to_string());
+    if let Some(output) = output {
+        argv.push("-cc1-output".to_string());
+        argv.push(output.display().to_string());
+    }
     run_subprocess(&argv, show_cmd)
 }
 
-fn run_cc1(args: &Args) -> CompileResult<()> {
-    let source = fs::read_to_string(&args.input).map_err(|err| {
-        CompileError::new(format!("failed to read {}: {err}", args.input.display()))
-    })?;
+fn run_cc1(input: &Path, output: Option<&Path>) -> CompileResult<()> {
+    let source = fs::read_to_string(input)
+        .map_err(|err| CompileError::new(format!("failed to read {}: {err}", input.display())))?;
 
     let tokens = lexer::tokenize(&source)?;
     let program = parser::parse(&tokens)?;
-    let mut asm = format!(".file 1 \"{}\"\n", args.input.display());
+    let mut asm = format!(".file 1 \"{}\"\n", input.display());
     asm.push_str(&codegen::Codegen::new().generate(&program));
 
-    match &args.output {
-        Some(path) => {
-            fs::write(path, asm).map_err(|err| {
-                CompileError::new(format!("failed to write {}: {err}", path.display()))
-            })?;
-        }
-        None => {
-            let mut stdout = io::stdout();
-            use io::Write;
-            stdout
-                .write_all(asm.as_bytes())
-                .map_err(|err| CompileError::new(format!("failed to write stdout: {err}")))?;
-        }
+    if let Some(path) = output {
+        fs::write(path, asm).map_err(|err| {
+            CompileError::new(format!("failed to write {}: {err}", path.display()))
+        })?;
+    } else {
+        let mut stdout = io::stdout();
+        use io::Write;
+        stdout
+            .write_all(asm.as_bytes())
+            .map_err(|err| CompileError::new(format!("failed to write stdout: {err}")))?;
     }
 
     Ok(())
 }
 
 fn run_driver(args: &Args) -> io::Result<()> {
-    let output = match &args.output {
-        Some(path) => path.clone(),
-        None => replace_ext(&args.input, if args.emit_asm { ".s" } else { ".o" }),
-    };
-
-    if args.emit_asm {
-        return run_cc1_subprocess(&args.input, &output, args.hash_hash_hash);
+    if args.inputs.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "no input files",
+        ));
+    }
+    if args.inputs.len() > 1 && args.output.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cannot specify '-o' with multiple files",
+        ));
     }
 
-    let tmp_asm = create_tmpfile("cc3", ".s")?;
-    run_cc1_subprocess(&args.input, &tmp_asm, args.hash_hash_hash)?;
-    assemble(&tmp_asm, &output, args.hash_hash_hash)?;
-    let _ = fs::remove_file(&tmp_asm);
+    for input in &args.inputs {
+        let output = match &args.output {
+            Some(path) => path.clone(),
+            None => replace_ext(input, if args.emit_asm { ".s" } else { ".o" }),
+        };
+
+        if args.emit_asm {
+            run_cc1_subprocess(input, Some(&output), args.hash_hash_hash)?;
+            continue;
+        }
+
+        let tmp_asm = create_tmpfile("cc3", ".s")?;
+        run_cc1_subprocess(input, Some(&tmp_asm), args.hash_hash_hash)?;
+        assemble(&tmp_asm, &output, args.hash_hash_hash)?;
+        let _ = fs::remove_file(&tmp_asm);
+    }
     Ok(())
 }
 
