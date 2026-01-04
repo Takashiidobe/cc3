@@ -194,6 +194,8 @@ impl Codegen {
             // va_elem
             self.emit_line(&format!("  movl ${}, {}(%rbp)", gp * 8, off));
             self.emit_line(&format!("  movl ${}, {}(%rbp)", fp * 8 + 48, off + 4));
+            self.emit_line(&format!("  movq %rbp, {}(%rbp)", off + 8));
+            self.emit_line(&format!("  addq $16, {}(%rbp)", off + 8));
             self.emit_line(&format!("  movq %rbp, {}(%rbp)", off + 16));
             self.emit_line(&format!("  addq ${}, {}(%rbp)", off + 24, off + 16));
 
