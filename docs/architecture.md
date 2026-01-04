@@ -12,6 +12,7 @@ For now, there are 6 files:
 - `src/parser.rs` defines the recursive descent parser, with the
   entrypoint of `parse_program`.
 - `src/codegen.rs` visits every ast node and generates code from it.
+- `src/preprocessor.rs` implements the preprocessor.
 
 ## Testing
 

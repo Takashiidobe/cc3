@@ -21,10 +21,9 @@
 // which is used as a basis for the standard's wording:
 // https://github.com/rui314/chibicc/wiki/cpp.algo.pdf
 
-use crate::error::{CompileError, CompileResult};
-use crate::lexer::{Punct, Token, TokenKind, get_input_file, tokenize_file};
+use crate::error::{CompileError, CompileResult, SourceLocation};
+use crate::lexer::{HideSet, Punct, Token, TokenKind, get_input_file, tokenize_file};
 use crate::parser::const_expr;
-use std::collections::HashSet;
 use std::path::Path;
 
 #[derive(Clone, Debug)]
@@ -38,7 +37,7 @@ struct MacroArg {
     tokens: Vec<Token>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 struct Macro {
     name: String,
     is_objlike: bool, // Object-like or function-like
@@ -76,6 +75,18 @@ impl Preprocessor {
         }
     }
 
+    fn peek(&self, offset: usize) -> &Token {
+        &self.tokens[self.pos + offset]
+    }
+
+    fn cur_tok(&self) -> &Token {
+        &self.tokens[self.pos]
+    }
+
+    fn error<T>(&self, message: impl Into<String>, location: SourceLocation) -> CompileResult<T> {
+        Err(CompileError::at(message, location))
+    }
+
     fn find_macro(&self, tok: &Token) -> Option<&Macro> {
         let TokenKind::Ident(name) = &tok.kind else {
             return None;
@@ -83,275 +94,304 @@ impl Preprocessor {
         self.macros.iter().find(|m| &m.name == name && !m.deleted)
     }
 
-    fn add_macro(
-        &mut self,
-        name: String,
-        is_objlike: bool,
-        params: Vec<MacroParam>,
-        body: Vec<Token>,
-        deleted: bool,
-    ) {
-        self.macros.push(Macro {
-            name,
-            is_objlike,
-            params,
-            body,
-            deleted,
-        });
-    }
-
-    fn read_macro_params(&self, tokens: &[Token], mut idx: usize) -> (Vec<MacroParam>, usize) {
+    fn read_macro_params(&mut self) -> Vec<MacroParam> {
         let mut params = Vec::new();
 
-        while idx < tokens.len() && !matches!(tokens[idx].kind, TokenKind::Punct(Punct::RParen)) {
+        while self.pos < self.tokens.len()
+            && !matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))
+        {
             if !params.is_empty() {
                 // Expect comma between parameters
-                if !matches!(tokens[idx].kind, TokenKind::Punct(Punct::Comma)) {
+                if !matches!(self.cur_tok().kind, TokenKind::Punct(Punct::Comma)) {
                     // Error: expected comma
                     break;
                 }
-                idx += 1;
+                self.pos += 1;
             }
 
             // Expect identifier
-            let TokenKind::Ident(name) = &tokens[idx].kind else {
+            let TokenKind::Ident(name) = &self.cur_tok().kind else {
                 // Error: expected identifier
                 break;
             };
             params.push(MacroParam { name: name.clone() });
-            idx += 1;
+            self.pos += 1;
         }
 
         // Skip the closing ')'
-        if idx < tokens.len() && matches!(tokens[idx].kind, TokenKind::Punct(Punct::RParen)) {
-            idx += 1;
+        if self.pos < self.tokens.len()
+            && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))
+        {
+            self.pos += 1;
         }
 
-        (params, idx)
+        params
     }
 
-    fn read_macro_definition(&mut self, tokens: &[Token], idx: usize) -> usize {
-        let tok = &tokens[idx];
+    fn read_macro_definition(&mut self) {
+        if self.pos >= self.tokens.len() {
+            return;
+        };
+        let tok = self.cur_tok();
         let TokenKind::Ident(name) = &tok.kind else {
             // Error: macro name must be an identifier (would need error handling)
-            return idx;
+            return;
         };
         let macro_name = name.clone();
-        let mut i = idx + 1;
+        self.pos += 1;
 
         // Check if this is a function-like macro (no space before '(')
-        if i < tokens.len()
-            && !tokens[i].has_space
-            && matches!(&tokens[i].kind, TokenKind::Punct(Punct::LParen))
+        if self.pos < self.tokens.len()
+            && !self.cur_tok().has_space
+            && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::LParen))
         {
             // Function-like macro - read parameters
-            i += 1; // skip '('
-            let (params, param_end) = self.read_macro_params(tokens, i);
-            let (body, rest_idx) = self.copy_line(param_end);
-            self.add_macro(macro_name, false, params, body, false);
-            rest_idx
-        } else {
-            // Object-like macro
-            let (body, rest_idx) = self.copy_line(i);
-            self.add_macro(macro_name, true, Vec::new(), body, false);
-            rest_idx
+            self.pos += 1; // skip '('
+            let params = self.read_macro_params();
+            let body = self.copy_line();
+            self.macros.push(Macro {
+                name: macro_name,
+                is_objlike: false,
+                params,
+                body,
+                ..Macro::default()
+            });
+            return;
         }
+
+        // Object-like macro
+        let body = self.copy_line();
+        self.macros.push(Macro {
+            name: macro_name,
+            is_objlike: true,
+            body,
+            ..Macro::default()
+        });
     }
 
-    fn read_macro_arg_one(&self, tokens: &[Token], mut idx: usize) -> (Vec<Token>, usize) {
+    fn read_macro_arg_one(&mut self) -> Vec<Token> {
         let mut arg_tokens = Vec::new();
 
-        while idx < tokens.len()
-            && !matches!(tokens[idx].kind, TokenKind::Punct(Punct::Comma))
-            && !matches!(tokens[idx].kind, TokenKind::Punct(Punct::RParen))
+        while self.pos < self.tokens.len()
+            && !matches!(self.cur_tok().kind, TokenKind::Punct(Punct::Comma))
+            && !matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))
         {
-            if matches!(tokens[idx].kind, TokenKind::Eof) {
+            if matches!(self.cur_tok().kind, TokenKind::Eof) {
                 // Error: premature end of input
                 break;
             }
-            arg_tokens.push(tokens[idx].clone());
-            idx += 1;
+            arg_tokens.push(self.cur_tok().clone());
+            self.pos += 1;
         }
 
-        arg_tokens.push(new_eof(tokens.get(idx).or_else(|| tokens.last()).unwrap()));
-        (arg_tokens, idx)
+        let eof_source = self
+            .tokens
+            .get(self.pos)
+            .or_else(|| self.tokens.last())
+            .expect("tokens");
+        arg_tokens.push(new_eof(eof_source));
+        arg_tokens
     }
 
-    fn read_macro_args(
-        &self,
-        tokens: &[Token],
-        idx: usize,
-        params: &[MacroParam],
-    ) -> (Vec<MacroArg>, usize) {
-        // idx should be pointing at the macro name, next should be '('
-        let mut i = idx + 2; // skip macro name and '('
+    fn read_macro_args(&mut self, params: &[MacroParam]) -> Vec<MacroArg> {
+        // self.pos should be pointing at the macro name, next should be '('
+        self.pos += 2; // skip macro name and '('
         let mut args = Vec::new();
 
         for param in params {
             if !args.is_empty() {
                 // Expect comma between arguments
-                if i < tokens.len() && matches!(tokens[i].kind, TokenKind::Punct(Punct::Comma)) {
-                    i += 1;
+                if self.pos < self.tokens.len()
+                    && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::Comma))
+                {
+                    self.pos += 1;
                 }
             }
 
-            let (arg_tokens, next_idx) = self.read_macro_arg_one(tokens, i);
+            let arg_tokens = self.read_macro_arg_one();
             args.push(MacroArg {
                 name: param.name.clone(),
                 tokens: arg_tokens,
             });
-            i = next_idx;
         }
 
         // Skip the closing ')'
-        if i < tokens.len() && matches!(tokens[i].kind, TokenKind::Punct(Punct::RParen)) {
-            i += 1;
+        if self.pos < self.tokens.len()
+            && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))
+        {
+            self.pos += 1;
         }
 
-        (args, i)
+        args
     }
 
-    fn expand_macro(&self, tokens: &[Token], idx: usize) -> Option<Vec<Token>> {
-        let tok = &tokens[idx];
+    fn expand_macro(&mut self) -> Option<Vec<Token>> {
+        let tok = self.cur_tok().clone();
 
         // Check if this macro is in the token's hideset
         let TokenKind::Ident(name) = &tok.kind else {
             return None;
         };
-        if hideset_contains(&tok.hideset, name) {
+        if tok.hideset.contains(name) {
             return None;
         }
 
-        let m = self.find_macro(tok)?;
+        let (is_objlike, params, body, macro_name) = {
+            let m = self.find_macro(&tok)?;
+            (
+                m.is_objlike,
+                m.params.clone(),
+                m.body.clone(),
+                m.name.clone(),
+            )
+        };
 
         // Object-like macro application
-        if m.is_objlike {
-            let hs = hideset_union(&tok.hideset, &new_hideset(m.name.clone()));
-            let body = add_hideset(m.body.clone(), hs);
+        if is_objlike {
+            let mut hs = HideSet::default();
+            hs.add(macro_name);
+            let hs = tok.hideset.union(&hs);
+            let body = add_hideset(body, hs);
 
-            let mut result = body;
-            result.extend_from_slice(&tokens[idx + 1..]);
+            let mut result = Vec::new();
+            result.extend_from_slice(&self.tokens[..self.pos]);
+            result.extend(body);
+            result.extend_from_slice(&self.tokens[self.pos + 1..]);
             return Some(result);
         }
 
         // If a funclike macro token is not followed by an argument list,
         // treat it as a normal identifier.
-        if idx + 1 >= tokens.len()
-            || !matches!(tokens[idx + 1].kind, TokenKind::Punct(Punct::LParen))
+        if self.pos + 1 >= self.tokens.len()
+            || !matches!(self.peek(1).kind, TokenKind::Punct(Punct::LParen))
         {
             return None;
         }
 
         // Function-like macro application - read arguments and substitute
-        let (args, i) = self.read_macro_args(tokens, idx, &m.params);
-        let mut result = subst(self, &m.body, &args);
-        result.extend_from_slice(&tokens[i..]);
+        let saved_pos = self.pos;
+        let args = self.read_macro_args(&params);
+        let rest_pos = self.pos;
+        self.pos = saved_pos;
+        let mut result = Vec::new();
+        result.extend_from_slice(&self.tokens[..saved_pos]);
+        result.extend(subst(self, &body, &args));
+        result.extend_from_slice(&self.tokens[rest_pos..]);
         Some(result)
     }
 
-    fn expand_macros_only(&self, mut tokens: Vec<Token>) -> Vec<Token> {
+    fn expand_macros_stream(&mut self) -> Vec<Token> {
         let mut out = Vec::new();
-        let mut i = 0;
+        self.pos = 0;
 
-        while i < tokens.len() {
-            if matches!(tokens[i].kind, TokenKind::Eof) {
-                out.push(tokens[i].clone());
+        while self.pos < self.tokens.len() {
+            if matches!(self.cur_tok().kind, TokenKind::Eof) {
+                out.push(self.cur_tok().clone());
                 break;
             }
 
             // Try to expand macros
-            if let Some(expanded) = self.expand_macro(&tokens, i) {
-                tokens = expanded;
+            if let Some(expanded) = self.expand_macro() {
+                self.tokens = expanded;
                 continue;
             }
 
-            out.push(tokens[i].clone());
-            i += 1;
+            out.push(self.cur_tok().clone());
+            self.pos += 1;
         }
 
         out
     }
 
-    fn skip_line(&self, mut idx: usize) -> usize {
-        if idx >= self.tokens.len() {
-            return idx;
-        }
-        if self.tokens[idx].at_bol {
-            return idx;
-        }
-        warn_tok(&self.tokens[idx], "extra token");
-        while idx < self.tokens.len() && !self.tokens[idx].at_bol {
-            idx += 1;
-        }
-        idx
+    fn expand_macros_only(&self, tokens: Vec<Token>) -> Vec<Token> {
+        let mut expander = Preprocessor::new(tokens);
+        expander.macros = self.macros.clone();
+        expander.expand_macros_stream()
     }
 
-    fn skip_cond_incl2(&self, mut idx: usize) -> usize {
-        while idx < self.tokens.len() {
-            let tok = &self.tokens[idx];
+    fn skip_line(&mut self) {
+        if self.pos >= self.tokens.len() {
+            return;
+        }
+        if self.cur_tok().at_bol {
+            return;
+        }
+        warn_tok(self.cur_tok(), "extra token");
+        while self.pos < self.tokens.len() && !self.cur_tok().at_bol {
+            self.pos += 1;
+        }
+    }
+
+    fn skip_cond_incl2(&mut self) {
+        while self.pos < self.tokens.len() {
+            let tok = self.cur_tok();
             if matches!(tok.kind, TokenKind::Eof) {
-                return idx;
+                return;
             }
             if is_hash(tok)
-                && let Some(TokenKind::Ident(name)) = self.tokens.get(idx + 1).map(|tok| &tok.kind)
+                && self.pos + 1 < self.tokens.len()
+                && let TokenKind::Ident(name) = &self.peek(1).kind
             {
                 if name == "if" || name == "ifdef" || name == "ifndef" {
-                    idx = self.skip_cond_incl2(idx + 2);
+                    self.pos += 2;
+                    self.skip_cond_incl2();
                     continue;
                 }
                 if name == "endif" {
-                    return idx + 2;
+                    self.pos += 2;
+                    return;
                 }
             }
-            idx += 1;
+            self.pos += 1;
         }
-        idx
     }
 
-    fn skip_cond_incl(&self, mut idx: usize) -> usize {
-        while idx < self.tokens.len() {
-            let tok = &self.tokens[idx];
+    fn skip_cond_incl(&mut self) {
+        while self.pos < self.tokens.len() {
+            let tok = self.cur_tok();
             if matches!(tok.kind, TokenKind::Eof) {
-                return idx;
+                return;
             }
             if is_hash(tok)
-                && let Some(TokenKind::Ident(name)) = self.tokens.get(idx + 1).map(|tok| &tok.kind)
+                && self.pos + 1 < self.tokens.len()
+                && let TokenKind::Ident(name) = &self.peek(1).kind
             {
                 if name == "if" || name == "ifdef" || name == "ifndef" {
-                    idx = self.skip_cond_incl2(idx + 2);
+                    self.pos += 2;
+                    self.skip_cond_incl2();
                     continue;
                 }
                 if name == "elif" || name == "else" || name == "endif" {
                     break;
                 }
             }
-            idx += 1;
+            self.pos += 1;
         }
-        idx
     }
 
-    fn copy_line(&self, mut idx: usize) -> (Vec<Token>, usize) {
+    fn copy_line(&mut self) -> Vec<Token> {
         let mut out = Vec::new();
-        while idx < self.tokens.len() && !self.tokens[idx].at_bol {
-            out.push(self.tokens[idx].clone());
-            idx += 1;
+        while self.pos < self.tokens.len() && !self.cur_tok().at_bol {
+            out.push(self.cur_tok().clone());
+            self.pos += 1;
         }
         let eof_source = self
             .tokens
-            .get(idx)
+            .get(self.pos)
             .or_else(|| self.tokens.last())
             .expect("tokens");
         out.push(new_eof(eof_source));
-        (out, idx)
+        out
     }
 
-    fn eval_const_expr(&self, idx: usize) -> CompileResult<(i64, usize)> {
+    fn eval_const_expr(&mut self) -> CompileResult<i64> {
         let start = self
             .tokens
-            .get(idx)
+            .get(self.pos.saturating_sub(1))
+            .or_else(|| self.tokens.get(self.pos))
             .cloned()
             .ok_or_else(|| CompileError::new("no expression"))?;
-        let (expr_tokens, rest_idx) = self.copy_line(idx + 1);
+        let expr_tokens = self.copy_line();
 
         // Expand macros in the expression
         let expr_tokens = self.expand_macros_only(expr_tokens);
@@ -360,11 +400,11 @@ impl Preprocessor {
             expr_tokens.first().map(|tok| &tok.kind),
             Some(TokenKind::Eof)
         ) {
-            return Err(CompileError::at("no expression", start.location));
+            self.error("no expression", start.location)?;
         }
 
         let value = const_expr(&expr_tokens)?;
-        Ok((value, rest_idx))
+        Ok(value)
     }
 }
 
@@ -413,25 +453,11 @@ fn new_eof(tok: &Token) -> Token {
     eof
 }
 
-fn new_hideset(name: String) -> HashSet<String> {
-    let mut hs = HashSet::new();
-    hs.insert(name);
-    hs
-}
-
-fn hideset_union(hs1: &HashSet<String>, hs2: &HashSet<String>) -> HashSet<String> {
-    hs1.union(hs2).cloned().collect()
-}
-
-fn hideset_contains(hs: &HashSet<String>, name: &str) -> bool {
-    hs.contains(name)
-}
-
-fn add_hideset(tokens: Vec<Token>, hs: HashSet<String>) -> Vec<Token> {
+fn add_hideset(tokens: Vec<Token>, hs: HideSet) -> Vec<Token> {
     tokens
         .into_iter()
         .map(|mut tok| {
-            tok.hideset = hideset_union(&tok.hideset, &hs);
+            tok.hideset = tok.hideset.union(&hs);
             tok
         })
         .collect()
@@ -468,16 +494,16 @@ fn warn_tok(tok: &Token, message: &str) {
 impl Preprocessor {
     fn preprocess_tokens(&mut self) -> CompileResult<Vec<Token>> {
         let mut out = Vec::with_capacity(self.tokens.len());
-        let mut i = 0;
+        self.pos = 0;
         let mut cond_incl = vec![];
 
-        while i < self.tokens.len() {
+        while self.pos < self.tokens.len() {
             // Try to expand macros
-            if let Some(expanded) = self.expand_macro(&self.tokens, i) {
+            if let Some(expanded) = self.expand_macro() {
                 self.tokens = expanded;
                 continue;
             }
-            let tok = &self.tokens[i];
+            let tok = self.cur_tok();
             if matches!(tok.kind, TokenKind::Eof) {
                 out.push(tok.clone());
                 break;
@@ -485,33 +511,33 @@ impl Preprocessor {
 
             if !is_hash(tok) {
                 out.push(tok.clone());
-                i += 1;
+                self.pos += 1;
                 continue;
             }
 
             let start = tok.clone();
-            i += 1;
-            if i >= self.tokens.len() {
+            self.pos += 1;
+            if self.pos >= self.tokens.len() {
                 break;
             }
 
-            if let TokenKind::Ident(name) = &self.tokens[i].kind
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && name == "include"
             {
-                i += 1;
-                let Some(token) = self.tokens.get(i) else {
-                    return Err(CompileError::at(
-                        "expected a filename",
-                        self.tokens[i - 1].location,
-                    ));
-                };
+                self.pos += 1;
+                if self.pos >= self.tokens.len() {
+                    let loc = self.tokens[self.pos - 1].location;
+                    self.error("expected a filename", loc)?;
+                    unreachable!("expected error to return");
+                }
+                let token = self.cur_tok();
 
                 let filename = match &token.kind {
                     TokenKind::Str { bytes, .. } => {
                         let slice = bytes.strip_suffix(&[0]).unwrap_or(bytes.as_slice());
                         String::from_utf8_lossy(slice).into_owned()
                     }
-                    _ => return Err(CompileError::at("expected a filename", token.location)),
+                    _ => self.error("expected a filename", token.location)?,
                 };
 
                 let include_path = if Path::new(&filename).is_absolute() {
@@ -531,153 +557,154 @@ impl Preprocessor {
                         out.push(inc);
                     }
                 }
-                i = self.skip_line(i + 1);
+                self.pos += 1;
+                self.skip_line();
                 continue;
             }
 
-            if let TokenKind::Ident(name) = &self.tokens[i].kind
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && name == "define"
             {
-                i += 1;
-                let Some(tok) = self.tokens.get(i) else {
-                    return Err(CompileError::at(
-                        "macro name must be an identifier",
-                        start.location,
-                    ));
-                };
+                self.pos += 1;
+                if self.pos >= self.tokens.len() {
+                    self.error("macro name must be an identifier", start.location)?;
+                    unreachable!("expected error to return");
+                }
+                let tok = self.cur_tok();
                 let TokenKind::Ident(_name) = &tok.kind else {
-                    return Err(CompileError::at(
-                        "macro name must be an identifier",
-                        tok.location,
-                    ));
+                    self.error("macro name must be an identifier", tok.location)?;
+                    unreachable!("expected error to return");
                 };
-                let tokens = &self.tokens.clone();
-                i = self.read_macro_definition(tokens, i);
+                self.read_macro_definition();
                 continue;
             }
 
-            if let TokenKind::Ident(name) = &self.tokens[i].kind
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && name == "undef"
             {
-                i += 1;
-                let Some(tok) = self.tokens.get(i) else {
-                    return Err(CompileError::at(
-                        "macro name must be an identifier",
-                        start.location,
-                    ));
-                };
+                self.pos += 1;
+                if self.pos >= self.tokens.len() {
+                    self.error("macro name must be an identifier", start.location)?;
+                    unreachable!("expected error to return");
+                }
+                let tok = self.cur_tok();
                 let TokenKind::Ident(name) = &tok.kind else {
-                    return Err(CompileError::at(
-                        "macro name must be an identifier",
-                        tok.location,
-                    ));
+                    self.error("macro name must be an identifier", tok.location)?;
+                    unreachable!("expected error to return");
                 };
                 let macro_name = name.clone();
-                i = self.skip_line(i + 1);
-                self.add_macro(macro_name, true, Vec::new(), Vec::new(), true);
+                self.pos += 1;
+                self.skip_line();
+                self.macros.push(Macro {
+                    name: macro_name,
+                    is_objlike: true,
+                    deleted: true,
+                    ..Macro::default()
+                });
                 continue;
             }
 
-            if let TokenKind::Ident(name) = &self.tokens[i].kind
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && (name == "ifdef" || name == "ifndef")
             {
                 let is_ifdef = name == "ifdef";
-                i += 1;
-                let defined = self.find_macro(&self.tokens[i]).is_some();
+                self.pos += 1;
+                let defined = self.find_macro(self.cur_tok()).is_some();
                 let included = if is_ifdef { defined } else { !defined };
                 cond_incl.push(CondIncl {
                     ctx: CondCtx::Then,
                     tok: start,
                     included,
                 });
-                i = self.skip_line(i + 1);
+                self.pos += 1;
+                self.skip_line();
                 if !included {
-                    i = self.skip_cond_incl(i);
+                    self.skip_cond_incl();
                 }
                 continue;
             }
 
-            if let TokenKind::Ident(name) = &self.tokens[i].kind
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && name == "if"
             {
-                let (value, rest_idx) = self.eval_const_expr(i)?;
+                self.pos += 1;
+                let value = self.eval_const_expr()?;
                 cond_incl.push(CondIncl {
                     ctx: CondCtx::Then,
                     tok: start,
                     included: value != 0,
                 });
                 if value == 0 {
-                    i = self.skip_cond_incl(rest_idx);
-                } else {
-                    i = rest_idx;
+                    self.skip_cond_incl();
                 }
                 continue;
             }
 
-            if let TokenKind::Ident(name) = &self.tokens[i].kind
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && name == "else"
             {
                 let Some(last) = cond_incl.last_mut() else {
-                    return Err(CompileError::at("stray #else", start.location));
+                    self.error("stray #else", start.location)?;
+                    unreachable!("expected error to return");
                 };
                 if last.ctx == CondCtx::Else {
-                    return Err(CompileError::at("stray #else", start.location));
+                    self.error("stray #else", start.location)?;
+                    unreachable!("expected error to return");
                 }
                 last.ctx = CondCtx::Else;
-                i = self.skip_line(i + 1);
+                self.pos += 1;
+                self.skip_line();
                 if last.included {
-                    i = self.skip_cond_incl(i);
+                    self.skip_cond_incl();
                 }
                 continue;
             }
 
-            if let TokenKind::Ident(name) = &self.tokens[i].kind
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && name == "elif"
             {
                 let Some(last) = cond_incl.last_mut() else {
-                    return Err(CompileError::at("stray #elif", start.location));
+                    self.error("stray #elif", start.location)?;
+                    unreachable!("expected error to return");
                 };
                 if last.ctx == CondCtx::Else {
-                    return Err(CompileError::at("stray #elif", start.location));
+                    self.error("stray #elif", start.location)?;
+                    unreachable!("expected error to return");
                 }
                 last.ctx = CondCtx::Elif;
 
-                let (value, rest_idx) = self.eval_const_expr(i)?;
+                self.pos += 1;
+                let value = self.eval_const_expr()?;
                 if !last.included && value != 0 {
                     last.included = true;
-                    i = rest_idx;
                 } else {
-                    i = self.skip_cond_incl(rest_idx);
+                    self.skip_cond_incl();
                 }
                 continue;
             }
 
-            if let TokenKind::Ident(name) = &self.tokens[i].kind
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && name == "endif"
             {
                 if cond_incl.is_empty() {
-                    return Err(CompileError::at("stray #endif", start.location));
+                    self.error("stray #endif", start.location)?;
                 }
                 cond_incl.pop();
-                i = self.skip_line(i + 1);
+                self.pos += 1;
+                self.skip_line();
                 continue;
             }
 
-            if self.tokens[i].at_bol {
+            if self.cur_tok().at_bol {
                 continue;
             }
 
-            return Err(CompileError::at(
-                "invalid preprocessor directive",
-                self.tokens[i].location,
-            ));
+            self.error("invalid preprocessor directive", self.cur_tok().location)?;
+            unreachable!("expected error to return");
         }
 
         if let Some(start) = cond_incl.first() {
-            return Err(CompileError::at(
-                "unterminated conditional directive",
-                start.tok.location,
-            ));
+            self.error("unterminated conditional directive", start.tok.location)?;
         }
 
         Ok(out)

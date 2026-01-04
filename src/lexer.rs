@@ -12,6 +12,27 @@ pub struct File {
     pub contents: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct HideSet {
+    names: HashSet<String>,
+}
+
+impl HideSet {
+    pub fn union(&self, other: &Self) -> Self {
+        Self {
+            names: self.names.union(&other.names).cloned().collect(),
+        }
+    }
+
+    pub fn contains(&self, name: &str) -> bool {
+        self.names.contains(name)
+    }
+
+    pub fn add(&mut self, name: impl Into<String>) {
+        self.names.insert(name.into());
+    }
+}
+
 static INPUT_FILES: OnceLock<Mutex<Vec<File>>> = OnceLock::new();
 
 fn input_files() -> &'static Mutex<Vec<File>> {
@@ -266,7 +287,7 @@ pub struct Token {
     pub at_bol: bool,
     pub has_space: bool, // True if this token follows a space character
     pub len: usize,
-    pub hideset: HashSet<String>, // For macro expansion
+    pub hideset: HideSet, // For macro expansion
 }
 
 pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
@@ -409,7 +430,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     at_bol,
                     has_space,
                     len: i - start,
-                    hideset: HashSet::new(),
+                    hideset: HideSet::default(),
                 });
                 at_bol = false;
                 has_space = false;
@@ -569,7 +590,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     at_bol,
                     has_space,
                     len: i - start,
-                    hideset: HashSet::new(),
+                    hideset: HideSet::default(),
                 });
                 at_bol = false;
                 has_space = false;
@@ -635,7 +656,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 at_bol,
                 has_space,
                 len: i - start,
-                hideset: HashSet::new(),
+                hideset: HideSet::default(),
             });
             at_bol = false;
             has_space = false;
@@ -704,7 +725,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 at_bol,
                 has_space,
                 len: i - start,
-                hideset: HashSet::new(),
+                hideset: HideSet::default(),
             });
             at_bol = false;
             has_space = false;
@@ -748,7 +769,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 at_bol,
                 has_space,
                 len: end + 1 - start,
-                hideset: HashSet::new(),
+                hideset: HideSet::default(),
             });
             at_bol = false;
             has_space = false;
@@ -796,7 +817,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 at_bol,
                 has_space,
                 len: i - start,
-                hideset: HashSet::new(),
+                hideset: HideSet::default(),
             });
             at_bol = false;
             has_space = false;
@@ -816,7 +837,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 at_bol,
                 has_space,
                 len,
-                hideset: HashSet::new(),
+                hideset: HideSet::default(),
             });
             at_bol = false;
             has_space = false;
@@ -847,7 +868,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
         at_bol,
         has_space: false,
         len: 0,
-        hideset: HashSet::new(),
+        hideset: HideSet::default(),
     });
 
     Ok(tokens)

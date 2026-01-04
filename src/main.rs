@@ -3,7 +3,7 @@ mod codegen;
 mod error;
 mod lexer;
 mod parser;
-mod preprocess;
+mod preprocessor;
 
 use clap::Parser;
 use colored::Colorize;
@@ -123,7 +123,7 @@ fn run_cc1_subprocess(
 
 fn run_cc1(input: &Path, output: Option<&Path>, preprocess_only: bool) -> CompileResult<()> {
     let tokens = lexer::tokenize_file(input)?;
-    let tokens = preprocess::preprocess(tokens)?;
+    let tokens = preprocessor::preprocess(tokens)?;
     if preprocess_only {
         print_tokens(&tokens, output)?;
         return Ok(());
