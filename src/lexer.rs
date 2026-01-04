@@ -255,6 +255,7 @@ pub struct Token {
     pub kind: TokenKind,
     pub location: SourceLocation,
     pub at_bol: bool,
+    pub len: usize,
 }
 
 pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
@@ -390,6 +391,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     kind: TokenKind::Num { value: 0, fval, ty },
                     location,
                     at_bol,
+                    len: i - start,
                 });
                 at_bol = false;
                 column += i - start;
@@ -546,6 +548,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     kind: TokenKind::Num { value: 0, fval, ty },
                     location,
                     at_bol,
+                    len: i - start,
                 });
                 at_bol = false;
                 column += i - start;
@@ -608,6 +611,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 },
                 location,
                 at_bol,
+                len: i - start,
             });
             at_bol = false;
             column += i - start;
@@ -673,6 +677,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 kind,
                 location,
                 at_bol,
+                len: i - start,
             });
             at_bol = false;
             column += i - start;
@@ -713,6 +718,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 },
                 location,
                 at_bol,
+                len: end + 1 - start,
             });
             at_bol = false;
             i = end + 1;
@@ -757,6 +763,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 },
                 location,
                 at_bol,
+                len: i - start,
             });
             at_bol = false;
             column += i - start;
@@ -773,6 +780,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     file_no,
                 },
                 at_bol,
+                len,
             });
             at_bol = false;
             i += len;
@@ -800,6 +808,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
             file_no,
         },
         at_bol,
+        len: 0,
     });
 
     Ok(tokens)

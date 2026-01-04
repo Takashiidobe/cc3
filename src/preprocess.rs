@@ -89,11 +89,15 @@ fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
                 _ => return Err(CompileError::at("expected a filename", token.location)),
             };
 
-            let base = get_input_file(token.location.file_no)
-                .map(|file| file.name)
-                .unwrap_or_else(|| Path::new(".").to_path_buf());
-            let dir = base.parent().unwrap_or(Path::new("."));
-            let include_path = dir.join(filename);
+            let include_path = if Path::new(&filename).is_absolute() {
+                Path::new(&filename).to_path_buf()
+            } else {
+                let base = get_input_file(token.location.file_no)
+                    .map(|file| file.name)
+                    .unwrap_or_else(|| Path::new(".").to_path_buf());
+                let dir = base.parent().unwrap_or(Path::new("."));
+                dir.join(filename)
+            };
 
             let included = tokenize_file(&include_path)
                 .map_err(|err| CompileError::at(err.message().to_string(), token.location))?;

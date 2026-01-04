@@ -10,6 +10,7 @@ use colored::Colorize;
 use std::{fs, io, path::Path, path::PathBuf, process::Command};
 
 use crate::error::{CompileError, CompileResult};
+use crate::lexer::{Token, TokenKind};
 
 #[derive(Parser, Debug)]
 #[command(name = "cc3")]
@@ -33,6 +34,9 @@ struct Args {
     /// Emit assembly instead of object code.
     #[arg(short = 'S', action = clap::ArgAction::SetTrue)]
     emit_asm: bool,
+    /// Preprocess only.
+    #[arg(short = 'E', action = clap::ArgAction::SetTrue)]
+    preprocess_only: bool,
     /// Input C source file(s).
     inputs: Vec<PathBuf>,
     /// Output file. Writes to stdout if omitted in cc1 mode.
@@ -57,7 +61,7 @@ fn main() {
             .as_ref()
             .or(args.output.as_ref())
             .map(|path| path.as_path());
-        if let Err(err) = run_cc1(input, output) {
+        if let Err(err) = run_cc1(input, output, args.preprocess_only) {
             eprintln!("{}", format_diagnostic(&err, input.as_path()));
             std::process::exit(1);
         }
@@ -95,11 +99,19 @@ fn run_subprocess(argv: &[String], show_cmd: bool) -> io::Result<()> {
     Ok(())
 }
 
-fn run_cc1_subprocess(input: &Path, output: Option<&Path>, show_cmd: bool) -> io::Result<()> {
+fn run_cc1_subprocess(
+    input: &Path,
+    output: Option<&Path>,
+    preprocess_only: bool,
+    show_cmd: bool,
+) -> io::Result<()> {
     let exe = std::env::args()
         .next()
         .ok_or_else(|| io::Error::other("missing argv[0]"))?;
     let mut argv = vec![exe, "-cc1".to_string()];
+    if preprocess_only {
+        argv.push("-E".to_string());
+    }
     argv.push("-cc1-input".to_string());
     argv.push(input.display().to_string());
     if let Some(output) = output {
@@ -109,9 +121,13 @@ fn run_cc1_subprocess(input: &Path, output: Option<&Path>, show_cmd: bool) -> io
     run_subprocess(&argv, show_cmd)
 }
 
-fn run_cc1(input: &Path, output: Option<&Path>) -> CompileResult<()> {
+fn run_cc1(input: &Path, output: Option<&Path>, preprocess_only: bool) -> CompileResult<()> {
     let tokens = lexer::tokenize_file(input)?;
     let tokens = preprocess::preprocess(tokens)?;
+    if preprocess_only {
+        print_tokens(&tokens, output)?;
+        return Ok(());
+    }
     let program = parser::parse(&tokens)?;
     let asm = codegen::Codegen::new().generate(&program);
 
@@ -130,6 +146,54 @@ fn run_cc1(input: &Path, output: Option<&Path>) -> CompileResult<()> {
     Ok(())
 }
 
+fn print_tokens(tokens: &[Token], output: Option<&Path>) -> CompileResult<()> {
+    use std::io::Write;
+
+    let mut writer: Box<dyn Write> = if let Some(path) = output {
+        Box::new(fs::File::create(path).map_err(|err| {
+            CompileError::new(format!("failed to write {}: {err}", path.display()))
+        })?)
+    } else {
+        Box::new(io::stdout())
+    };
+
+    let mut line = 1;
+    for tok in tokens {
+        if matches!(tok.kind, TokenKind::Eof) {
+            break;
+        }
+        if line > 1 && tok.at_bol {
+            writeln!(writer)
+                .map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
+        }
+        let text = token_lexeme(tok);
+        write!(writer, " {text}")
+            .map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
+        line += 1;
+    }
+    writeln!(writer).map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
+    Ok(())
+}
+
+fn token_lexeme(token: &Token) -> String {
+    if let Some(file) = lexer::get_input_file(token.location.file_no) {
+        let bytes = file.contents.as_bytes();
+        let start = token.location.byte;
+        let end = start.saturating_add(token.len);
+        if end <= bytes.len() {
+            return String::from_utf8_lossy(&bytes[start..end]).into_owned();
+        }
+    }
+    match &token.kind {
+        TokenKind::Ident(name) => name.clone(),
+        TokenKind::Punct(punct) => punct.to_string(),
+        TokenKind::Keyword(_) => "<keyword>".to_string(),
+        TokenKind::Num { .. } => "<number>".to_string(),
+        TokenKind::Str { .. } => "<string>".to_string(),
+        TokenKind::Eof => String::new(),
+    }
+}
+
 fn run_driver(args: &Args) -> io::Result<()> {
     if args.inputs.is_empty() {
         return Err(io::Error::new(
@@ -137,10 +201,13 @@ fn run_driver(args: &Args) -> io::Result<()> {
             "no input files",
         ));
     }
-    if args.inputs.len() > 1 && args.output.is_some() && (args.compile_only || args.emit_asm) {
+    if args.inputs.len() > 1
+        && args.output.is_some()
+        && (args.compile_only || args.emit_asm || args.preprocess_only)
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "cannot specify '-o' with '-c' or '-S' with multiple files",
+            "cannot specify '-o' with '-c', '-S' or '-E' with multiple files",
         ));
     }
 
@@ -148,10 +215,24 @@ fn run_driver(args: &Args) -> io::Result<()> {
     let mut temp_objects: Vec<PathBuf> = Vec::new();
 
     for input in &args.inputs {
-        let output = match &args.output {
-            Some(path) => path.clone(),
-            None => replace_ext(input, if args.emit_asm { ".s" } else { ".o" }),
+        let output = if args.preprocess_only {
+            args.output.clone()
+        } else if let Some(path) = &args.output {
+            Some(path.clone())
+        } else {
+            Some(replace_ext(input, if args.emit_asm { ".s" } else { ".o" }))
         };
+
+        if args.preprocess_only {
+            if !is_c_like_file(input) && !is_stdin(input) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("unknown file extension: {}", input.display()),
+                ));
+            }
+            run_cc1_subprocess(input, output.as_deref(), true, args.hash_hash_hash)?;
+            continue;
+        }
 
         if is_object_file(input) {
             if !args.compile_only && !args.emit_asm {
@@ -162,7 +243,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
 
         if is_asm_file(input) {
             if !args.emit_asm {
-                assemble(input, &output, args.hash_hash_hash)?;
+                assemble(input, output.as_ref().unwrap(), args.hash_hash_hash)?;
             }
             continue;
         }
@@ -175,21 +256,21 @@ fn run_driver(args: &Args) -> io::Result<()> {
         }
 
         if args.emit_asm {
-            run_cc1_subprocess(input, Some(&output), args.hash_hash_hash)?;
+            run_cc1_subprocess(input, output.as_deref(), false, args.hash_hash_hash)?;
             continue;
         }
 
         if args.compile_only {
             let tmp_asm = create_tmpfile("cc3", ".s")?;
-            run_cc1_subprocess(input, Some(&tmp_asm), args.hash_hash_hash)?;
-            assemble(&tmp_asm, &output, args.hash_hash_hash)?;
+            run_cc1_subprocess(input, Some(&tmp_asm), false, args.hash_hash_hash)?;
+            assemble(&tmp_asm, output.as_ref().unwrap(), args.hash_hash_hash)?;
             let _ = fs::remove_file(&tmp_asm);
             continue;
         }
 
         let tmp_asm = create_tmpfile("cc3", ".s")?;
         let tmp_obj = create_tmpfile("cc3", ".o")?;
-        run_cc1_subprocess(input, Some(&tmp_asm), args.hash_hash_hash)?;
+        run_cc1_subprocess(input, Some(&tmp_asm), false, args.hash_hash_hash)?;
         assemble(&tmp_asm, &tmp_obj, args.hash_hash_hash)?;
         let _ = fs::remove_file(&tmp_asm);
         link_inputs.push(tmp_obj.clone());
