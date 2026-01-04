@@ -6,6 +6,7 @@ use std::path::Path;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CondCtx {
     Then,
+    Elif,
     Else,
 }
 
@@ -104,7 +105,7 @@ fn skip_cond_incl(tokens: &[Token], mut idx: usize) -> usize {
                 idx = skip_cond_incl2(tokens, idx + 2);
                 continue;
             }
-            if name == "else" || name == "endif" {
+            if name == "elif" || name == "else" || name == "endif" {
                 break;
             }
         }
@@ -236,6 +237,27 @@ fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
             i = skip_line(&tokens, i + 1);
             if last.included {
                 i = skip_cond_incl(&tokens, i);
+            }
+            continue;
+        }
+
+        if let TokenKind::Ident(name) = &tokens[i].kind
+            && name == "elif"
+        {
+            let Some(last) = cond_incl.last_mut() else {
+                return Err(CompileError::at("stray #elif", start.location));
+            };
+            if last.ctx == CondCtx::Else {
+                return Err(CompileError::at("stray #elif", start.location));
+            }
+            last.ctx = CondCtx::Elif;
+
+            let (value, rest_idx) = eval_const_expr(&tokens, i)?;
+            if !last.included && value != 0 {
+                last.included = true;
+                i = rest_idx;
+            } else {
+                i = skip_cond_incl(&tokens, rest_idx);
             }
             continue;
         }
