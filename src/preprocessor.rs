@@ -25,7 +25,8 @@
 use crate::ast::Type;
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{
-    HideSet, Keyword, Punct, Token, TokenKind, get_input_file, tokenize, tokenize_file,
+    HideSet, Keyword, Punct, Token, TokenKind, get_input_file, tokenize, tokenize_builtin,
+    tokenize_file,
 };
 use crate::parser::const_expr;
 use std::path::{Path, PathBuf};
@@ -1160,10 +1161,67 @@ impl Preprocessor {
 
         Ok(result)
     }
+
+    fn define_macro(&mut self, name: &str, body: &str) -> CompileResult<()> {
+        let tokens = tokenize_builtin("<built-in>", body)?;
+        self.macros.push(Macro {
+            name: name.to_string(),
+            is_objlike: true,
+            body: tokens,
+            ..Macro::default()
+        });
+        Ok(())
+    }
+
+    fn init_macros(&mut self) -> CompileResult<()> {
+        self.define_macro("_LP64", "1")?;
+        self.define_macro("__C99_MACRO_WITH_VA_ARGS", "1")?;
+        self.define_macro("__ELF__", "1")?;
+        self.define_macro("__LP64__", "1")?;
+        self.define_macro("__SIZEOF_DOUBLE__", "8")?;
+        self.define_macro("__SIZEOF_FLOAT__", "4")?;
+        self.define_macro("__SIZEOF_INT__", "4")?;
+        self.define_macro("__SIZEOF_LONG_DOUBLE__", "8")?;
+        self.define_macro("__SIZEOF_LONG_LONG__", "8")?;
+        self.define_macro("__SIZEOF_LONG__", "8")?;
+        self.define_macro("__SIZEOF_POINTER__", "8")?;
+        self.define_macro("__SIZEOF_PTRDIFF_T__", "8")?;
+        self.define_macro("__SIZEOF_SHORT__", "2")?;
+        self.define_macro("__SIZEOF_SIZE_T__", "8")?;
+        self.define_macro("__SIZE_TYPE__", "unsigned long")?;
+        self.define_macro("__STDC_HOSTED__", "1")?;
+        self.define_macro("__STDC_NO_ATOMICS__", "1")?;
+        self.define_macro("__STDC_NO_COMPLEX__", "1")?;
+        self.define_macro("__STDC_NO_THREADS__", "1")?;
+        self.define_macro("__STDC_NO_VLA__", "1")?;
+        self.define_macro("__STDC_VERSION__", "201112L")?;
+        self.define_macro("__STDC__", "1")?;
+        self.define_macro("__USER_LABEL_PREFIX__", "")?;
+        self.define_macro("__alignof__", "_Alignof")?;
+        self.define_macro("__amd64", "1")?;
+        self.define_macro("__amd64__", "1")?;
+        self.define_macro("__chibicc__", "1")?;
+        self.define_macro("__const__", "const")?;
+        self.define_macro("__gnu_linux__", "1")?;
+        self.define_macro("__inline__", "inline")?;
+        self.define_macro("__linux", "1")?;
+        self.define_macro("__linux__", "1")?;
+        self.define_macro("__signed__", "signed")?;
+        self.define_macro("__typeof__", "typeof")?;
+        self.define_macro("__unix", "1")?;
+        self.define_macro("__unix__", "1")?;
+        self.define_macro("__volatile__", "volatile")?;
+        self.define_macro("__x86_64", "1")?;
+        self.define_macro("__x86_64__", "1")?;
+        self.define_macro("linux", "1")?;
+        self.define_macro("unix", "1")?;
+        Ok(())
+    }
 }
 
 /// Entry point of the preprocessor.
 pub fn preprocess(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
     let mut preprocessor = Preprocessor::new(tokens);
+    preprocessor.init_macros()?;
     preprocessor.preprocess_tokens()
 }

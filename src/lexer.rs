@@ -122,6 +122,11 @@ pub fn tokenize_file(path: &Path) -> CompileResult<Vec<Token>> {
     tokenize(&file.contents, file.file_no)
 }
 
+pub fn tokenize_builtin(name: &str, contents: &str) -> CompileResult<Vec<Token>> {
+    let file = register_file(PathBuf::from(name), contents.to_string());
+    tokenize(&file.contents, file.file_no)
+}
+
 /// Parse hexadecimal floating-point literal (e.g., 0x1.2p3)
 /// Format: 0x[hex_digits][.hex_digits]p[+/-][decimal_exponent]
 fn parse_hex_float(s: &str) -> Option<f64> {
