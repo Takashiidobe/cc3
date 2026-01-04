@@ -132,12 +132,15 @@ fn copy_line(tokens: &[Token], mut idx: usize) -> (Vec<Token>, usize) {
     (out, idx)
 }
 
-fn eval_const_expr(tokens: &[Token], idx: usize) -> CompileResult<(i64, usize)> {
+fn eval_const_expr(macros: &[Macro], tokens: &[Token], idx: usize) -> CompileResult<(i64, usize)> {
     let start = tokens
         .get(idx)
         .cloned()
         .ok_or_else(|| CompileError::new("no expression"))?;
     let (expr_tokens, rest_idx) = copy_line(tokens, idx + 1);
+
+    // Expand macros in the expression
+    let expr_tokens = expand_macros_only(macros, expr_tokens);
 
     if matches!(
         expr_tokens.first().map(|tok| &tok.kind),
@@ -170,6 +173,30 @@ fn expand_macro(macros: &[Macro], tokens: &[Token], idx: usize) -> Option<Vec<To
     let mut result = m.body.clone();
     result.extend_from_slice(&tokens[idx + 1..]);
     Some(result)
+}
+
+// Expand all macros in a token list (used for #if and #elif expressions)
+fn expand_macros_only(macros: &[Macro], mut tokens: Vec<Token>) -> Vec<Token> {
+    let mut out = Vec::new();
+    let mut i = 0;
+
+    while i < tokens.len() {
+        if matches!(tokens[i].kind, TokenKind::Eof) {
+            out.push(tokens[i].clone());
+            break;
+        }
+
+        // Try to expand macros
+        if let Some(expanded) = expand_macro(macros, &tokens, i) {
+            tokens = expanded;
+            continue;
+        }
+
+        out.push(tokens[i].clone());
+        i += 1;
+    }
+
+    out
 }
 
 fn preprocess_tokens(mut tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
@@ -290,7 +317,7 @@ fn preprocess_tokens(mut tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
         if let TokenKind::Ident(name) = &tokens[i].kind
             && name == "if"
         {
-            let (value, rest_idx) = eval_const_expr(&tokens, i)?;
+            let (value, rest_idx) = eval_const_expr(&macros, &tokens, i)?;
             cond_incl.push(CondIncl {
                 ctx: CondCtx::Then,
                 tok: start,
@@ -332,7 +359,7 @@ fn preprocess_tokens(mut tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
             }
             last.ctx = CondCtx::Elif;
 
-            let (value, rest_idx) = eval_const_expr(&tokens, i)?;
+            let (value, rest_idx) = eval_const_expr(&macros, &tokens, i)?;
             if !last.included && value != 0 {
                 last.included = true;
                 i = rest_idx;

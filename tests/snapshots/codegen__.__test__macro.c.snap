@@ -2,5 +2,5 @@
 source: tests/codegen.rs
 expression: "&mine"
 ---
-stdout: "include1 => 5\ninclude2 => 7\nm => 5\nm => 3\nm => 3\nm => 2\nm => 2\nm => 3\nm => 1\nm => 2\nM1 => 3\nM1 => 4\n5 => 12\n5 => 23\n5 => 5\nOK\n"
+stdout: "include1 => 5\ninclude2 => 7\nm => 5\nm => 3\nm => 3\nm => 2\nm => 2\nm => 3\nm => 1\nm => 2\nM1 => 3\nM1 => 4\n5 => 12\n5 => 23\n5 => 5\nm => 5\nm => 5\nOK\n"
 status: 0
