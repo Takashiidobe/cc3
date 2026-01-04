@@ -11,6 +11,15 @@ pub fn parse(tokens: &[Token]) -> CompileResult<Program> {
     parser.parse_program()
 }
 
+pub fn const_expr(tokens: &[Token]) -> CompileResult<i64> {
+    let mut parser = Parser::new(tokens);
+    let value = parser.const_expr()?;
+    if !parser.check_eof() {
+        return Err(CompileError::at("extra token", parser.peek().location));
+    }
+    Ok(value)
+}
+
 #[derive(Default)]
 struct Parser<'a> {
     tokens: &'a [Token],

@@ -1,9 +1,17 @@
 use crate::error::{CompileError, CompileResult};
 use crate::lexer::{Punct, Token, TokenKind, get_input_file, tokenize_file};
+use crate::parser::const_expr;
 use std::path::Path;
 
 fn is_hash(tok: &Token) -> bool {
     tok.at_bol && matches!(tok.kind, TokenKind::Punct(Punct::Hash))
+}
+
+fn new_eof(tok: &Token) -> Token {
+    let mut eof = tok.clone();
+    eof.kind = TokenKind::Eof;
+    eof.len = 0;
+    eof
 }
 
 fn warn_tok(tok: &Token, message: &str) {
@@ -48,9 +56,56 @@ fn skip_line(tokens: &[Token], mut idx: usize) -> usize {
     idx
 }
 
+fn skip_cond_incl(tokens: &[Token], mut idx: usize) -> usize {
+    while idx < tokens.len() {
+        let tok = &tokens[idx];
+        if matches!(tok.kind, TokenKind::Eof) {
+            return idx;
+        }
+        if is_hash(tok)
+            && let Some(TokenKind::Ident(name)) = tokens.get(idx + 1).map(|tok| &tok.kind)
+            && name == "endif"
+        {
+            return idx;
+        }
+        idx += 1;
+    }
+    idx
+}
+
+fn copy_line(tokens: &[Token], mut idx: usize) -> (Vec<Token>, usize) {
+    let mut out = Vec::new();
+    while idx < tokens.len() && !tokens[idx].at_bol {
+        out.push(tokens[idx].clone());
+        idx += 1;
+    }
+    let eof_source = tokens.get(idx).or_else(|| tokens.last()).expect("tokens");
+    out.push(new_eof(eof_source));
+    (out, idx)
+}
+
+fn eval_const_expr(tokens: &[Token], idx: usize) -> CompileResult<(i64, usize)> {
+    let start = tokens
+        .get(idx)
+        .cloned()
+        .ok_or_else(|| CompileError::new("no expression"))?;
+    let (expr_tokens, rest_idx) = copy_line(tokens, idx + 1);
+
+    if matches!(
+        expr_tokens.first().map(|tok| &tok.kind),
+        Some(TokenKind::Eof)
+    ) {
+        return Err(CompileError::at("no expression", start.location));
+    }
+
+    let value = const_expr(&expr_tokens)?;
+    Ok((value, rest_idx))
+}
+
 fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
     let mut out = Vec::with_capacity(tokens.len());
     let mut i = 0;
+    let mut cond_incl: Vec<Token> = Vec::new();
 
     while i < tokens.len() {
         let tok = &tokens[i];
@@ -65,6 +120,7 @@ fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
             continue;
         }
 
+        let start = tok.clone();
         i += 1;
         if i >= tokens.len() {
             break;
@@ -110,6 +166,30 @@ fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
             continue;
         }
 
+        if let TokenKind::Ident(name) = &tokens[i].kind
+            && name == "if"
+        {
+            let (value, rest_idx) = eval_const_expr(&tokens, i)?;
+            cond_incl.push(start);
+            if value == 0 {
+                i = skip_cond_incl(&tokens, rest_idx);
+            } else {
+                i = rest_idx;
+            }
+            continue;
+        }
+
+        if let TokenKind::Ident(name) = &tokens[i].kind
+            && name == "endif"
+        {
+            if cond_incl.is_empty() {
+                return Err(CompileError::at("stray #endif", start.location));
+            }
+            cond_incl.pop();
+            i = skip_line(&tokens, i + 1);
+            continue;
+        }
+
         if tokens[i].at_bol {
             continue;
         }
@@ -117,6 +197,13 @@ fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
         return Err(CompileError::at(
             "invalid preprocessor directive",
             tokens[i].location,
+        ));
+    }
+
+    if let Some(start) = cond_incl.first() {
+        return Err(CompileError::at(
+            "unterminated conditional directive",
+            start.location,
         ));
     }
 
