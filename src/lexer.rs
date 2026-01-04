@@ -634,7 +634,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 '\0'
             };
 
-            if matches!(next_char, '.' | 'e' | 'E' | 'f' | 'F') {
+            if matches!(next_char, '.' | 'e' | 'E' | 'f' | 'F' | 'p' | 'P') {
                 // Parse as floating-point
                 let float_str = &input[start..];
                 let mut end_idx = 0;
