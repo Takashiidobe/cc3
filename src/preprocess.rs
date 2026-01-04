@@ -6,6 +6,48 @@ fn is_hash(tok: &Token) -> bool {
     tok.at_bol && matches!(tok.kind, TokenKind::Punct(Punct::Hash))
 }
 
+fn warn_tok(tok: &Token, message: &str) {
+    let header = format!("warning: {message}");
+    eprintln!("{header}");
+
+    let Some(file) = get_input_file(tok.location.file_no) else {
+        return;
+    };
+
+    let line_text = file
+        .contents
+        .lines()
+        .nth(tok.location.line.saturating_sub(1));
+    let width = tok.location.line.to_string().len().max(3);
+
+    eprintln!(
+        "  --> {}:{}:{}",
+        file.name.display(),
+        tok.location.line,
+        tok.location.column
+    );
+    eprintln!("{:>width$} |", "", width = width);
+    if let Some(text) = line_text {
+        eprintln!("{:>width$} | {}", tok.location.line, text, width = width);
+        let caret_pad = " ".repeat(tok.location.column.saturating_sub(1));
+        eprintln!("{:>width$} | {}^", "", caret_pad, width = width);
+    }
+}
+
+fn skip_line(tokens: &[Token], mut idx: usize) -> usize {
+    if idx >= tokens.len() {
+        return idx;
+    }
+    if tokens[idx].at_bol {
+        return idx;
+    }
+    warn_tok(&tokens[idx], "extra token");
+    while idx < tokens.len() && !tokens[idx].at_bol {
+        idx += 1;
+    }
+    idx
+}
+
 fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
     let mut out = Vec::with_capacity(tokens.len());
     let mut i = 0;
@@ -60,7 +102,7 @@ fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
                     out.push(inc);
                 }
             }
-            i += 1;
+            i = skip_line(&tokens, i + 1);
             continue;
         }
 

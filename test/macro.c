@@ -4,7 +4,7 @@ int sprintf(char *buf, char *fmt, ...);
 int strcmp(char *p, char *q);
 int memcmp(char *p, char *q, long n);
 
-#include "include1.h"
+#include "include1.h" junk
 
 #
 
