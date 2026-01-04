@@ -756,6 +756,29 @@ impl Preprocessor {
         self.new_str_token(&quoted, hash)
     }
 
+    fn paste(&self, lhs: &Token, rhs: &Token) -> CompileResult<Token> {
+        let buf = format!("{}{}", token_text(lhs), token_text(rhs));
+        let mut tokens = tokenize(&buf, lhs.location.file_no)?;
+        let mut tok = tokens
+            .drain(..)
+            .next()
+            .ok_or_else(|| CompileError::new("failed to tokenize pasted token"))?;
+        let next = tokens
+            .drain(..)
+            .next()
+            .ok_or_else(|| CompileError::new("failed to tokenize pasted token"))?;
+        if !matches!(next.kind, TokenKind::Eof) || !tokens.is_empty() {
+            return self.error(
+                format!("pasting forms '{buf}', an invalid token"),
+                lhs.location,
+            );
+        }
+        tok.location = lhs.location;
+        tok.at_bol = lhs.at_bol;
+        tok.has_space = lhs.has_space;
+        Ok(tok)
+    }
+
     fn subst(&self, body: &[Token], args: &[MacroArg]) -> CompileResult<Vec<Token>> {
         let mut result = Vec::new();
         let mut i = 0;
@@ -778,6 +801,88 @@ impl Preprocessor {
                 let stringized = self.stringize(tok, &arg.tokens)?;
                 result.push(stringized);
                 i += 2;
+                continue;
+            }
+
+            if matches!(tok.kind, TokenKind::Punct(Punct::HashHash)) {
+                if result.is_empty() {
+                    self.error(
+                        "'##' cannot appear at start of macro expansion",
+                        tok.location,
+                    )?;
+                    unreachable!("expected error to return");
+                }
+                let Some(next) = body.get(i + 1) else {
+                    self.error("'##' cannot appear at end of macro expansion", tok.location)?;
+                    unreachable!("expected error to return");
+                };
+                if matches!(next.kind, TokenKind::Eof) {
+                    self.error("'##' cannot appear at end of macro expansion", tok.location)?;
+                    unreachable!("expected error to return");
+                }
+
+                if let Some(arg) = find_arg(args, next) {
+                    let is_empty = arg
+                        .tokens
+                        .first()
+                        .is_some_and(|tok| matches!(tok.kind, TokenKind::Eof));
+                    if !is_empty {
+                        let pasted =
+                            self.paste(result.last().expect("pasted lhs"), &arg.tokens[0])?;
+                        *result.last_mut().expect("pasted lhs") = pasted;
+                        for tok in arg.tokens.iter().skip(1) {
+                            if matches!(tok.kind, TokenKind::Eof) {
+                                break;
+                            }
+                            result.push(tok.clone());
+                        }
+                    }
+                    i += 2;
+                    continue;
+                }
+
+                let pasted = self.paste(result.last().expect("pasted lhs"), next)?;
+                *result.last_mut().expect("pasted lhs") = pasted;
+                i += 2;
+                continue;
+            }
+
+            if let Some(arg) = find_arg(args, tok)
+                && let Some(next) = body.get(i + 1)
+                && matches!(next.kind, TokenKind::Punct(Punct::HashHash))
+            {
+                let rhs = body.get(i + 2).ok_or_else(|| {
+                    CompileError::at(
+                        "'##' cannot appear at end of macro expansion",
+                        next.location,
+                    )
+                })?;
+                let is_empty = arg
+                    .tokens
+                    .first()
+                    .is_some_and(|tok| matches!(tok.kind, TokenKind::Eof));
+                if is_empty {
+                    if let Some(arg2) = find_arg(args, rhs) {
+                        for tok in &arg2.tokens {
+                            if matches!(tok.kind, TokenKind::Eof) {
+                                break;
+                            }
+                            result.push(tok.clone());
+                        }
+                    } else {
+                        result.push(rhs.clone());
+                    }
+                    i += 3;
+                    continue;
+                }
+
+                for tok in &arg.tokens {
+                    if matches!(tok.kind, TokenKind::Eof) {
+                        break;
+                    }
+                    result.push(tok.clone());
+                }
+                i += 1;
                 continue;
             }
 

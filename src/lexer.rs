@@ -238,6 +238,7 @@ pub enum Punct {
     Star,
     Amp,
     Hash,
+    HashHash,
     Pipe,
     Caret,
     Slash,
@@ -290,6 +291,7 @@ impl std::fmt::Display for Punct {
             Punct::Star => "*",
             Punct::Amp => "&",
             Punct::Hash => "#",
+            Punct::HashHash => "##",
             Punct::Pipe => "|",
             Punct::Caret => "^",
             Punct::Slash => "/",
@@ -1028,6 +1030,9 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
     }
     if input.starts_with(">>=") {
         return Some((Punct::ShrAssign, 3));
+    }
+    if input.starts_with("##") {
+        return Some((Punct::HashHash, 2));
     }
     if input.starts_with("==") {
         return Some((Punct::EqEq, 2));
