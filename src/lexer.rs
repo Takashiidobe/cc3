@@ -80,9 +80,44 @@ fn register_file(path: PathBuf, contents: String) -> File {
     file
 }
 
+fn remove_backslash_newline(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    let mut pending_newlines = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            i += 2;
+            pending_newlines += 1;
+            continue;
+        }
+
+        if bytes[i] == b'\n' {
+            out.push(b'\n');
+            i += 1;
+            if pending_newlines > 0 {
+                out.extend(std::iter::repeat_n(b'\n', pending_newlines));
+                pending_newlines = 0;
+            }
+            continue;
+        }
+
+        out.push(bytes[i]);
+        i += 1;
+    }
+
+    if pending_newlines > 0 {
+        out.extend(std::iter::repeat_n(b'\n', pending_newlines));
+    }
+
+    String::from_utf8(out).expect("line continuation removal")
+}
+
 pub fn tokenize_file(path: &Path) -> CompileResult<Vec<Token>> {
     let contents = fs::read_to_string(path)
         .map_err(|err| CompileError::new(format!("failed to read {}: {err}", path.display())))?;
+    let contents = remove_backslash_newline(&contents);
     let file = register_file(path.to_path_buf(), contents);
     tokenize(&file.contents, file.file_no)
 }

@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "sizeof(char) => 1\nOK\n"
+status: 0
