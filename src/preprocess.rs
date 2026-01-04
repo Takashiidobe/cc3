@@ -64,9 +64,17 @@ fn skip_cond_incl(tokens: &[Token], mut idx: usize) -> usize {
         }
         if is_hash(tok)
             && let Some(TokenKind::Ident(name)) = tokens.get(idx + 1).map(|tok| &tok.kind)
-            && name == "endif"
         {
-            return idx;
+            if name == "if" {
+                idx = skip_cond_incl(tokens, idx + 2);
+                if idx < tokens.len() {
+                    idx += 1;
+                }
+                continue;
+            }
+            if name == "endif" {
+                break;
+            }
         }
         idx += 1;
     }
