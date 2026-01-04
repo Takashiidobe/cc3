@@ -3907,6 +3907,18 @@ fn align_to(n: i32, align: i32) -> i32 {
     (n + align - 1) / align * align
 }
 
+fn has_flonum(ty: &Type, lo: i64, hi: i64, offset: i64) -> bool {
+    match ty {
+        Type::Struct { members, .. } | Type::Union { members, .. } => members
+            .iter()
+            .all(|member| has_flonum(&member.ty, lo, hi, offset + member.offset as i64)),
+        Type::Array { base, len } => {
+            (0..*len).all(|idx| has_flonum(base, lo, hi, offset + base.size() * idx as i64))
+        }
+        _ => offset < lo || hi <= offset || ty.is_flonum(),
+    }
+}
+
 fn assign_lvar_offsets(locals: &mut [Obj], param_indices: &[usize]) -> i32 {
     const GP_MAX: i32 = 6;
     const FP_MAX: i32 = 8;
@@ -3918,14 +3930,32 @@ fn assign_lvar_offsets(locals: &mut [Obj], param_indices: &[usize]) -> i32 {
 
     for &idx in param_indices {
         let var = &mut locals[idx];
-        if var.ty.is_flonum() {
-            if fp < FP_MAX {
-                fp += 1;
-                continue;
+        match var.ty {
+            Type::Struct { .. } | Type::Union { .. } => {
+                if var.ty.size() <= 16 {
+                    let fp1 = has_flonum(&var.ty, 0, 8, 0);
+                    let fp2 = has_flonum(&var.ty, 8, 16, 8);
+                    let fp_needed = i32::from(fp1) + i32::from(fp2);
+                    let gp_needed = i32::from(!fp1) + i32::from(!fp2);
+                    if fp + fp_needed < FP_MAX && gp + gp_needed < GP_MAX {
+                        fp += fp_needed;
+                        gp += gp_needed;
+                        continue;
+                    }
+                }
             }
-        } else if gp < GP_MAX {
-            gp += 1;
-            continue;
+            Type::Float | Type::Double => {
+                if fp < FP_MAX {
+                    fp += 1;
+                    continue;
+                }
+            }
+            _ => {
+                if gp < GP_MAX {
+                    gp += 1;
+                    continue;
+                }
+            }
         }
 
         top = align_to(top, 8);

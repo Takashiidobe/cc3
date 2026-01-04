@@ -142,7 +142,16 @@ impl Codegen {
             2 => self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_16[r], offset)),
             4 => self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_32[r], offset)),
             8 => self.emit_line(&format!("  mov {}, {}(%rbp)", ARG_REGS_64[r], offset)),
-            _ => unreachable!(),
+            _ => {
+                for i in 0..sz {
+                    self.emit_line(&format!(
+                        "  mov {}, {}(%rbp)",
+                        ARG_REGS_8[r],
+                        offset + i as i32
+                    ));
+                    self.emit_line(&format!("  shr $8, {}", ARG_REGS_64[r]));
+                }
+            }
         }
     }
 
@@ -212,12 +221,37 @@ impl Codegen {
             if param.offset > 0 {
                 continue;
             }
-            if param.ty.is_flonum() {
-                self.store_fp(fp, param.offset, param.ty.size());
-                fp += 1;
-            } else {
-                self.store_gp(gp, param.offset, param.ty.size());
-                gp += 1;
+            match &param.ty {
+                Type::Struct { .. } | Type::Union { .. } => {
+                    debug_assert!(param.ty.size() <= 16);
+                    let first = std::cmp::min(8, param.ty.size());
+                    if has_flonum(&param.ty, 0, 8, 0) {
+                        self.store_fp(fp, param.offset, first);
+                        fp += 1;
+                    } else {
+                        self.store_gp(gp, param.offset, first);
+                        gp += 1;
+                    }
+
+                    if param.ty.size() > 8 {
+                        let second = param.ty.size() - 8;
+                        if has_flonum(&param.ty, 8, 16, 0) {
+                            self.store_fp(fp, param.offset + 8, second);
+                            fp += 1;
+                        } else {
+                            self.store_gp(gp, param.offset + 8, second);
+                            gp += 1;
+                        }
+                    }
+                }
+                Type::Float | Type::Double => {
+                    self.store_fp(fp, param.offset, param.ty.size());
+                    fp += 1;
+                }
+                _ => {
+                    self.store_gp(gp, param.offset, param.ty.size());
+                    gp += 1;
+                }
             }
         }
 
