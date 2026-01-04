@@ -1,5 +1,6 @@
 use crate::ast::Type;
 use crate::error::{CompileError, CompileResult, SourceLocation};
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -256,6 +257,7 @@ pub struct Token {
     pub location: SourceLocation,
     pub at_bol: bool,
     pub len: usize,
+    pub hideset: HashSet<String>, // For macro expansion
 }
 
 pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
@@ -392,6 +394,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     location,
                     at_bol,
                     len: i - start,
+                    hideset: HashSet::new(),
                 });
                 at_bol = false;
                 column += i - start;
@@ -549,6 +552,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     location,
                     at_bol,
                     len: i - start,
+                    hideset: HashSet::new(),
                 });
                 at_bol = false;
                 column += i - start;
@@ -612,6 +616,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 location,
                 at_bol,
                 len: i - start,
+                hideset: HashSet::new(),
             });
             at_bol = false;
             column += i - start;
@@ -678,6 +683,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 location,
                 at_bol,
                 len: i - start,
+                hideset: HashSet::new(),
             });
             at_bol = false;
             column += i - start;
@@ -719,6 +725,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 location,
                 at_bol,
                 len: end + 1 - start,
+                hideset: HashSet::new(),
             });
             at_bol = false;
             i = end + 1;
@@ -764,6 +771,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 location,
                 at_bol,
                 len: i - start,
+                hideset: HashSet::new(),
             });
             at_bol = false;
             column += i - start;
@@ -781,6 +789,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 },
                 at_bol,
                 len,
+                hideset: HashSet::new(),
             });
             at_bol = false;
             i += len;
@@ -809,6 +818,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
         },
         at_bol,
         len: 0,
+        hideset: HashSet::new(),
     });
 
     Ok(tokens)
