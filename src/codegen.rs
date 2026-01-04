@@ -6,6 +6,8 @@ const ARG_REGS_8: [&str; 6] = ["%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"];
 const ARG_REGS_16: [&str; 6] = ["%di", "%si", "%dx", "%cx", "%r8w", "%r9w"];
 const ARG_REGS_32: [&str; 6] = ["%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"];
 const ARG_REGS_64: [&str; 6] = ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"];
+const GP_MAX: usize = 6;
+const FP_MAX: usize = 8;
 
 #[derive(Default)]
 pub struct Codegen {
@@ -238,13 +240,49 @@ impl Codegen {
         self.label_counter
     }
 
-    fn push_args(&mut self, args: &[Expr], function: &Obj, globals: &[Obj]) {
-        if !args.is_empty() {
-            // Recursively push arguments from right to left
-            self.push_args(&args[1..], function, globals);
+    fn classify_args(&self, args: &[Expr]) -> (Vec<bool>, usize, usize) {
+        let mut gp = 0;
+        let mut fp = 0;
+        let mut pass_by_stack = Vec::with_capacity(args.len());
 
-            self.gen_expr(&args[0], function, globals);
-            if let Some(ty) = &args[0].ty {
+        for arg in args {
+            let is_fp = arg
+                .ty
+                .as_ref()
+                .is_some_and(|ty| matches!(ty, Type::Float | Type::Double));
+            if is_fp {
+                if fp >= FP_MAX {
+                    pass_by_stack.push(true);
+                } else {
+                    pass_by_stack.push(false);
+                    fp += 1;
+                }
+            } else if gp >= GP_MAX {
+                pass_by_stack.push(true);
+            } else {
+                pass_by_stack.push(false);
+                gp += 1;
+            }
+        }
+
+        let stack = pass_by_stack.iter().filter(|pass| **pass).count();
+        (pass_by_stack, stack, fp)
+    }
+
+    fn push_args_inner(
+        &mut self,
+        args: &[Expr],
+        pass_by_stack: &[bool],
+        function: &Obj,
+        globals: &[Obj],
+        push_stack: bool,
+    ) {
+        for (arg, pass) in args.iter().zip(pass_by_stack).rev() {
+            if *pass != push_stack {
+                continue;
+            }
+            self.gen_expr(arg, function, globals);
+            if let Some(ty) = &arg.ty {
                 if matches!(ty, Type::Float | Type::Double) {
                     self.pushf();
                 } else {
@@ -254,6 +292,25 @@ impl Codegen {
                 self.push();
             }
         }
+    }
+
+    fn push_args(
+        &mut self,
+        args: &[Expr],
+        pass_by_stack: &[bool],
+        function: &Obj,
+        globals: &[Obj],
+    ) -> usize {
+        let mut stack = pass_by_stack.iter().filter(|pass| **pass).count();
+        if (self.depth + stack) % 2 == 1 {
+            self.emit_line("  sub $8, %rsp");
+            self.depth += 1;
+            stack += 1;
+        }
+
+        self.push_args_inner(args, pass_by_stack, function, globals, true);
+        self.push_args_inner(args, pass_by_stack, function, globals, false);
+        stack
     }
 
     fn gen_stmt(&mut self, stmt: &Stmt, function: &Obj, globals: &[Obj]) {
@@ -479,32 +536,35 @@ impl Codegen {
                 self.cast(from, ty);
             }
             ExprKind::Call { callee, args } => {
-                self.push_args(args, function, globals);
+                let (pass_by_stack, _, fp_count) = self.classify_args(args);
+                let stack_args = self.push_args(args, &pass_by_stack, function, globals);
                 self.gen_expr(callee, function, globals);
 
                 let mut gp = 0;
                 let mut fp = 0;
-                for arg in args {
-                    if let Some(ty) = &arg.ty {
-                        if matches!(ty, Type::Float | Type::Double) {
-                            self.popf(fp);
-                            fp += 1;
-                        } else {
-                            self.pop(ARG_REGS_64[gp]);
-                            gp += 1;
-                        }
+                for (arg, pass) in args.iter().zip(&pass_by_stack) {
+                    if *pass {
+                        continue;
+                    }
+                    if arg
+                        .ty
+                        .as_ref()
+                        .is_some_and(|ty| matches!(ty, Type::Float | Type::Double))
+                    {
+                        self.popf(fp);
+                        fp += 1;
                     } else {
                         self.pop(ARG_REGS_64[gp]);
                         gp += 1;
                     }
                 }
 
-                if self.depth.is_multiple_of(2) {
-                    self.emit_line("  call *%rax");
-                } else {
-                    self.emit_line("  sub $8, %rsp");
-                    self.emit_line("  call *%rax");
-                    self.emit_line("  add $8, %rsp");
+                self.emit_line("  mov %rax, %r10");
+                self.emit_line(&format!("  mov ${}, %rax", fp_count));
+                self.emit_line("  call *%r10");
+                if stack_args > 0 {
+                    self.emit_line(&format!("  add ${}, %rsp", stack_args * 8));
+                    self.depth -= stack_args;
                 }
 
                 // It looks like the most significant 48 or 56 bits in RAX may

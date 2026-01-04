@@ -2563,9 +2563,6 @@ impl<'a> Parser<'a> {
                     arg = self.cast_expr(arg, Type::Double);
                 }
                 args.push(arg);
-                if args.len() > 6 {
-                    self.bail_at(location, "function call can have up to 6 arguments")?;
-                }
                 if self.consume_punct(Punct::Comma) {
                     continue;
                 }
