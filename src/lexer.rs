@@ -24,12 +24,24 @@ impl HideSet {
         }
     }
 
+    pub fn intersection(&self, other: &Self) -> Self {
+        Self {
+            names: self.names.intersection(&other.names).cloned().collect(),
+        }
+    }
+
     pub fn contains(&self, name: &str) -> bool {
         self.names.contains(name)
     }
 
     pub fn add(&mut self, name: impl Into<String>) {
         self.names.insert(name.into());
+    }
+
+    pub fn add_tokens(&self, tokens: &mut [Token]) {
+        for tok in tokens {
+            tok.hideset = tok.hideset.union(self);
+        }
     }
 }
 

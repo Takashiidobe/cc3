@@ -17,8 +17,9 @@
 // "hideset". Hideset is initially empty, and every time we expand a
 // macro, the macro name is added to the resulting tokens' hidesets.
 //
-// The above macro expansion algorithm is explained in this document,
-// which is used as a basis for the standard's wording:
+// The above macro expansion algorithm is explained in this document
+// written by Dave Prossor, which is used as a basis for the
+// standard's wording:
 // https://github.com/rui314/chibicc/wiki/cpp.algo.pdf
 
 use crate::error::{CompileError, CompileResult, SourceLocation};
@@ -251,7 +252,8 @@ impl Preprocessor {
             let mut hs = HideSet::default();
             hs.add(macro_name);
             let hs = tok.hideset.union(&hs);
-            let body = add_hideset(body, hs);
+            let mut body = body;
+            hs.add_tokens(&mut body);
 
             let mut result = Vec::new();
             result.extend_from_slice(&self.tokens[..self.pos]);
@@ -272,10 +274,15 @@ impl Preprocessor {
         let saved_pos = self.pos;
         let args = self.read_macro_args(&params);
         let rest_pos = self.pos;
+        let rparen_pos = rest_pos.saturating_sub(1);
+        let mut hs = tok.hideset.intersection(&self.tokens[rparen_pos].hideset);
+        hs.add(macro_name);
         self.pos = saved_pos;
         let mut result = Vec::new();
         result.extend_from_slice(&self.tokens[..saved_pos]);
-        result.extend(subst(self, &body, &args));
+        let mut expanded = self.subst(&body, &args);
+        hs.add_tokens(&mut expanded);
+        result.extend(expanded);
         result.extend_from_slice(&self.tokens[rest_pos..]);
         Some(result)
     }
@@ -415,33 +422,6 @@ fn find_arg<'a>(args: &'a [MacroArg], tok: &Token) -> Option<&'a MacroArg> {
     args.iter().find(|arg| &arg.name == name)
 }
 
-fn subst(pp: &Preprocessor, body: &[Token], args: &[MacroArg]) -> Vec<Token> {
-    let mut result = Vec::new();
-
-    for tok in body {
-        if matches!(tok.kind, TokenKind::Eof) {
-            break;
-        }
-
-        // Check if this token is a parameter that should be substituted
-        if let Some(arg) = find_arg(args, tok) {
-            // Macro arguments are completely macro-expanded before substitution
-            let expanded = pp.expand_macros_only(arg.tokens.clone());
-            for exp_tok in &expanded {
-                if matches!(exp_tok.kind, TokenKind::Eof) {
-                    break;
-                }
-                result.push(exp_tok.clone());
-            }
-        } else {
-            // Not a parameter, just copy the token
-            result.push(tok.clone());
-        }
-    }
-
-    result
-}
-
 fn is_hash(tok: &Token) -> bool {
     tok.at_bol && matches!(tok.kind, TokenKind::Punct(Punct::Hash))
 }
@@ -451,16 +431,6 @@ fn new_eof(tok: &Token) -> Token {
     eof.kind = TokenKind::Eof;
     eof.len = 0;
     eof
-}
-
-fn add_hideset(tokens: Vec<Token>, hs: HideSet) -> Vec<Token> {
-    tokens
-        .into_iter()
-        .map(|mut tok| {
-            tok.hideset = tok.hideset.union(&hs);
-            tok
-        })
-        .collect()
 }
 
 fn warn_tok(tok: &Token, message: &str) {
@@ -708,6 +678,33 @@ impl Preprocessor {
         }
 
         Ok(out)
+    }
+
+    fn subst(&self, body: &[Token], args: &[MacroArg]) -> Vec<Token> {
+        let mut result = Vec::new();
+
+        for tok in body {
+            if matches!(tok.kind, TokenKind::Eof) {
+                break;
+            }
+
+            // Check if this token is a parameter that should be substituted
+            if let Some(arg) = find_arg(args, tok) {
+                // Macro arguments are completely macro-expanded before substitution
+                let expanded = self.expand_macros_only(arg.tokens.clone());
+                for exp_tok in &expanded {
+                    if matches!(exp_tok.kind, TokenKind::Eof) {
+                        break;
+                    }
+                    result.push(exp_tok.clone());
+                }
+            } else {
+                // Not a parameter, just copy the token
+                result.push(tok.clone());
+            }
+        }
+
+        result
     }
 }
 
