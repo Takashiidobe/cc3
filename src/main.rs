@@ -49,10 +49,16 @@ struct Args {
 
 fn main() {
     let raw_args: Vec<String> = std::env::args().collect();
+    let argv0 = raw_args
+        .first()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("cc3"));
     let args = Args::parse_from(preprocess_args(&raw_args));
 
     if args.cc1 {
-        preprocessor::set_include_paths(args.include_dirs.clone());
+        let mut include_paths = args.include_dirs.clone();
+        include_paths.extend(default_include_paths(&argv0));
+        preprocessor::set_include_paths(include_paths);
         let input = match args.cc1_input.as_ref().or_else(|| args.inputs.first()) {
             Some(path) => path,
             None => {
@@ -88,6 +94,16 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
             _ => arg.clone(),
         })
         .collect()
+}
+
+fn default_include_paths(argv0: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let base_dir = argv0.parent().unwrap_or(Path::new("."));
+    paths.push(base_dir.join("include"));
+    paths.push(PathBuf::from("/usr/local/include"));
+    paths.push(PathBuf::from("/usr/include/x86_64-linux-gnu"));
+    paths.push(PathBuf::from("/usr/include"));
+    paths
 }
 
 fn run_subprocess(argv: &[String], show_cmd: bool) -> io::Result<()> {
