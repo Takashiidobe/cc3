@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "M14() => 3\nM14() 2 => 2\nM14(5) => 5\nM14(2, 6) => 8\nM14(3,4,5) => 21\nM14(3,4,5) => 21\nM14(5) => 5\nOK\n"
+status: 0

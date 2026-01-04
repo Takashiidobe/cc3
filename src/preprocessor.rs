@@ -50,6 +50,7 @@ struct Macro {
     name: String,
     is_objlike: bool, // Object-like or function-like
     params: Vec<MacroParam>,
+    is_variadic: bool,
     body: Vec<Token>,
     deleted: bool,
     handler: Option<MacroHandler>,
@@ -130,7 +131,7 @@ impl Preprocessor {
         self.find_macro_name(&name)
     }
 
-    fn read_macro_params(&mut self) -> Vec<MacroParam> {
+    fn read_macro_params(&mut self, is_variadic: &mut bool) -> Vec<MacroParam> {
         let mut params = Vec::new();
 
         while self.pos < self.tokens.len()
@@ -143,6 +144,17 @@ impl Preprocessor {
                     break;
                 }
                 self.pos += 1;
+            }
+
+            if matches!(self.cur_tok().kind, TokenKind::Punct(Punct::Ellipsis)) {
+                *is_variadic = true;
+                self.pos += 1;
+                if self.pos < self.tokens.len()
+                    && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))
+                {
+                    self.pos += 1;
+                }
+                return params;
             }
 
             // Expect identifier
@@ -182,12 +194,14 @@ impl Preprocessor {
         {
             // Function-like macro - read parameters
             self.pos += 1; // skip '('
-            let params = self.read_macro_params();
+            let mut is_variadic = false;
+            let params = self.read_macro_params(&mut is_variadic);
             let body = self.copy_line();
             self.macros.push(Macro {
                 name: macro_name,
                 is_objlike: false,
                 params,
+                is_variadic,
                 body,
                 ..Macro::default()
             });
@@ -204,15 +218,20 @@ impl Preprocessor {
         });
     }
 
-    fn read_macro_arg_one(&mut self) -> Vec<Token> {
+    fn read_macro_arg_one(&mut self, read_rest: bool) -> Vec<Token> {
         let mut arg_tokens = Vec::new();
         let mut level = 0;
 
-        while self.pos < self.tokens.len()
-            && (level > 0
-                || (!matches!(self.cur_tok().kind, TokenKind::Punct(Punct::Comma))
-                    && !matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))))
-        {
+        while self.pos < self.tokens.len() {
+            if level == 0 && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen)) {
+                break;
+            }
+            if level == 0
+                && !read_rest
+                && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::Comma))
+            {
+                break;
+            }
             if matches!(self.cur_tok().kind, TokenKind::Eof) {
                 // Error: premature end of input
                 break;
@@ -235,7 +254,7 @@ impl Preprocessor {
         arg_tokens
     }
 
-    fn read_macro_args(&mut self, params: &[MacroParam]) -> Vec<MacroArg> {
+    fn read_macro_args(&mut self, params: &[MacroParam], is_variadic: bool) -> Vec<MacroArg> {
         // self.pos should be pointing at the macro name, next should be '('
         self.pos += 2; // skip macro name and '('
         let mut args = Vec::new();
@@ -250,11 +269,40 @@ impl Preprocessor {
                 }
             }
 
-            let arg_tokens = self.read_macro_arg_one();
+            let arg_tokens = self.read_macro_arg_one(false);
             args.push(MacroArg {
                 name: param.name.clone(),
                 tokens: arg_tokens,
             });
+        }
+
+        if is_variadic {
+            let arg_tokens = if self.pos < self.tokens.len()
+                && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))
+            {
+                let eof_source = self
+                    .tokens
+                    .get(self.pos)
+                    .or_else(|| self.tokens.last())
+                    .expect("tokens");
+                vec![new_eof(eof_source)]
+            } else {
+                if !params.is_empty()
+                    && self.pos < self.tokens.len()
+                    && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::Comma))
+                {
+                    self.pos += 1;
+                }
+                self.read_macro_arg_one(true)
+            };
+            args.push(MacroArg {
+                name: "__VA_ARGS__".to_string(),
+                tokens: arg_tokens,
+            });
+        } else if self.pos < self.tokens.len()
+            && !matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))
+        {
+            // Too many arguments
         }
 
         // Skip the closing ')'
@@ -278,7 +326,7 @@ impl Preprocessor {
             return Ok(None);
         }
 
-        let (is_objlike, params, body, macro_name, handler) = {
+        let (is_objlike, params, body, macro_name, handler, is_variadic) = {
             let Some(m) = self.find_macro_name(&macro_name) else {
                 return Ok(None);
             };
@@ -288,6 +336,7 @@ impl Preprocessor {
                 m.body.clone(),
                 m.name.clone(),
                 m.handler,
+                m.is_variadic,
             )
         };
 
@@ -339,7 +388,7 @@ impl Preprocessor {
 
         // Function-like macro application - read arguments and substitute
         let saved_pos = self.pos;
-        let args = self.read_macro_args(&params);
+        let args = self.read_macro_args(&params, is_variadic);
         let rest_pos = self.pos;
         let rparen_pos = rest_pos.saturating_sub(1);
         let mut hs = tok.hideset.intersection(&self.tokens[rparen_pos].hideset);
