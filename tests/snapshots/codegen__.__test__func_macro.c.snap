@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "sizeof(__func__) => 5\nstrcmp(\"main\", __func__) => 0\nstrcmp(\"func_fn\", func_fn()) => 0\nOK\n"
+status: 0
