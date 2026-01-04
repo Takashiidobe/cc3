@@ -1152,6 +1152,7 @@ impl<'a> Parser<'a> {
             // Decay array parameters to pointers
             let param_ty = match param_ty {
                 Type::Array { base, .. } => Type::Ptr(base),
+                Type::Func { .. } => Type::Ptr(Box::new(param_ty)),
                 other => other,
             };
 
