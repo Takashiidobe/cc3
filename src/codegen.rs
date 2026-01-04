@@ -325,8 +325,8 @@ impl Codegen {
         }
     }
 
-    fn classify_args(&self, args: &[Expr]) -> Vec<ArgInfo> {
-        let mut gp = 0;
+    fn classify_args(&self, args: &[Expr], reserve_gp: bool) -> Vec<ArgInfo> {
+        let mut gp = if reserve_gp { 1 } else { 0 };
         let mut fp = 0;
         let mut infos = Vec::with_capacity(args.len());
 
@@ -438,6 +438,8 @@ impl Codegen {
         &mut self,
         args: &[Expr],
         arg_info: &[ArgInfo],
+        ret_buffer: Option<usize>,
+        sret: bool,
         function: &Obj,
         globals: &[Obj],
     ) -> usize {
@@ -450,7 +452,55 @@ impl Codegen {
 
         self.push_args_inner(args, arg_info, function, globals, true);
         self.push_args_inner(args, arg_info, function, globals, false);
+
+        if sret && let Some(idx) = ret_buffer {
+            let offset = function.locals[idx].offset;
+            self.emit_line(&format!("  lea {}(%rbp), %rax", offset));
+            self.push();
+        }
         stack
+    }
+
+    fn copy_ret_buffer(&mut self, var: &Obj) {
+        let ty = &var.ty;
+        let mut gp = 0;
+        let mut fp = 0;
+
+        if has_flonum1(ty) {
+            if ty.size() == 4 {
+                self.emit_line(&format!("  movss %xmm0, {}(%rbp)", var.offset));
+            } else {
+                self.emit_line(&format!("  movsd %xmm0, {}(%rbp)", var.offset));
+            }
+            fp += 1;
+        } else {
+            for i in 0..std::cmp::min(8, ty.size()) {
+                self.emit_line(&format!("  mov %al, {}(%rbp)", var.offset + i as i32));
+                self.emit_line("  shr $8, %rax");
+            }
+            gp += 1;
+        }
+
+        if ty.size() > 8 {
+            if has_flonum2(ty) {
+                let reg = fp;
+                if ty.size() == 12 {
+                    self.emit_line(&format!("  movss %xmm{}, {}(%rbp)", reg, var.offset + 8));
+                } else {
+                    self.emit_line(&format!("  movsd %xmm{}, {}(%rbp)", reg, var.offset + 8));
+                }
+            } else {
+                let (reg8, reg64) = if gp == 0 {
+                    ("%al", "%rax")
+                } else {
+                    ("%dl", "%rdx")
+                };
+                for i in 8..std::cmp::min(16, ty.size()) {
+                    self.emit_line(&format!("  mov {}, {}(%rbp)", reg8, var.offset + i as i32));
+                    self.emit_line(&format!("  shr $8, {}", reg64));
+                }
+            }
+        }
     }
 
     fn gen_stmt(&mut self, stmt: &Stmt, function: &Obj, globals: &[Obj]) {
@@ -675,13 +725,24 @@ impl Codegen {
                 let from = expr.ty.as_ref().unwrap_or(&Type::Int);
                 self.cast(from, ty);
             }
-            ExprKind::Call { callee, args } => {
-                let arg_info = self.classify_args(args);
-                let stack_args = self.push_args(args, &arg_info, function, globals);
+            ExprKind::Call {
+                callee,
+                args,
+                ret_buffer,
+            } => {
+                let sret =
+                    ret_buffer.is_some() && expr.ty.as_ref().is_some_and(|ty| ty.size() > 16);
+                let arg_info = self.classify_args(args, sret);
+                let stack_args =
+                    self.push_args(args, &arg_info, *ret_buffer, sret, function, globals);
                 self.gen_expr(callee, function, globals);
 
                 let mut gp = 0;
                 let mut fp = 0;
+                if sret {
+                    self.pop(ARG_REGS_64[gp]);
+                    gp += 1;
+                }
                 for info in &arg_info {
                     if info.pass_by_stack {
                         continue;
@@ -706,6 +767,15 @@ impl Codegen {
                 if stack_args > 0 {
                     self.emit_line(&format!("  add ${}, %rsp", stack_args * 8));
                     self.depth -= stack_args;
+                }
+
+                if let Some(ret_idx) = *ret_buffer {
+                    if expr.ty.as_ref().is_some_and(|ty| ty.size() <= 16) {
+                        let var = &function.locals[ret_idx];
+                        self.copy_ret_buffer(var);
+                    }
+                    let offset = function.locals[ret_idx].offset;
+                    self.emit_line(&format!("  lea {}(%rbp), %rax", offset));
                 }
 
                 // It looks like the most significant 48 or 56 bits in RAX may
@@ -1221,6 +1291,12 @@ impl Codegen {
             ExprKind::Member { lhs, member } => {
                 self.gen_lvalue(lhs, function, globals);
                 self.emit_line(&format!("  add ${}, %rax", member.offset));
+            }
+            ExprKind::Call {
+                ret_buffer: Some(_),
+                ..
+            } => {
+                self.gen_expr(expr, function, globals);
             }
             _ => self.emit_line("  mov $0, %rax"),
         }

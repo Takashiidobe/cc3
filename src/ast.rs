@@ -92,6 +92,7 @@ pub enum ExprKind {
     Call {
         callee: Box<Expr>,
         args: Vec<Expr>,
+        ret_buffer: Option<usize>,
     },
     Addr(Box<Expr>),
     Deref(Box<Expr>),

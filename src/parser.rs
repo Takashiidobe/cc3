@@ -2574,10 +2574,16 @@ impl<'a> Parser<'a> {
         }
 
         self.expect_punct(Punct::RParen)?;
+        let mut ret_buffer = None;
+        if matches!(return_ty, Type::Struct { .. } | Type::Union { .. }) {
+            let name = self.new_unique_name();
+            ret_buffer = Some(self.new_lvar(name, return_ty.clone()));
+        }
         let mut expr = self.expr_at(
             ExprKind::Call {
                 callee: Box::new(callee),
                 args,
+                ret_buffer,
             },
             location,
         );
@@ -3532,7 +3538,7 @@ impl<'a> Parser<'a> {
                 };
                 map.get(*idx).map(|obj| obj.ty.clone()).unwrap_or(Type::Int)
             }
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call { callee, args, .. } => {
                 self.add_type_expr(callee)?;
                 for arg in args {
                     self.add_type_expr(arg)?;
