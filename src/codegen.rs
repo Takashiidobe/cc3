@@ -9,6 +9,42 @@ const ARG_REGS_64: [&str; 6] = ["%rdi", "%rsi", "%rdx", "%rcx", "%r8", "%r9"];
 const GP_MAX: usize = 6;
 const FP_MAX: usize = 8;
 
+#[derive(Clone, Copy)]
+enum ArgClass {
+    Gp,
+    Fp,
+}
+
+struct ArgInfo {
+    pass_by_stack: bool,
+    reg_classes: Vec<ArgClass>,
+    stack_slots: usize,
+}
+
+fn align_to(n: i64, align: i64) -> i64 {
+    (n + align - 1) / align * align
+}
+
+fn has_flonum(ty: &Type, lo: i64, hi: i64, offset: i64) -> bool {
+    match ty {
+        Type::Struct { members, .. } | Type::Union { members, .. } => members
+            .iter()
+            .all(|member| has_flonum(&member.ty, lo, hi, offset + member.offset as i64)),
+        Type::Array { base, len } => {
+            (0..*len).all(|idx| has_flonum(base, lo, hi, offset + base.size() * idx as i64))
+        }
+        _ => offset < lo || hi <= offset || ty.is_flonum(),
+    }
+}
+
+fn has_flonum1(ty: &Type) -> bool {
+    has_flonum(ty, 0, 8, 0)
+}
+
+fn has_flonum2(ty: &Type) -> bool {
+    has_flonum(ty, 8, 16, 0)
+}
+
 #[derive(Default)]
 pub struct Codegen {
     buffer: String,
@@ -243,53 +279,120 @@ impl Codegen {
         self.label_counter
     }
 
-    fn classify_args(&self, args: &[Expr]) -> (Vec<bool>, usize, usize) {
+    fn push_struct(&mut self, ty: &Type) {
+        let size = ty.size();
+        let aligned = align_to(size, 8);
+        self.emit_line(&format!("  sub ${}, %rsp", aligned));
+        self.depth += (aligned / 8) as usize;
+
+        for i in 0..size {
+            self.emit_line(&format!("  mov {}(%rax), %r10b", i));
+            self.emit_line(&format!("  mov %r10b, {}(%rsp)", i));
+        }
+    }
+
+    fn classify_args(&self, args: &[Expr]) -> Vec<ArgInfo> {
         let mut gp = 0;
         let mut fp = 0;
-        let mut pass_by_stack = Vec::with_capacity(args.len());
+        let mut infos = Vec::with_capacity(args.len());
 
         for arg in args {
-            let is_fp = arg
-                .ty
-                .as_ref()
-                .is_some_and(|ty| matches!(ty, Type::Float | Type::Double));
-            if is_fp {
-                if fp >= FP_MAX {
-                    pass_by_stack.push(true);
-                } else {
-                    pass_by_stack.push(false);
-                    fp += 1;
+            let ty = arg.ty.as_ref().unwrap_or(&Type::Int);
+            match ty {
+                Type::Struct { .. } | Type::Union { .. } => {
+                    if ty.size() > 16 {
+                        let slots = (align_to(ty.size(), 8) / 8) as usize;
+                        infos.push(ArgInfo {
+                            pass_by_stack: true,
+                            reg_classes: Vec::new(),
+                            stack_slots: slots,
+                        });
+                        continue;
+                    }
+
+                    let fp1 = has_flonum1(ty);
+                    let fp2 = has_flonum2(ty);
+                    let fp_needed = fp1 as usize + fp2 as usize;
+                    let gp_needed = (!fp1) as usize + (!fp2) as usize;
+
+                    if fp + fp_needed < FP_MAX && gp + gp_needed < GP_MAX {
+                        fp += fp_needed;
+                        gp += gp_needed;
+                        let mut reg_classes = Vec::new();
+                        reg_classes.push(if fp1 { ArgClass::Fp } else { ArgClass::Gp });
+                        if ty.size() > 8 {
+                            reg_classes.push(if fp2 { ArgClass::Fp } else { ArgClass::Gp });
+                        }
+                        infos.push(ArgInfo {
+                            pass_by_stack: false,
+                            reg_classes,
+                            stack_slots: 0,
+                        });
+                    } else {
+                        let slots = (align_to(ty.size(), 8) / 8) as usize;
+                        infos.push(ArgInfo {
+                            pass_by_stack: true,
+                            reg_classes: Vec::new(),
+                            stack_slots: slots,
+                        });
+                    }
                 }
-            } else if gp >= GP_MAX {
-                pass_by_stack.push(true);
-            } else {
-                pass_by_stack.push(false);
-                gp += 1;
+                Type::Float | Type::Double => {
+                    if fp >= FP_MAX {
+                        infos.push(ArgInfo {
+                            pass_by_stack: true,
+                            reg_classes: Vec::new(),
+                            stack_slots: 1,
+                        });
+                    } else {
+                        fp += 1;
+                        infos.push(ArgInfo {
+                            pass_by_stack: false,
+                            reg_classes: vec![ArgClass::Fp],
+                            stack_slots: 0,
+                        });
+                    }
+                }
+                _ => {
+                    if gp >= GP_MAX {
+                        infos.push(ArgInfo {
+                            pass_by_stack: true,
+                            reg_classes: Vec::new(),
+                            stack_slots: 1,
+                        });
+                    } else {
+                        gp += 1;
+                        infos.push(ArgInfo {
+                            pass_by_stack: false,
+                            reg_classes: vec![ArgClass::Gp],
+                            stack_slots: 0,
+                        });
+                    }
+                }
             }
         }
 
-        let stack = pass_by_stack.iter().filter(|pass| **pass).count();
-        (pass_by_stack, stack, fp)
+        infos
     }
 
     fn push_args_inner(
         &mut self,
         args: &[Expr],
-        pass_by_stack: &[bool],
+        arg_info: &[ArgInfo],
         function: &Obj,
         globals: &[Obj],
         push_stack: bool,
     ) {
-        for (arg, pass) in args.iter().zip(pass_by_stack).rev() {
-            if *pass != push_stack {
+        for (arg, info) in args.iter().zip(arg_info).rev() {
+            if info.pass_by_stack != push_stack {
                 continue;
             }
             self.gen_expr(arg, function, globals);
             if let Some(ty) = &arg.ty {
-                if matches!(ty, Type::Float | Type::Double) {
-                    self.pushf();
-                } else {
-                    self.push();
+                match ty {
+                    Type::Struct { .. } | Type::Union { .. } => self.push_struct(ty),
+                    Type::Float | Type::Double => self.pushf(),
+                    _ => self.push(),
                 }
             } else {
                 self.push();
@@ -300,19 +403,19 @@ impl Codegen {
     fn push_args(
         &mut self,
         args: &[Expr],
-        pass_by_stack: &[bool],
+        arg_info: &[ArgInfo],
         function: &Obj,
         globals: &[Obj],
     ) -> usize {
-        let mut stack = pass_by_stack.iter().filter(|pass| **pass).count();
+        let mut stack: usize = arg_info.iter().map(|info| info.stack_slots).sum();
         if (self.depth + stack) % 2 == 1 {
             self.emit_line("  sub $8, %rsp");
             self.depth += 1;
             stack += 1;
         }
 
-        self.push_args_inner(args, pass_by_stack, function, globals, true);
-        self.push_args_inner(args, pass_by_stack, function, globals, false);
+        self.push_args_inner(args, arg_info, function, globals, true);
+        self.push_args_inner(args, arg_info, function, globals, false);
         stack
     }
 
@@ -539,31 +642,32 @@ impl Codegen {
                 self.cast(from, ty);
             }
             ExprKind::Call { callee, args } => {
-                let (pass_by_stack, _, fp_count) = self.classify_args(args);
-                let stack_args = self.push_args(args, &pass_by_stack, function, globals);
+                let arg_info = self.classify_args(args);
+                let stack_args = self.push_args(args, &arg_info, function, globals);
                 self.gen_expr(callee, function, globals);
 
                 let mut gp = 0;
                 let mut fp = 0;
-                for (arg, pass) in args.iter().zip(&pass_by_stack) {
-                    if *pass {
+                for info in &arg_info {
+                    if info.pass_by_stack {
                         continue;
                     }
-                    if arg
-                        .ty
-                        .as_ref()
-                        .is_some_and(|ty| matches!(ty, Type::Float | Type::Double))
-                    {
-                        self.popf(fp);
-                        fp += 1;
-                    } else {
-                        self.pop(ARG_REGS_64[gp]);
-                        gp += 1;
+                    for class in &info.reg_classes {
+                        match class {
+                            ArgClass::Fp => {
+                                self.popf(fp);
+                                fp += 1;
+                            }
+                            ArgClass::Gp => {
+                                self.pop(ARG_REGS_64[gp]);
+                                gp += 1;
+                            }
+                        }
                     }
                 }
 
                 self.emit_line("  mov %rax, %r10");
-                self.emit_line(&format!("  mov ${}, %rax", fp_count));
+                self.emit_line(&format!("  mov ${}, %rax", fp));
                 self.emit_line("  call *%r10");
                 if stack_args > 0 {
                     self.emit_line(&format!("  add ${}, %rsp", stack_args * 8));

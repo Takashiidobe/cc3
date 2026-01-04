@@ -2553,11 +2553,9 @@ impl<'a> Parser<'a> {
                 }
 
                 if let Some((_name, param_ty)) = param_opt {
-                    if matches!(param_ty, Type::Struct { .. } | Type::Union { .. }) {
-                        return self
-                            .bail_at(arg.location, "passing struct or union is not supported");
+                    if !matches!(param_ty, Type::Struct { .. } | Type::Union { .. }) {
+                        arg = self.cast_expr(arg, param_ty.clone());
                     }
-                    arg = self.cast_expr(arg, param_ty.clone());
                 } else if matches!(arg.ty.as_ref(), Some(Type::Float)) {
                     // Default argument promotion: float -> double for omitted parameter types.
                     arg = self.cast_expr(arg, Type::Double);
