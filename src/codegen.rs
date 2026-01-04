@@ -503,12 +503,81 @@ impl Codegen {
         }
     }
 
+    fn copy_struct_reg(&mut self, ty: &Type) {
+        let size = ty.size();
+        let mut gp = 0;
+        let mut fp = 0;
+
+        self.emit_line("  mov %rax, %rdi");
+
+        if has_flonum1(ty) {
+            if size == 4 {
+                self.emit_line("  movss (%rdi), %xmm0");
+            } else {
+                self.emit_line("  movsd (%rdi), %xmm0");
+            }
+            fp += 1;
+        } else {
+            self.emit_line("  mov $0, %rax");
+            let first = std::cmp::min(8, size) as i32;
+            for i in (0..first).rev() {
+                self.emit_line("  shl $8, %rax");
+                self.emit_line(&format!("  mov {}(%rdi), %al", i));
+            }
+            gp += 1;
+        }
+
+        if size > 8 {
+            if has_flonum2(ty) {
+                if size == 12 {
+                    self.emit_line(&format!("  movss 8(%rdi), %xmm{}", fp));
+                } else {
+                    self.emit_line(&format!("  movsd 8(%rdi), %xmm{}", fp));
+                }
+            } else {
+                let (reg8, reg64) = if gp == 0 {
+                    ("%al", "%rax")
+                } else {
+                    ("%dl", "%rdx")
+                };
+                self.emit_line(&format!("  mov $0, {}", reg64));
+                let end = std::cmp::min(16, size) as i32;
+                for i in (8..end).rev() {
+                    self.emit_line(&format!("  shl $8, {}", reg64));
+                    self.emit_line(&format!("  mov {}(%rdi), {}", i, reg8));
+                }
+            }
+        }
+    }
+
+    fn copy_struct_mem(&mut self, ty: &Type, function: &Obj) {
+        let Some(var) = function.params.first() else {
+            return;
+        };
+
+        self.emit_line(&format!("  mov {}(%rbp), %rdi", var.offset));
+        let size = ty.size();
+        for i in 0..size {
+            self.emit_line(&format!("  mov {}(%rax), %dl", i));
+            self.emit_line(&format!("  mov %dl, {}(%rdi)", i));
+        }
+    }
+
     fn gen_stmt(&mut self, stmt: &Stmt, function: &Obj, globals: &[Obj]) {
         self.emit_loc(stmt.location);
         match &stmt.kind {
             StmtKind::Return(expr) => {
                 if let Some(expr) = expr {
                     self.gen_expr(expr, function, globals);
+                    if let Some(ty) = &expr.ty
+                        && matches!(ty, Type::Struct { .. } | Type::Union { .. })
+                    {
+                        if ty.size() <= 16 {
+                            self.copy_struct_reg(ty);
+                        } else {
+                            self.copy_struct_mem(ty, function);
+                        }
+                    }
                 }
                 self.emit_epilogue();
                 self.emit_line("  ret");

@@ -381,12 +381,23 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
 
+        // Extract return type from function type
+        let return_ty = match &ty {
+            Type::Func { return_ty, .. } => return_ty.as_ref().clone(),
+            _ => unreachable!(),
+        };
+
         // For function definitions, we need to create local variables from the params
         self.locals.clear();
         self.enter_scope();
 
         // Create local variables for each parameter
         let mut param_indices = Vec::new();
+        if matches!(return_ty, Type::Struct { .. } | Type::Union { .. }) && return_ty.size() > 16 {
+            let name = self.new_unique_name();
+            let idx = self.new_lvar(name, Type::Ptr(Box::new(return_ty.clone())));
+            param_indices.push(idx);
+        }
         for (param_name, param_ty) in type_params {
             if param_name.is_empty() {
                 self.bail_at(name_token.location, "parameter name omitted")?;
@@ -400,12 +411,6 @@ impl<'a> Parser<'a> {
 
         // Ensure the function is visible for recursive calls.
         self.new_function_decl(name.clone(), ty.clone(), attr.is_static);
-
-        // Extract return type from function type
-        let return_ty = match &ty {
-            Type::Func { return_ty, .. } => return_ty.as_ref().clone(),
-            _ => unreachable!(),
-        };
 
         let prev_return = self.current_fn_return.clone();
         self.current_fn_return = Some(return_ty.clone());
@@ -518,7 +523,11 @@ impl<'a> Parser<'a> {
             let expr = self.parse_expr()?;
             self.expect_punct(Punct::Semicolon)?;
             let expr = if let Some(ret_ty) = self.current_fn_return.clone() {
-                self.cast_expr(expr, ret_ty)
+                if matches!(ret_ty, Type::Struct { .. } | Type::Union { .. }) {
+                    expr
+                } else {
+                    self.cast_expr(expr, ret_ty)
+                }
             } else {
                 expr
             };
