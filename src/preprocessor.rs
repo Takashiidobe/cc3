@@ -22,6 +22,7 @@
 // standard's wording:
 // https://github.com/rui314/chibicc/wiki/cpp.algo.pdf
 
+use crate::ast::Type;
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{
     HideSet, Keyword, Punct, Token, TokenKind, get_input_file, tokenize, tokenize_file,
@@ -417,6 +418,61 @@ impl Preprocessor {
         out
     }
 
+    fn read_const_expr(&mut self) -> CompileResult<Vec<Token>> {
+        let tokens = self.copy_line();
+        let mut out = Vec::new();
+        let mut i = 0;
+
+        while i < tokens.len() {
+            let tok = &tokens[i];
+            if matches!(tok.kind, TokenKind::Eof) {
+                out.push(tok.clone());
+                break;
+            }
+
+            if let TokenKind::Ident(name) = &tok.kind
+                && name == "defined"
+            {
+                let start = tok.clone();
+                let mut idx = i + 1;
+                let mut has_paren = false;
+
+                if idx < tokens.len() && matches!(tokens[idx].kind, TokenKind::Punct(Punct::LParen))
+                {
+                    has_paren = true;
+                    idx += 1;
+                }
+
+                let name_tok = tokens.get(idx).ok_or_else(|| {
+                    CompileError::at("macro name must be an identifier", start.location)
+                })?;
+                let TokenKind::Ident(macro_name) = &name_tok.kind else {
+                    return self.error("macro name must be an identifier", start.location);
+                };
+                let defined = self.find_macro_name(macro_name).is_some();
+                idx += 1;
+
+                if has_paren {
+                    if idx >= tokens.len()
+                        || !matches!(tokens[idx].kind, TokenKind::Punct(Punct::RParen))
+                    {
+                        return self.error("expected ')'", start.location);
+                    }
+                    idx += 1;
+                }
+
+                out.push(new_num_token(if defined { 1 } else { 0 }, &start));
+                i = idx;
+                continue;
+            }
+
+            out.push(tok.clone());
+            i += 1;
+        }
+
+        Ok(out)
+    }
+
     fn eval_const_expr(&mut self) -> CompileResult<i64> {
         let start = self
             .tokens
@@ -424,7 +480,7 @@ impl Preprocessor {
             .or_else(|| self.tokens.get(self.pos))
             .cloned()
             .ok_or_else(|| CompileError::new("no expression"))?;
-        let expr_tokens = self.copy_line();
+        let expr_tokens = self.read_const_expr()?;
 
         // Expand macros in the expression
         let expr_tokens = self.expand_macros_only(expr_tokens)?;
@@ -531,6 +587,17 @@ fn new_eof(tok: &Token) -> Token {
     eof.kind = TokenKind::Eof;
     eof.len = 0;
     eof
+}
+
+fn new_num_token(value: i64, tmpl: &Token) -> Token {
+    let mut tok = tmpl.clone();
+    tok.kind = TokenKind::Num {
+        value,
+        fval: 0.0,
+        ty: Type::Int,
+    };
+    tok.len = 1;
+    tok
 }
 
 fn warn_tok(tok: &Token, message: &str) {
