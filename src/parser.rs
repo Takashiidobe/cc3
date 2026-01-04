@@ -1960,6 +1960,13 @@ impl<'a> Parser<'a> {
             return Type::Ptr(Box::new(base.clone()));
         }
 
+        if matches!(ty1, Type::Func { .. }) {
+            return Type::Ptr(Box::new(ty1.clone()));
+        }
+        if matches!(ty2, Type::Func { .. }) {
+            return Type::Ptr(Box::new(ty2.clone()));
+        }
+
         if matches!(ty1, Type::Double) || matches!(ty2, Type::Double) {
             return Type::Double;
         }
