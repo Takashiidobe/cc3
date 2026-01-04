@@ -3,6 +3,12 @@ use crate::lexer::{Punct, Token, TokenKind, get_input_file, tokenize_file};
 use crate::parser::const_expr;
 use std::path::Path;
 
+#[derive(Clone, Debug)]
+struct Macro {
+    name: String,
+    body: Vec<Token>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CondCtx {
     Then,
@@ -143,12 +149,36 @@ fn eval_const_expr(tokens: &[Token], idx: usize) -> CompileResult<(i64, usize)> 
     Ok((value, rest_idx))
 }
 
-fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
+fn find_macro<'a>(macros: &'a [Macro], tok: &Token) -> Option<&'a Macro> {
+    let TokenKind::Ident(name) = &tok.kind else {
+        return None;
+    };
+    macros.iter().find(|m| &m.name == name)
+}
+
+fn add_macro(macros: &mut Vec<Macro>, name: String, body: Vec<Token>) {
+    macros.push(Macro { name, body });
+}
+
+fn expand_macro(macros: &[Macro], tokens: &[Token], idx: usize) -> Option<Vec<Token>> {
+    let m = find_macro(macros, &tokens[idx])?;
+    let mut result = m.body.clone();
+    result.extend_from_slice(&tokens[idx + 1..]);
+    Some(result)
+}
+
+fn preprocess_tokens(mut tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
     let mut out = Vec::with_capacity(tokens.len());
     let mut i = 0;
     let mut cond_incl: Vec<CondIncl> = Vec::new();
+    let mut macros: Vec<Macro> = Vec::new();
 
     while i < tokens.len() {
+        // Try to expand macros
+        if let Some(expanded) = expand_macro(&macros, &tokens, i) {
+            tokens = expanded;
+            continue;
+        }
         let tok = &tokens[i];
         if matches!(tok.kind, TokenKind::Eof) {
             out.push(tok.clone());
@@ -204,6 +234,29 @@ fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
                 }
             }
             i = skip_line(&tokens, i + 1);
+            continue;
+        }
+
+        if let TokenKind::Ident(name) = &tokens[i].kind
+            && name == "define"
+        {
+            i += 1;
+            let Some(tok) = tokens.get(i) else {
+                return Err(CompileError::at(
+                    "macro name must be an identifier",
+                    start.location,
+                ));
+            };
+            let TokenKind::Ident(name) = &tok.kind else {
+                return Err(CompileError::at(
+                    "macro name must be an identifier",
+                    tok.location,
+                ));
+            };
+            let macro_name = name.clone();
+            let (body, rest_idx) = copy_line(&tokens, i + 1);
+            add_macro(&mut macros, macro_name, body);
+            i = rest_idx;
             continue;
         }
 
