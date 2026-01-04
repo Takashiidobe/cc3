@@ -440,7 +440,7 @@ impl<'a> Parser<'a> {
         }
 
         let mut locals = mem::take(&mut self.locals);
-        let stack_size = assign_lvar_offsets(&mut locals);
+        let stack_size = assign_lvar_offsets(&mut locals, &param_indices);
 
         // Create function object
         let params = param_indices
@@ -3909,12 +3909,40 @@ fn align_to(n: i32, align: i32) -> i32 {
     (n + align - 1) / align * align
 }
 
-fn assign_lvar_offsets(locals: &mut [Obj]) -> i32 {
-    let mut offset = 0i32;
-    for var in locals.iter_mut().rev() {
-        offset += var.ty.size() as i32;
-        offset = align_to(offset, var.align);
-        var.offset = -offset;
+fn assign_lvar_offsets(locals: &mut [Obj], param_indices: &[usize]) -> i32 {
+    const GP_MAX: i32 = 6;
+    const FP_MAX: i32 = 8;
+
+    let mut top = 16;
+    let mut bottom = 0;
+    let mut gp = 0;
+    let mut fp = 0;
+
+    for &idx in param_indices {
+        let var = &mut locals[idx];
+        if var.ty.is_flonum() {
+            if fp < FP_MAX {
+                fp += 1;
+                continue;
+            }
+        } else if gp < GP_MAX {
+            gp += 1;
+            continue;
+        }
+
+        top = align_to(top, 8);
+        var.offset = top;
+        top += var.ty.size() as i32;
     }
-    align_to(offset, 16)
+
+    for var in locals.iter_mut().rev() {
+        if var.offset != 0 {
+            continue;
+        }
+        bottom += var.ty.size() as i32;
+        bottom = align_to(bottom, var.align);
+        var.offset = -bottom;
+    }
+
+    align_to(bottom, 16)
 }

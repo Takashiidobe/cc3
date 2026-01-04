@@ -173,6 +173,9 @@ impl Codegen {
         let mut gp = 0;
         let mut fp = 0;
         for param in &function.params {
+            if param.offset > 0 {
+                continue;
+            }
             if param.ty.is_flonum() {
                 self.store_fp(fp, param.offset, param.ty.size());
                 fp += 1;
