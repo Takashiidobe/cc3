@@ -3,6 +3,19 @@ use crate::lexer::{Punct, Token, TokenKind, get_input_file, tokenize_file};
 use crate::parser::const_expr;
 use std::path::Path;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CondCtx {
+    Then,
+    Else,
+}
+
+#[derive(Clone, Debug)]
+struct CondIncl {
+    ctx: CondCtx,
+    tok: Token,
+    included: bool,
+}
+
 fn is_hash(tok: &Token) -> bool {
     tok.at_bol && matches!(tok.kind, TokenKind::Punct(Punct::Hash))
 }
@@ -56,6 +69,28 @@ fn skip_line(tokens: &[Token], mut idx: usize) -> usize {
     idx
 }
 
+fn skip_cond_incl2(tokens: &[Token], mut idx: usize) -> usize {
+    while idx < tokens.len() {
+        let tok = &tokens[idx];
+        if matches!(tok.kind, TokenKind::Eof) {
+            return idx;
+        }
+        if is_hash(tok)
+            && let Some(TokenKind::Ident(name)) = tokens.get(idx + 1).map(|tok| &tok.kind)
+        {
+            if name == "if" {
+                idx = skip_cond_incl2(tokens, idx + 2);
+                continue;
+            }
+            if name == "endif" {
+                return idx + 2;
+            }
+        }
+        idx += 1;
+    }
+    idx
+}
+
 fn skip_cond_incl(tokens: &[Token], mut idx: usize) -> usize {
     while idx < tokens.len() {
         let tok = &tokens[idx];
@@ -66,13 +101,10 @@ fn skip_cond_incl(tokens: &[Token], mut idx: usize) -> usize {
             && let Some(TokenKind::Ident(name)) = tokens.get(idx + 1).map(|tok| &tok.kind)
         {
             if name == "if" {
-                idx = skip_cond_incl(tokens, idx + 2);
-                if idx < tokens.len() {
-                    idx += 1;
-                }
+                idx = skip_cond_incl2(tokens, idx + 2);
                 continue;
             }
-            if name == "endif" {
+            if name == "else" || name == "endif" {
                 break;
             }
         }
@@ -113,7 +145,7 @@ fn eval_const_expr(tokens: &[Token], idx: usize) -> CompileResult<(i64, usize)> 
 fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
     let mut out = Vec::with_capacity(tokens.len());
     let mut i = 0;
-    let mut cond_incl: Vec<Token> = Vec::new();
+    let mut cond_incl: Vec<CondIncl> = Vec::new();
 
     while i < tokens.len() {
         let tok = &tokens[i];
@@ -178,11 +210,32 @@ fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
             && name == "if"
         {
             let (value, rest_idx) = eval_const_expr(&tokens, i)?;
-            cond_incl.push(start);
+            cond_incl.push(CondIncl {
+                ctx: CondCtx::Then,
+                tok: start,
+                included: value != 0,
+            });
             if value == 0 {
                 i = skip_cond_incl(&tokens, rest_idx);
             } else {
                 i = rest_idx;
+            }
+            continue;
+        }
+
+        if let TokenKind::Ident(name) = &tokens[i].kind
+            && name == "else"
+        {
+            let Some(last) = cond_incl.last_mut() else {
+                return Err(CompileError::at("stray #else", start.location));
+            };
+            if last.ctx == CondCtx::Else {
+                return Err(CompileError::at("stray #else", start.location));
+            }
+            last.ctx = CondCtx::Else;
+            i = skip_line(&tokens, i + 1);
+            if last.included {
+                i = skip_cond_incl(&tokens, i);
             }
             continue;
         }
@@ -211,7 +264,7 @@ fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
     if let Some(start) = cond_incl.first() {
         return Err(CompileError::at(
             "unterminated conditional directive",
-            start.location,
+            start.tok.location,
         ));
     }
 
