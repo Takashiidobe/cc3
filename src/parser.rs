@@ -2788,6 +2788,7 @@ impl<'a> Parser<'a> {
 
         let len = array_len.min(str_bytes.len());
 
+        let file_no = self.last_location().file_no;
         (0..len).for_each(|i| {
             init.children[i].expr = Some(self.expr_at(
                 ExprKind::Num {
@@ -2798,6 +2799,7 @@ impl<'a> Parser<'a> {
                     line: 0,
                     column: 0,
                     byte: 0,
+                    file_no,
                 },
             ));
         });

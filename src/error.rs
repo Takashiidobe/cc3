@@ -5,6 +5,7 @@ pub struct SourceLocation {
     pub line: usize,
     pub column: usize,
     pub byte: usize,
+    pub file_no: usize,
 }
 
 #[derive(Debug, Clone)]

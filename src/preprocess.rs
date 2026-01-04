@@ -1,5 +1,6 @@
 use crate::error::{CompileError, CompileResult};
-use crate::lexer::{Punct, Token, TokenKind};
+use crate::lexer::{Punct, Token, TokenKind, get_input_file, tokenize_file};
+use std::path::Path;
 
 fn is_hash(tok: &Token) -> bool {
     tok.at_bol && matches!(tok.kind, TokenKind::Punct(Punct::Hash))
@@ -25,6 +26,42 @@ fn preprocess_tokens(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
         i += 1;
         if i >= tokens.len() {
             break;
+        }
+
+        if let TokenKind::Ident(name) = &tokens[i].kind
+            && name == "include"
+        {
+            i += 1;
+            let Some(token) = tokens.get(i) else {
+                return Err(CompileError::at(
+                    "expected a filename",
+                    tokens[i - 1].location,
+                ));
+            };
+
+            let filename = match &token.kind {
+                TokenKind::Str { bytes, .. } => {
+                    let slice = bytes.strip_suffix(&[0]).unwrap_or(bytes.as_slice());
+                    String::from_utf8_lossy(slice).into_owned()
+                }
+                _ => return Err(CompileError::at("expected a filename", token.location)),
+            };
+
+            let base = get_input_file(token.location.file_no)
+                .map(|file| file.name)
+                .unwrap_or_else(|| Path::new(".").to_path_buf());
+            let dir = base.parent().unwrap_or(Path::new("."));
+            let include_path = dir.join(filename);
+
+            let included = tokenize_file(&include_path)
+                .map_err(|err| CompileError::at(err.message().to_string(), token.location))?;
+            for inc in included {
+                if !matches!(inc.kind, TokenKind::Eof) {
+                    out.push(inc);
+                }
+            }
+            i += 1;
+            continue;
         }
 
         if tokens[i].at_bol {

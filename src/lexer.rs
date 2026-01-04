@@ -1,5 +1,57 @@
 use crate::ast::Type;
 use crate::error::{CompileError, CompileResult, SourceLocation};
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+#[derive(Debug, Clone)]
+pub struct File {
+    pub name: PathBuf,
+    pub file_no: usize,
+    pub contents: String,
+}
+
+static INPUT_FILES: OnceLock<Mutex<Vec<File>>> = OnceLock::new();
+
+fn input_files() -> &'static Mutex<Vec<File>> {
+    INPUT_FILES.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+pub fn get_input_files() -> Vec<File> {
+    input_files()
+        .lock()
+        .map(|files| files.clone())
+        .unwrap_or_default()
+}
+
+pub fn get_input_file(file_no: usize) -> Option<File> {
+    if file_no == 0 {
+        return None;
+    }
+    input_files()
+        .lock()
+        .ok()
+        .and_then(|files| files.get(file_no - 1).cloned())
+}
+
+fn register_file(path: PathBuf, contents: String) -> File {
+    let mut files = input_files().lock().expect("input files lock poisoned");
+    let file_no = files.len() + 1;
+    let file = File {
+        name: path,
+        file_no,
+        contents,
+    };
+    files.push(file.clone());
+    file
+}
+
+pub fn tokenize_file(path: &Path) -> CompileResult<Vec<Token>> {
+    let contents = fs::read_to_string(path)
+        .map_err(|err| CompileError::new(format!("failed to read {}: {err}", path.display())))?;
+    let file = register_file(path.to_path_buf(), contents);
+    tokenize(&file.contents, file.file_no)
+}
 
 /// Parse hexadecimal floating-point literal (e.g., 0x1.2p3)
 /// Format: 0x[hex_digits][.hex_digits]p[+/-][decimal_exponent]
@@ -205,7 +257,7 @@ pub struct Token {
     pub at_bol: bool,
 }
 
-pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
+pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
     let bytes = input.as_bytes();
     let mut tokens = Vec::new();
     let mut i = 0;
@@ -230,6 +282,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                     line,
                     column,
                     byte: i,
+                    file_no,
                 };
                 i += 2;
                 column += 2;
@@ -278,6 +331,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 line,
                 column,
                 byte: start,
+                file_no,
             };
 
             // If starts with '.', it's a float
@@ -566,6 +620,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 line,
                 column,
                 byte: start,
+                file_no,
             };
             i += 1;
             while i < bytes.len() && is_ident_continue(bytes[i]) {
@@ -630,6 +685,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 line,
                 column,
                 byte: start,
+                file_no,
             };
             let end = string_literal_end(bytes, start + 1, location)?;
             let mut str_bytes = Vec::with_capacity(end - (start + 1) + 1);
@@ -670,6 +726,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 line,
                 column,
                 byte: start,
+                file_no,
             };
             i += 1;
             if i >= bytes.len() {
@@ -713,6 +770,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                     line,
                     column,
                     byte: i,
+                    file_no,
                 },
                 at_bol,
             });
@@ -728,6 +786,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 line,
                 column,
                 byte: i,
+                file_no,
             },
         ));
     }
@@ -738,6 +797,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             line,
             column,
             byte: input.len(),
+            file_no,
         },
         at_bol,
     });

@@ -1,4 +1,6 @@
 use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
+use crate::error::SourceLocation;
+use crate::lexer::get_input_files;
 
 const ARG_REGS_8: [&str; 6] = ["%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"];
 const ARG_REGS_16: [&str; 6] = ["%di", "%si", "%dx", "%cx", "%r8w", "%r9w"];
@@ -21,9 +23,20 @@ impl Codegen {
     }
 
     pub fn generate(mut self, program: &Program) -> String {
+        self.emit_files();
         self.emit_data(program);
         self.emit_text(program);
         self.buffer
+    }
+
+    fn emit_files(&mut self) {
+        for file in get_input_files() {
+            self.emit_line(&format!(
+                "  .file {} \"{}\"",
+                file.file_no,
+                file.name.display()
+            ));
+        }
     }
 
     fn emit_data(&mut self, program: &Program) {
@@ -185,6 +198,15 @@ impl Codegen {
         self.buffer.push('\n');
     }
 
+    fn emit_loc(&mut self, location: SourceLocation) {
+        let file_no = if location.file_no == 0 {
+            1
+        } else {
+            location.file_no
+        };
+        self.emit_line(&format!("  .loc {} {}", file_no, location.line));
+    }
+
     fn push(&mut self) {
         self.emit_line("  push %rax");
         self.depth += 1;
@@ -235,7 +257,7 @@ impl Codegen {
     }
 
     fn gen_stmt(&mut self, stmt: &Stmt, function: &Obj, globals: &[Obj]) {
-        self.emit_line(&format!("  .loc 1 {}", stmt.location.line));
+        self.emit_loc(stmt.location);
         match &stmt.kind {
             StmtKind::Return(expr) => {
                 if let Some(expr) = expr {
@@ -376,7 +398,7 @@ impl Codegen {
     }
 
     fn gen_expr(&mut self, expr: &Expr, function: &Obj, globals: &[Obj]) {
-        self.emit_line(&format!("  .loc 1 {}", expr.location.line));
+        self.emit_loc(expr.location);
         match &expr.kind {
             ExprKind::Null => {
                 // Do nothing

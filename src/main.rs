@@ -110,14 +110,10 @@ fn run_cc1_subprocess(input: &Path, output: Option<&Path>, show_cmd: bool) -> io
 }
 
 fn run_cc1(input: &Path, output: Option<&Path>) -> CompileResult<()> {
-    let source = fs::read_to_string(input)
-        .map_err(|err| CompileError::new(format!("failed to read {}: {err}", input.display())))?;
-
-    let tokens = lexer::tokenize(&source)?;
+    let tokens = lexer::tokenize_file(input)?;
     let tokens = preprocess::preprocess(tokens)?;
     let program = parser::parse(&tokens)?;
-    let mut asm = format!(".file 1 \"{}\"\n", input.display());
-    asm.push_str(&codegen::Codegen::new().generate(&program));
+    let asm = codegen::Codegen::new().generate(&program);
 
     if let Some(path) = output {
         fs::write(path, asm).map_err(|err| {
@@ -300,7 +296,14 @@ fn format_diagnostic(err: &CompileError, path: &std::path::Path) -> String {
         return header;
     };
 
-    let source = fs::read_to_string(path).unwrap_or_default();
+    let (source_path, source) = if let Some(file) = lexer::get_input_file(location.file_no) {
+        (file.name, file.contents)
+    } else {
+        (
+            path.to_path_buf(),
+            fs::read_to_string(path).unwrap_or_default(),
+        )
+    };
     let line_text = source.lines().nth(location.line.saturating_sub(1));
     let width = location.line.to_string().len().max(3);
 
@@ -309,7 +312,7 @@ fn format_diagnostic(err: &CompileError, path: &std::path::Path) -> String {
     out.push('\n');
     out.push_str(&format!(
         "  --> {}:{}:{}\n",
-        path.display(),
+        source_path.display(),
         location.line,
         location.column
     ));
