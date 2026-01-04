@@ -890,6 +890,12 @@ impl Preprocessor {
                 continue;
             }
 
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
+                && name == "error"
+            {
+                self.error("error", self.cur_tok().location)?;
+            }
+
             if self.cur_tok().at_bol {
                 continue;
             }

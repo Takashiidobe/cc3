@@ -1,0 +1,6 @@
+---
+source: tests/diagnostics.rs
+expression: "&log"
+---
+stderr: "error: error\n  --> ./tests/invalid/error_directive.c:1:2\n    |\n  1 | #error fail\n    |  ^\n\n"
+status: 1
