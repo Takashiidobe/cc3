@@ -109,6 +109,7 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     // 1) Your compiler: codegen -> .S, then cc -> exe_mine
     let mut bin = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
     let codegen_out = bin
+        .arg("-Itest")
         .arg(path)
         .arg("-S")
         .arg("-o")

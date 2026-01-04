@@ -28,7 +28,8 @@ use crate::lexer::{
     HideSet, Keyword, Punct, Token, TokenKind, get_input_file, tokenize, tokenize_file,
 };
 use crate::parser::const_expr;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Debug)]
 struct MacroParam {
@@ -68,6 +69,25 @@ struct Preprocessor {
     tokens: Vec<Token>,
     macros: Vec<Macro>,
     pos: usize, // Current position in token stream
+}
+
+static INCLUDE_PATHS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+
+fn include_paths_storage() -> &'static Mutex<Vec<PathBuf>> {
+    INCLUDE_PATHS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+pub fn set_include_paths(paths: Vec<PathBuf>) {
+    *include_paths_storage()
+        .lock()
+        .expect("include paths lock poisoned") = paths;
+}
+
+fn get_include_paths() -> Vec<PathBuf> {
+    include_paths_storage()
+        .lock()
+        .map(|paths| paths.clone())
+        .unwrap_or_default()
 }
 
 impl Preprocessor {
@@ -589,6 +609,21 @@ fn raw_string_literal(tok: &Token) -> String {
     String::new()
 }
 
+fn search_include_paths(filename: &str) -> Option<PathBuf> {
+    if Path::new(filename).is_absolute() {
+        return Some(PathBuf::from(filename));
+    }
+
+    for path in get_include_paths() {
+        let candidate = path.join(filename);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+
+    None
+}
+
 fn quote_string(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 2);
     out.push('"');
@@ -706,10 +741,10 @@ impl Preprocessor {
                     self.error("expected a filename", loc)?;
                     unreachable!("expected error to return");
                 }
-                let (filename, _is_dquote, filename_tok) = self.read_include_filename()?;
+                let (filename, is_dquote, filename_tok) = self.read_include_filename()?;
                 let filename_path = Path::new(&filename);
 
-                if !filename_path.is_absolute() {
+                if is_dquote && !filename_path.is_absolute() {
                     let base = get_input_file(start.location.file_no)
                         .map(|file| file.name)
                         .unwrap_or_else(|| Path::new(".").to_path_buf());
@@ -721,8 +756,9 @@ impl Preprocessor {
                     }
                 }
 
-                // TODO: Search a file from the include paths.
-                self.include_file(&mut out, filename_path, &filename_tok)?;
+                let include_path =
+                    search_include_paths(&filename).unwrap_or_else(|| filename_path.to_path_buf());
+                self.include_file(&mut out, &include_path, &filename_tok)?;
                 continue;
             }
 

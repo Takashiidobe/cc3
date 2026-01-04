@@ -42,6 +42,9 @@ struct Args {
     /// Output file. Writes to stdout if omitted in cc1 mode.
     #[arg(short = 'o', long = "output")]
     output: Option<PathBuf>,
+    /// Add include search path.
+    #[arg(short = 'I', value_name = "DIR")]
+    include_dirs: Vec<PathBuf>,
 }
 
 fn main() {
@@ -49,6 +52,7 @@ fn main() {
     let args = Args::parse_from(preprocess_args(&raw_args));
 
     if args.cc1 {
+        preprocessor::set_include_paths(args.include_dirs.clone());
         let input = match args.cc1_input.as_ref().or_else(|| args.inputs.first()) {
             Some(path) => path,
             None => {
@@ -103,6 +107,7 @@ fn run_cc1_subprocess(
     input: &Path,
     output: Option<&Path>,
     preprocess_only: bool,
+    include_dirs: &[PathBuf],
     show_cmd: bool,
 ) -> io::Result<()> {
     let exe = std::env::args()
@@ -117,6 +122,9 @@ fn run_cc1_subprocess(
     if let Some(output) = output {
         argv.push("-cc1-output".to_string());
         argv.push(output.display().to_string());
+    }
+    for dir in include_dirs {
+        argv.push(format!("-I{}", dir.display()));
     }
     run_subprocess(&argv, show_cmd)
 }
@@ -230,7 +238,13 @@ fn run_driver(args: &Args) -> io::Result<()> {
                     format!("unknown file extension: {}", input.display()),
                 ));
             }
-            run_cc1_subprocess(input, output.as_deref(), true, args.hash_hash_hash)?;
+            run_cc1_subprocess(
+                input,
+                output.as_deref(),
+                true,
+                &args.include_dirs,
+                args.hash_hash_hash,
+            )?;
             continue;
         }
 
@@ -256,13 +270,25 @@ fn run_driver(args: &Args) -> io::Result<()> {
         }
 
         if args.emit_asm {
-            run_cc1_subprocess(input, output.as_deref(), false, args.hash_hash_hash)?;
+            run_cc1_subprocess(
+                input,
+                output.as_deref(),
+                false,
+                &args.include_dirs,
+                args.hash_hash_hash,
+            )?;
             continue;
         }
 
         if args.compile_only {
             let tmp_asm = create_tmpfile("cc3", ".s")?;
-            run_cc1_subprocess(input, Some(&tmp_asm), false, args.hash_hash_hash)?;
+            run_cc1_subprocess(
+                input,
+                Some(&tmp_asm),
+                false,
+                &args.include_dirs,
+                args.hash_hash_hash,
+            )?;
             assemble(&tmp_asm, output.as_ref().unwrap(), args.hash_hash_hash)?;
             let _ = fs::remove_file(&tmp_asm);
             continue;
@@ -270,7 +296,13 @@ fn run_driver(args: &Args) -> io::Result<()> {
 
         let tmp_asm = create_tmpfile("cc3", ".s")?;
         let tmp_obj = create_tmpfile("cc3", ".o")?;
-        run_cc1_subprocess(input, Some(&tmp_asm), false, args.hash_hash_hash)?;
+        run_cc1_subprocess(
+            input,
+            Some(&tmp_asm),
+            false,
+            &args.include_dirs,
+            args.hash_hash_hash,
+        )?;
         assemble(&tmp_asm, &tmp_obj, args.hash_hash_hash)?;
         let _ = fs::remove_file(&tmp_asm);
         link_inputs.push(tmp_obj.clone());
