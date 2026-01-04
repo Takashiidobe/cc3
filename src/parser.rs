@@ -422,8 +422,10 @@ impl<'a> Parser<'a> {
         let mut func_bytes = name.as_bytes().to_vec();
         func_bytes.push(0);
         let func_ty = Type::array(Type::Char, func_bytes.len() as i32);
-        let func_idx = self.new_string_literal(func_bytes, func_ty);
+        let func_idx = self.new_string_literal(func_bytes.clone(), func_ty.clone());
         self.push_scope_var_named("__func__".to_string(), func_idx, false);
+        let function_idx = self.new_string_literal(func_bytes, func_ty);
+        self.push_scope_var_named("__FUNCTION__".to_string(), function_idx, false);
 
         let mut body = self.parse_block_items()?;
         self.leave_scope();
