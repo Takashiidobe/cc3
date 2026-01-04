@@ -282,8 +282,13 @@ impl Preprocessor {
 
             let mut result = Vec::new();
             result.extend_from_slice(&self.tokens[..self.pos]);
+            let start_idx = result.len();
             result.extend(body);
             result.extend_from_slice(&self.tokens[self.pos + 1..]);
+            if let Some(first) = result.get_mut(start_idx) {
+                first.at_bol = tok.at_bol;
+                first.has_space = tok.has_space;
+            }
             return Ok(Some(result));
         }
 
@@ -305,10 +310,15 @@ impl Preprocessor {
         self.pos = saved_pos;
         let mut result = Vec::new();
         result.extend_from_slice(&self.tokens[..saved_pos]);
+        let start_idx = result.len();
         let mut expanded = self.subst(&body, &args)?;
         hs.add_tokens(&mut expanded);
         result.extend(expanded);
         result.extend_from_slice(&self.tokens[rest_pos..]);
+        if let Some(first) = result.get_mut(start_idx) {
+            first.at_bol = tok.at_bol;
+            first.has_space = tok.has_space;
+        }
         Ok(Some(result))
     }
 
@@ -1002,7 +1012,13 @@ impl Preprocessor {
             // Check if this token is a parameter that should be substituted.
             if let Some(arg) = find_arg(args, tok) {
                 // Macro arguments are completely macro-expanded before substitution.
-                let expanded = self.expand_macros_only(arg.tokens.clone())?;
+                let mut expanded = self.expand_macros_only(arg.tokens.clone())?;
+                if let Some(first) = expanded.first_mut()
+                    && !matches!(first.kind, TokenKind::Eof)
+                {
+                    first.at_bol = tok.at_bol;
+                    first.has_space = tok.has_space;
+                }
                 for exp_tok in &expanded {
                     if matches!(exp_tok.kind, TokenKind::Eof) {
                         break;

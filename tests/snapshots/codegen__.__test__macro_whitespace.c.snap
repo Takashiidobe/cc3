@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "strcmp(M13(bar), \"foo.bar\") => 0\nstrcmp(M13(bar), \"foo. bar\") => 0\nstrcmp(M14(bar), \"bar.foo\") => 0\nstrcmp(M14(bar), \"bar. foo\") => 0\nOK\n"
+status: 0
