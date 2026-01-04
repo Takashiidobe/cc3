@@ -134,7 +134,7 @@ fn skip_cond_incl2(tokens: &[Token], mut idx: usize) -> usize {
         if is_hash(tok)
             && let Some(TokenKind::Ident(name)) = tokens.get(idx + 1).map(|tok| &tok.kind)
         {
-            if name == "if" {
+            if name == "if" || name == "ifdef" || name == "ifndef" {
                 idx = skip_cond_incl2(tokens, idx + 2);
                 continue;
             }
@@ -156,7 +156,7 @@ fn skip_cond_incl(tokens: &[Token], mut idx: usize) -> usize {
         if is_hash(tok)
             && let Some(TokenKind::Ident(name)) = tokens.get(idx + 1).map(|tok| &tok.kind)
         {
-            if name == "if" {
+            if name == "if" || name == "ifdef" || name == "ifndef" {
                 idx = skip_cond_incl2(tokens, idx + 2);
                 continue;
             }
@@ -374,6 +374,25 @@ fn preprocess_tokens(mut tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
             let macro_name = name.clone();
             i = skip_line(&tokens, i + 1);
             add_macro(&mut macros, macro_name, Vec::new(), true);
+            continue;
+        }
+
+        if let TokenKind::Ident(name) = &tokens[i].kind
+            && (name == "ifdef" || name == "ifndef")
+        {
+            let is_ifdef = name == "ifdef";
+            i += 1;
+            let defined = find_macro(&macros, &tokens[i]).is_some();
+            let included = if is_ifdef { defined } else { !defined };
+            cond_incl.push(CondIncl {
+                ctx: CondCtx::Then,
+                tok: start,
+                included,
+            });
+            i = skip_line(&tokens, i + 1);
+            if !included {
+                i = skip_cond_incl(&tokens, i);
+            }
             continue;
         }
 
