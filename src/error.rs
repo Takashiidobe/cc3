@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct SourceLocation {
     pub line: usize,
     pub column: usize,

@@ -194,6 +194,15 @@ int main() {
 #else
 #endif
 
+#undef M7
+  int M7 = 1;
+
+#define M8() 5
+  assert(5, M8(), "M8()");
+
+#define M9() M7 + 3
+  assert(4, M9(), "M9()");
+
   printf("OK\n");
   return 0;
 }

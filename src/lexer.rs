@@ -135,13 +135,21 @@ pub enum Keyword {
     Noreturn,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum TokenKind {
     Keyword(Keyword),
     Ident(String),
-    Num { value: i64, fval: f64, ty: Type },
-    Str { bytes: Vec<u8>, ty: Type },
+    Num {
+        value: i64,
+        fval: f64,
+        ty: Type,
+    },
+    Str {
+        bytes: Vec<u8>,
+        ty: Type,
+    },
     Punct(Punct),
+    #[default]
     Eof,
 }
 
@@ -251,11 +259,12 @@ impl std::fmt::Display for Punct {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Token {
     pub kind: TokenKind,
     pub location: SourceLocation,
     pub at_bol: bool,
+    pub has_space: bool, // True if this token follows a space character
     pub len: usize,
     pub hideset: HashSet<String>, // For macro expansion
 }
@@ -267,6 +276,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
     let mut line = 1;
     let mut column = 1;
     let mut at_bol = true;
+    let mut has_space = false;
 
     while i < bytes.len() {
         let b = bytes[i];
@@ -278,6 +288,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     i += 1;
                     column += 1;
                 }
+                has_space = true;
                 continue;
             }
             if bytes[i + 1] == b'*' {
@@ -310,6 +321,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 if !closed {
                     return Err(CompileError::at("unclosed block comment", start_location));
                 }
+                has_space = true;
                 continue;
             }
         }
@@ -318,11 +330,13 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
             column = 1;
             i += 1;
             at_bol = true;
+            has_space = false;
             continue;
         }
         if b.is_ascii_whitespace() {
             column += 1;
             i += 1;
+            has_space = true;
             continue;
         }
 
@@ -393,10 +407,12 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     kind: TokenKind::Num { value: 0, fval, ty },
                     location,
                     at_bol,
+                    has_space,
                     len: i - start,
                     hideset: HashSet::new(),
                 });
                 at_bol = false;
+                has_space = false;
                 column += i - start;
                 continue;
             }
@@ -551,10 +567,12 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     kind: TokenKind::Num { value: 0, fval, ty },
                     location,
                     at_bol,
+                    has_space,
                     len: i - start,
                     hideset: HashSet::new(),
                 });
                 at_bol = false;
+                has_space = false;
                 column += i - start;
                 continue;
             }
@@ -615,10 +633,12 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 },
                 location,
                 at_bol,
+                has_space,
                 len: i - start,
                 hideset: HashSet::new(),
             });
             at_bol = false;
+            has_space = false;
             column += i - start;
             continue;
         }
@@ -682,10 +702,12 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 kind,
                 location,
                 at_bol,
+                has_space,
                 len: i - start,
                 hideset: HashSet::new(),
             });
             at_bol = false;
+            has_space = false;
             column += i - start;
             continue;
         }
@@ -724,10 +746,12 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 },
                 location,
                 at_bol,
+                has_space,
                 len: end + 1 - start,
                 hideset: HashSet::new(),
             });
             at_bol = false;
+            has_space = false;
             i = end + 1;
             column += i - start;
             continue;
@@ -770,10 +794,12 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 },
                 location,
                 at_bol,
+                has_space,
                 len: i - start,
                 hideset: HashSet::new(),
             });
             at_bol = false;
+            has_space = false;
             column += i - start;
             continue;
         }
@@ -788,10 +814,12 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     file_no,
                 },
                 at_bol,
+                has_space,
                 len,
                 hideset: HashSet::new(),
             });
             at_bol = false;
+            has_space = false;
             i += len;
             column += len;
             continue;
@@ -817,6 +845,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
             file_no,
         },
         at_bol,
+        has_space: false,
         len: 0,
         hideset: HashSet::new(),
     });

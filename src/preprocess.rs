@@ -30,6 +30,7 @@ use std::path::Path;
 #[derive(Clone, Debug)]
 struct Macro {
     name: String,
+    is_objlike: bool, // Object-like or function-like
     body: Vec<Token>,
     deleted: bool,
 }
@@ -208,12 +209,55 @@ fn find_macro<'a>(macros: &'a [Macro], tok: &Token) -> Option<&'a Macro> {
     macros.iter().find(|m| &m.name == name && !m.deleted)
 }
 
-fn add_macro(macros: &mut Vec<Macro>, name: String, body: Vec<Token>, deleted: bool) {
+fn add_macro(
+    macros: &mut Vec<Macro>,
+    name: String,
+    is_objlike: bool,
+    body: Vec<Token>,
+    deleted: bool,
+) {
     macros.push(Macro {
         name,
+        is_objlike,
         body,
         deleted,
     });
+}
+
+fn read_macro_definition(macros: &mut Vec<Macro>, tokens: &[Token], idx: usize) -> usize {
+    let tok = &tokens[idx];
+    let TokenKind::Ident(name) = &tok.kind else {
+        // Error: macro name must be an identifier (would need error handling)
+        return idx;
+    };
+    let macro_name = name.clone();
+    let mut i = idx + 1;
+
+    // Check if this is a function-like macro (no space before '(')
+    if i < tokens.len()
+        && !tokens[i].has_space
+        && matches!(&tokens[i].kind, TokenKind::Punct(Punct::LParen))
+    {
+        // Function-like macro - skip to matching ')'
+        i += 1; // skip '('
+        let mut depth = 1;
+        while i < tokens.len() && depth > 0 {
+            if matches!(&tokens[i].kind, TokenKind::Punct(Punct::LParen)) {
+                depth += 1;
+            } else if matches!(&tokens[i].kind, TokenKind::Punct(Punct::RParen)) {
+                depth -= 1;
+            }
+            i += 1;
+        }
+        let (body, rest_idx) = copy_line(tokens, i);
+        add_macro(macros, macro_name, false, body, false);
+        rest_idx
+    } else {
+        // Object-like macro
+        let (body, rest_idx) = copy_line(tokens, i);
+        add_macro(macros, macro_name, true, body, false);
+        rest_idx
+    }
 }
 
 fn expand_macro(macros: &[Macro], tokens: &[Token], idx: usize) -> Option<Vec<Token>> {
@@ -229,12 +273,36 @@ fn expand_macro(macros: &[Macro], tokens: &[Token], idx: usize) -> Option<Vec<To
 
     let m = find_macro(macros, tok)?;
 
-    // Create the union of the token's hideset and a new hideset containing this macro
-    let hs = hideset_union(&tok.hideset, &new_hideset(m.name.clone()));
-    let body = add_hideset(m.body.clone(), hs);
+    // Object-like macro application
+    if m.is_objlike {
+        let hs = hideset_union(&tok.hideset, &new_hideset(m.name.clone()));
+        let body = add_hideset(m.body.clone(), hs);
 
-    let mut result = body;
-    result.extend_from_slice(&tokens[idx + 1..]);
+        let mut result = body;
+        result.extend_from_slice(&tokens[idx + 1..]);
+        return Some(result);
+    }
+
+    // If a funclike macro token is not followed by an argument list,
+    // treat it as a normal identifier.
+    if idx + 1 >= tokens.len() || !matches!(tokens[idx + 1].kind, TokenKind::Punct(Punct::LParen)) {
+        return None;
+    }
+
+    // Function-like macro application - skip to matching ')'
+    let mut i = idx + 2;
+    let mut depth = 1;
+    while i < tokens.len() && depth > 0 {
+        if matches!(tokens[i].kind, TokenKind::Punct(Punct::LParen)) {
+            depth += 1;
+        } else if matches!(tokens[i].kind, TokenKind::Punct(Punct::RParen)) {
+            depth -= 1;
+        }
+        i += 1;
+    }
+
+    let mut result = m.body.clone();
+    result.extend_from_slice(&tokens[i..]);
     Some(result)
 }
 
@@ -342,16 +410,13 @@ fn preprocess_tokens(mut tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
                     start.location,
                 ));
             };
-            let TokenKind::Ident(name) = &tok.kind else {
+            let TokenKind::Ident(_name) = &tok.kind else {
                 return Err(CompileError::at(
                     "macro name must be an identifier",
                     tok.location,
                 ));
             };
-            let macro_name = name.clone();
-            let (body, rest_idx) = copy_line(&tokens, i + 1);
-            add_macro(&mut macros, macro_name, body, false);
-            i = rest_idx;
+            i = read_macro_definition(&mut macros, &tokens, i);
             continue;
         }
 
@@ -373,7 +438,7 @@ fn preprocess_tokens(mut tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
             };
             let macro_name = name.clone();
             i = skip_line(&tokens, i + 1);
-            add_macro(&mut macros, macro_name, Vec::new(), true);
+            add_macro(&mut macros, macro_name, true, Vec::new(), true);
             continue;
         }
 
