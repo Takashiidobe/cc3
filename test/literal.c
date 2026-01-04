@@ -78,7 +78,6 @@ int main() {
   ASSERT(-1, 0x1 << 31 >> 31);
   ASSERT(-1, 0b1 << 31 >> 31);
 
-  // Floating-point literals
   0.0;
   1.0;
   3e+8;

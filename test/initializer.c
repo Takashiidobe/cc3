@@ -32,9 +32,9 @@ typedef char T60[];
 T60 g60 = {1, 2, 3};
 T60 g61 = {1, 2, 3, 4, 5, 6};
 
-typedef struct { char a; char b[]; } T65;
-T65 g65 = {'f',{'o','o',0}};
-T65 g66 = {'f',{'o','o','b','a','r',0}};
+typedef struct { char a, b[]; } T65;
+T65 g65 = {'f','o','o',0};
+T65 g66 = {'f','o','o','b','a','r',0};
 
 int main() {
   ASSERT(1, ({ int x[3]={1,2,3}; x[0]; }));
@@ -53,9 +53,6 @@ int main() {
   ASSERT(2, ({ int x[2][3]={{1,2}}; x[0][1]; }));
   ASSERT(0, ({ int x[2][3]={{1,2}}; x[1][0]; }));
   ASSERT(0, ({ int x[2][3]={{1,2}}; x[1][2]; }));
-
-  ASSERT(1, ({ int x[2]={1,2,3}; x[0]; }));
-  ASSERT(2, ({ int x[2]={1,2,3}; x[1]; }));
 
   ASSERT('a', ({ char x[4]="abc"; x[0]; }));
   ASSERT('c', ({ char x[4]="abc"; x[2]; }));

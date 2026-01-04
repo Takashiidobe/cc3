@@ -23,7 +23,9 @@
 // https://github.com/rui314/chibicc/wiki/cpp.algo.pdf
 
 use crate::error::{CompileError, CompileResult, SourceLocation};
-use crate::lexer::{HideSet, Punct, Token, TokenKind, get_input_file, tokenize, tokenize_file};
+use crate::lexer::{
+    HideSet, Keyword, Punct, Token, TokenKind, get_input_file, tokenize, tokenize_file,
+};
 use crate::parser::const_expr;
 use std::path::Path;
 
@@ -88,11 +90,19 @@ impl Preprocessor {
         Err(CompileError::at(message, location))
     }
 
+    fn find_macro_name(&self, name: &str) -> Option<&Macro> {
+        for m in self.macros.iter().rev() {
+            if m.name != name {
+                continue;
+            }
+            return if m.deleted { None } else { Some(m) };
+        }
+        None
+    }
+
     fn find_macro(&self, tok: &Token) -> Option<&Macro> {
-        let TokenKind::Ident(name) = &tok.kind else {
-            return None;
-        };
-        self.macros.iter().find(|m| &m.name == name && !m.deleted)
+        let name = macro_name(tok)?;
+        self.find_macro_name(&name)
     }
 
     fn read_macro_params(&mut self) -> Vec<MacroParam> {
@@ -134,11 +144,10 @@ impl Preprocessor {
             return;
         };
         let tok = self.cur_tok();
-        let TokenKind::Ident(name) = &tok.kind else {
+        let Some(macro_name) = macro_name(tok) else {
             // Error: macro name must be an identifier (would need error handling)
             return;
         };
-        let macro_name = name.clone();
         self.pos += 1;
 
         // Check if this is a function-like macro (no space before '(')
@@ -172,14 +181,21 @@ impl Preprocessor {
 
     fn read_macro_arg_one(&mut self) -> Vec<Token> {
         let mut arg_tokens = Vec::new();
+        let mut level = 0;
 
         while self.pos < self.tokens.len()
-            && !matches!(self.cur_tok().kind, TokenKind::Punct(Punct::Comma))
-            && !matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))
+            && (level > 0
+                || (!matches!(self.cur_tok().kind, TokenKind::Punct(Punct::Comma))
+                    && !matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))))
         {
             if matches!(self.cur_tok().kind, TokenKind::Eof) {
                 // Error: premature end of input
                 break;
+            }
+            if matches!(self.cur_tok().kind, TokenKind::Punct(Punct::LParen)) {
+                level += 1;
+            } else if matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen)) {
+                level -= 1;
             }
             arg_tokens.push(self.cur_tok().clone());
             self.pos += 1;
@@ -230,15 +246,15 @@ impl Preprocessor {
         let tok = self.cur_tok().clone();
 
         // Check if this macro is in the token's hideset
-        let TokenKind::Ident(name) = &tok.kind else {
+        let Some(macro_name) = macro_name(&tok) else {
             return Ok(None);
         };
-        if tok.hideset.contains(name) {
+        if tok.hideset.contains(&macro_name) {
             return Ok(None);
         }
 
         let (is_objlike, params, body, macro_name) = {
-            let Some(m) = self.find_macro(&tok) else {
+            let Some(m) = self.find_macro_name(&macro_name) else {
                 return Ok(None);
             };
             (
@@ -255,6 +271,12 @@ impl Preprocessor {
             hs.add(macro_name);
             let hs = tok.hideset.union(&hs);
             let mut body = body;
+            if body
+                .last()
+                .is_some_and(|tok| matches!(tok.kind, TokenKind::Eof))
+            {
+                body.pop();
+            }
             hs.add_tokens(&mut body);
 
             let mut result = Vec::new();
@@ -337,16 +359,16 @@ impl Preprocessor {
             if matches!(tok.kind, TokenKind::Eof) {
                 return;
             }
-            if is_hash(tok)
-                && self.pos + 1 < self.tokens.len()
-                && let TokenKind::Ident(name) = &self.peek(1).kind
-            {
-                if name == "if" || name == "ifdef" || name == "ifndef" {
+            if is_hash(tok) && self.pos + 1 < self.tokens.len() {
+                let kind = &self.peek(1).kind;
+                if is_if_directive(kind)
+                    || matches!(kind, TokenKind::Ident(name) if name == "ifdef" || name == "ifndef")
+                {
                     self.pos += 2;
                     self.skip_cond_incl2();
                     continue;
                 }
-                if name == "endif" {
+                if matches!(kind, TokenKind::Ident(name) if name == "endif") {
                     self.pos += 2;
                     return;
                 }
@@ -361,16 +383,18 @@ impl Preprocessor {
             if matches!(tok.kind, TokenKind::Eof) {
                 return;
             }
-            if is_hash(tok)
-                && self.pos + 1 < self.tokens.len()
-                && let TokenKind::Ident(name) = &self.peek(1).kind
-            {
-                if name == "if" || name == "ifdef" || name == "ifndef" {
+            if is_hash(tok) && self.pos + 1 < self.tokens.len() {
+                let kind = &self.peek(1).kind;
+                if is_if_directive(kind)
+                    || matches!(kind, TokenKind::Ident(name) if name == "ifdef" || name == "ifndef")
+                {
                     self.pos += 2;
                     self.skip_cond_incl2();
                     continue;
                 }
-                if name == "elif" || name == "else" || name == "endif" {
+                if matches!(kind, TokenKind::Ident(name) if name == "elif" || name == "endif")
+                    || is_else_directive(kind)
+                {
                     break;
                 }
             }
@@ -422,6 +446,24 @@ fn find_arg<'a>(args: &'a [MacroArg], tok: &Token) -> Option<&'a MacroArg> {
         return None;
     };
     args.iter().find(|arg| &arg.name == name)
+}
+
+fn macro_name(tok: &Token) -> Option<String> {
+    match &tok.kind {
+        TokenKind::Ident(name) => Some(name.clone()),
+        TokenKind::Keyword(keyword) => Some(keyword.to_string()),
+        _ => None,
+    }
+}
+
+fn is_if_directive(kind: &TokenKind) -> bool {
+    matches!(kind, TokenKind::Ident(name) if name == "if")
+        || matches!(kind, TokenKind::Keyword(Keyword::If))
+}
+
+fn is_else_directive(kind: &TokenKind) -> bool {
+    matches!(kind, TokenKind::Ident(name) if name == "else")
+        || matches!(kind, TokenKind::Keyword(Keyword::Else))
 }
 
 fn token_text(tok: &Token) -> String {
@@ -580,7 +622,11 @@ impl Preprocessor {
 
                 let included = tokenize_file(&include_path)
                     .map_err(|err| CompileError::at(err.message().to_string(), token.location))?;
-                for inc in included {
+                let mut included_pp = Preprocessor::new(included);
+                included_pp.macros = self.macros.clone();
+                let included_tokens = included_pp.preprocess_tokens()?;
+                self.macros = included_pp.macros;
+                for inc in included_tokens {
                     if !matches!(inc.kind, TokenKind::Eof) {
                         out.push(inc);
                     }
@@ -599,10 +645,10 @@ impl Preprocessor {
                     unreachable!("expected error to return");
                 }
                 let tok = self.cur_tok();
-                let TokenKind::Ident(_name) = &tok.kind else {
+                if macro_name(tok).is_none() {
                     self.error("macro name must be an identifier", tok.location)?;
                     unreachable!("expected error to return");
-                };
+                }
                 self.read_macro_definition();
                 continue;
             }
@@ -616,11 +662,10 @@ impl Preprocessor {
                     unreachable!("expected error to return");
                 }
                 let tok = self.cur_tok();
-                let TokenKind::Ident(name) = &tok.kind else {
+                let Some(macro_name) = macro_name(tok) else {
                     self.error("macro name must be an identifier", tok.location)?;
                     unreachable!("expected error to return");
                 };
-                let macro_name = name.clone();
                 self.pos += 1;
                 self.skip_line();
                 self.macros.push(Macro {
@@ -652,9 +697,7 @@ impl Preprocessor {
                 continue;
             }
 
-            if let TokenKind::Ident(name) = &self.cur_tok().kind
-                && name == "if"
-            {
+            if is_if_directive(&self.cur_tok().kind) {
                 self.pos += 1;
                 let value = self.eval_const_expr()?;
                 cond_incl.push(CondIncl {
@@ -668,9 +711,7 @@ impl Preprocessor {
                 continue;
             }
 
-            if let TokenKind::Ident(name) = &self.cur_tok().kind
-                && name == "else"
-            {
+            if is_else_directive(&self.cur_tok().kind) {
                 let Some(last) = cond_incl.last_mut() else {
                     self.error("stray #else", start.location)?;
                     unreachable!("expected error to return");
@@ -758,16 +799,15 @@ impl Preprocessor {
 
     fn paste(&self, lhs: &Token, rhs: &Token) -> CompileResult<Token> {
         let buf = format!("{}{}", token_text(lhs), token_text(rhs));
-        let mut tokens = tokenize(&buf, lhs.location.file_no)?;
-        let mut tok = tokens
-            .drain(..)
+        let tokens = tokenize(&buf, lhs.location.file_no)?;
+        let mut iter = tokens.into_iter();
+        let mut tok = iter
             .next()
             .ok_or_else(|| CompileError::new("failed to tokenize pasted token"))?;
-        let next = tokens
-            .drain(..)
+        let next = iter
             .next()
             .ok_or_else(|| CompileError::new("failed to tokenize pasted token"))?;
-        if !matches!(next.kind, TokenKind::Eof) || !tokens.is_empty() {
+        if !matches!(next.kind, TokenKind::Eof) || iter.next().is_some() {
             return self.error(
                 format!("pasting forms '{buf}', an invalid token"),
                 lhs.location,
@@ -776,6 +816,7 @@ impl Preprocessor {
         tok.location = lhs.location;
         tok.at_bol = lhs.at_bol;
         tok.has_space = lhs.has_space;
+        tok.len = 0;
         Ok(tok)
     }
 

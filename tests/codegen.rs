@@ -63,19 +63,6 @@ fn run_exe(exe: &Path) -> io::Result<Output> {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).output()
 }
 
-fn preprocess(src: &Path) -> io::Result<Output> {
-    StdCommand::new("clang")
-        .arg("-E")
-        .arg("-P")
-        .arg("-C")
-        .arg("-I")
-        .arg("test")
-        .arg(src)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-}
-
 #[derive(Serialize, Debug, Clone, PartialEq, Eq)]
 struct RunLog {
     stdout: String,
@@ -104,14 +91,9 @@ fn ensure_success(tag: &str, path: &Path, out: &Output) {
 fn run_case(path: &Path) -> datatest_stable::Result<()> {
     let tmp = tempfile::tempdir()?;
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
-    let preprocessed_path = tmp.path().join(format!("{stem}.i"));
     let asm_path = tmp.path().join(format!("{stem}.S"));
     let exe_mine = tmp.path().join(format!("{stem}.mine"));
     let common_obj = tmp.path().join("common.o");
-
-    let preprocess_out = preprocess(path)?;
-    ensure_success("preprocess", path, &preprocess_out);
-    std::fs::write(&preprocessed_path, &preprocess_out.stdout)?;
 
     let common_out = cc_command()
         .arg("-c")
@@ -127,7 +109,7 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     // 1) Your compiler: codegen -> .S, then cc -> exe_mine
     let mut bin = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
     let codegen_out = bin
-        .arg(&preprocessed_path)
+        .arg(path)
         .arg("-S")
         .arg("-o")
         .arg(&asm_path)
