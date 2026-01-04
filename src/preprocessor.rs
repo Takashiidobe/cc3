@@ -23,7 +23,7 @@
 // https://github.com/rui314/chibicc/wiki/cpp.algo.pdf
 
 use crate::error::{CompileError, CompileResult, SourceLocation};
-use crate::lexer::{HideSet, Punct, Token, TokenKind, get_input_file, tokenize_file};
+use crate::lexer::{HideSet, Punct, Token, TokenKind, get_input_file, tokenize, tokenize_file};
 use crate::parser::const_expr;
 use std::path::Path;
 
@@ -226,19 +226,21 @@ impl Preprocessor {
         args
     }
 
-    fn expand_macro(&mut self) -> Option<Vec<Token>> {
+    fn expand_macro(&mut self) -> CompileResult<Option<Vec<Token>>> {
         let tok = self.cur_tok().clone();
 
         // Check if this macro is in the token's hideset
         let TokenKind::Ident(name) = &tok.kind else {
-            return None;
+            return Ok(None);
         };
         if tok.hideset.contains(name) {
-            return None;
+            return Ok(None);
         }
 
         let (is_objlike, params, body, macro_name) = {
-            let m = self.find_macro(&tok)?;
+            let Some(m) = self.find_macro(&tok) else {
+                return Ok(None);
+            };
             (
                 m.is_objlike,
                 m.params.clone(),
@@ -259,7 +261,7 @@ impl Preprocessor {
             result.extend_from_slice(&self.tokens[..self.pos]);
             result.extend(body);
             result.extend_from_slice(&self.tokens[self.pos + 1..]);
-            return Some(result);
+            return Ok(Some(result));
         }
 
         // If a funclike macro token is not followed by an argument list,
@@ -267,7 +269,7 @@ impl Preprocessor {
         if self.pos + 1 >= self.tokens.len()
             || !matches!(self.peek(1).kind, TokenKind::Punct(Punct::LParen))
         {
-            return None;
+            return Ok(None);
         }
 
         // Function-like macro application - read arguments and substitute
@@ -280,14 +282,14 @@ impl Preprocessor {
         self.pos = saved_pos;
         let mut result = Vec::new();
         result.extend_from_slice(&self.tokens[..saved_pos]);
-        let mut expanded = self.subst(&body, &args);
+        let mut expanded = self.subst(&body, &args)?;
         hs.add_tokens(&mut expanded);
         result.extend(expanded);
         result.extend_from_slice(&self.tokens[rest_pos..]);
-        Some(result)
+        Ok(Some(result))
     }
 
-    fn expand_macros_stream(&mut self) -> Vec<Token> {
+    fn expand_macros_stream(&mut self) -> CompileResult<Vec<Token>> {
         let mut out = Vec::new();
         self.pos = 0;
 
@@ -298,7 +300,7 @@ impl Preprocessor {
             }
 
             // Try to expand macros
-            if let Some(expanded) = self.expand_macro() {
+            if let Some(expanded) = self.expand_macro()? {
                 self.tokens = expanded;
                 continue;
             }
@@ -307,10 +309,10 @@ impl Preprocessor {
             self.pos += 1;
         }
 
-        out
+        Ok(out)
     }
 
-    fn expand_macros_only(&self, tokens: Vec<Token>) -> Vec<Token> {
+    fn expand_macros_only(&self, tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
         let mut expander = Preprocessor::new(tokens);
         expander.macros = self.macros.clone();
         expander.expand_macros_stream()
@@ -401,7 +403,7 @@ impl Preprocessor {
         let expr_tokens = self.copy_line();
 
         // Expand macros in the expression
-        let expr_tokens = self.expand_macros_only(expr_tokens);
+        let expr_tokens = self.expand_macros_only(expr_tokens)?;
 
         if matches!(
             expr_tokens.first().map(|tok| &tok.kind),
@@ -420,6 +422,62 @@ fn find_arg<'a>(args: &'a [MacroArg], tok: &Token) -> Option<&'a MacroArg> {
         return None;
     };
     args.iter().find(|arg| &arg.name == name)
+}
+
+fn token_text(tok: &Token) -> String {
+    if tok.len != 0
+        && let Some(file) = get_input_file(tok.location.file_no)
+    {
+        let bytes = file.contents.as_bytes();
+        let start = tok.location.byte;
+        let end = start.saturating_add(tok.len);
+        if end <= bytes.len() {
+            return String::from_utf8_lossy(&bytes[start..end]).into_owned();
+        }
+    }
+
+    match &tok.kind {
+        TokenKind::Keyword(keyword) => keyword.to_string(),
+        TokenKind::Ident(name) => name.clone(),
+        TokenKind::Punct(punct) => punct.to_string(),
+        TokenKind::Num { value, .. } => value.to_string(),
+        TokenKind::Str { bytes, .. } => {
+            let inner = String::from_utf8_lossy(bytes)
+                .trim_end_matches('\0')
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"");
+            format!("\"{inner}\"")
+        }
+        TokenKind::Eof => String::new(),
+    }
+}
+
+fn quote_string(input: &str) -> String {
+    let mut out = String::with_capacity(input.len() + 2);
+    out.push('"');
+    for ch in input.chars() {
+        if ch == '\\' || ch == '"' {
+            out.push('\\');
+        }
+        out.push(ch);
+    }
+    out.push('"');
+    out
+}
+
+fn join_tokens(tokens: &[Token]) -> String {
+    let mut parts = Vec::new();
+    for (idx, tok) in tokens
+        .iter()
+        .take_while(|tok| !matches!(tok.kind, TokenKind::Eof))
+        .enumerate()
+    {
+        if idx > 0 && tok.has_space {
+            parts.push(" ".to_string());
+        }
+        parts.push(token_text(tok));
+    }
+    parts.join("")
 }
 
 fn is_hash(tok: &Token) -> bool {
@@ -469,7 +527,7 @@ impl Preprocessor {
 
         while self.pos < self.tokens.len() {
             // Try to expand macros
-            if let Some(expanded) = self.expand_macro() {
+            if let Some(expanded) = self.expand_macro()? {
                 self.tokens = expanded;
                 continue;
             }
@@ -680,18 +738,53 @@ impl Preprocessor {
         Ok(out)
     }
 
-    fn subst(&self, body: &[Token], args: &[MacroArg]) -> Vec<Token> {
-        let mut result = Vec::new();
+    fn new_str_token(&self, text: &str, tmpl: &Token) -> CompileResult<Token> {
+        let mut tokens = tokenize(text, tmpl.location.file_no)?;
+        let mut tok = tokens
+            .drain(..)
+            .next()
+            .ok_or_else(|| CompileError::new("failed to tokenize string"))?;
+        tok.location = tmpl.location;
+        tok.at_bol = tmpl.at_bol;
+        tok.has_space = tmpl.has_space;
+        Ok(tok)
+    }
 
-        for tok in body {
+    fn stringize(&self, hash: &Token, arg: &[Token]) -> CompileResult<Token> {
+        let joined = join_tokens(arg);
+        let quoted = quote_string(&joined);
+        self.new_str_token(&quoted, hash)
+    }
+
+    fn subst(&self, body: &[Token], args: &[MacroArg]) -> CompileResult<Vec<Token>> {
+        let mut result = Vec::new();
+        let mut i = 0;
+
+        while i < body.len() {
+            let tok = &body[i];
             if matches!(tok.kind, TokenKind::Eof) {
                 break;
             }
 
-            // Check if this token is a parameter that should be substituted
+            if matches!(tok.kind, TokenKind::Punct(Punct::Hash)) {
+                let Some(next) = body.get(i + 1) else {
+                    self.error("'#' is not followed by a macro parameter", tok.location)?;
+                    unreachable!("expected error to return");
+                };
+                let Some(arg) = find_arg(args, next) else {
+                    self.error("'#' is not followed by a macro parameter", next.location)?;
+                    unreachable!("expected error to return");
+                };
+                let stringized = self.stringize(tok, &arg.tokens)?;
+                result.push(stringized);
+                i += 2;
+                continue;
+            }
+
+            // Check if this token is a parameter that should be substituted.
             if let Some(arg) = find_arg(args, tok) {
-                // Macro arguments are completely macro-expanded before substitution
-                let expanded = self.expand_macros_only(arg.tokens.clone());
+                // Macro arguments are completely macro-expanded before substitution.
+                let expanded = self.expand_macros_only(arg.tokens.clone())?;
                 for exp_tok in &expanded {
                     if matches!(exp_tok.kind, TokenKind::Eof) {
                         break;
@@ -699,12 +792,14 @@ impl Preprocessor {
                     result.push(exp_tok.clone());
                 }
             } else {
-                // Not a parameter, just copy the token
+                // Not a parameter, just copy the token.
                 result.push(tok.clone());
             }
+
+            i += 1;
         }
 
-        result
+        Ok(result)
     }
 }
 

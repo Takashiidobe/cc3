@@ -168,6 +168,51 @@ pub enum Keyword {
     Noreturn,
 }
 
+impl std::fmt::Display for Keyword {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match self {
+            Keyword::Void => "void",
+            Keyword::Bool => "_Bool",
+            Keyword::Char => "char",
+            Keyword::Short => "short",
+            Keyword::Int => "int",
+            Keyword::Long => "long",
+            Keyword::Float => "float",
+            Keyword::Double => "double",
+            Keyword::Enum => "enum",
+            Keyword::Struct => "struct",
+            Keyword::Union => "union",
+            Keyword::Typedef => "typedef",
+            Keyword::Static => "static",
+            Keyword::Extern => "extern",
+            Keyword::Return => "return",
+            Keyword::If => "if",
+            Keyword::Else => "else",
+            Keyword::For => "for",
+            Keyword::While => "while",
+            Keyword::Do => "do",
+            Keyword::Sizeof => "sizeof",
+            Keyword::Alignof => "_Alignof",
+            Keyword::Alignas => "_Alignas",
+            Keyword::Goto => "goto",
+            Keyword::Break => "break",
+            Keyword::Continue => "continue",
+            Keyword::Switch => "switch",
+            Keyword::Case => "case",
+            Keyword::Default => "default",
+            Keyword::Signed => "signed",
+            Keyword::Unsigned => "unsigned",
+            Keyword::Const => "const",
+            Keyword::Volatile => "volatile",
+            Keyword::Auto => "auto",
+            Keyword::Register => "register",
+            Keyword::Restrict => "restrict",
+            Keyword::Noreturn => "_Noreturn",
+        };
+        f.write_str(text)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub enum TokenKind {
     Keyword(Keyword),
