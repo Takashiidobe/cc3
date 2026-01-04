@@ -62,12 +62,18 @@ struct CondIncl {
 }
 
 struct Preprocessor {
+    tokens: Vec<Token>,
     macros: Vec<Macro>,
+    pos: usize, // Current position in token stream
 }
 
 impl Preprocessor {
-    fn new() -> Self {
-        Self { macros: Vec::new() }
+    fn new(tokens: Vec<Token>) -> Self {
+        Self {
+            tokens,
+            macros: Vec::new(),
+            pos: 0,
+        }
     }
 
     fn find_macro(&self, tok: &Token) -> Option<&Macro> {
@@ -141,12 +147,12 @@ impl Preprocessor {
             // Function-like macro - read parameters
             i += 1; // skip '('
             let (params, param_end) = self.read_macro_params(tokens, i);
-            let (body, rest_idx) = copy_line(tokens, param_end);
+            let (body, rest_idx) = self.copy_line(param_end);
             self.add_macro(macro_name, false, params, body, false);
             rest_idx
         } else {
             // Object-like macro
-            let (body, rest_idx) = copy_line(tokens, i);
+            let (body, rest_idx) = self.copy_line(i);
             self.add_macro(macro_name, true, Vec::new(), body, false);
             rest_idx
         }
@@ -265,6 +271,101 @@ impl Preprocessor {
 
         out
     }
+
+    fn skip_line(&self, mut idx: usize) -> usize {
+        if idx >= self.tokens.len() {
+            return idx;
+        }
+        if self.tokens[idx].at_bol {
+            return idx;
+        }
+        warn_tok(&self.tokens[idx], "extra token");
+        while idx < self.tokens.len() && !self.tokens[idx].at_bol {
+            idx += 1;
+        }
+        idx
+    }
+
+    fn skip_cond_incl2(&self, mut idx: usize) -> usize {
+        while idx < self.tokens.len() {
+            let tok = &self.tokens[idx];
+            if matches!(tok.kind, TokenKind::Eof) {
+                return idx;
+            }
+            if is_hash(tok)
+                && let Some(TokenKind::Ident(name)) = self.tokens.get(idx + 1).map(|tok| &tok.kind)
+            {
+                if name == "if" || name == "ifdef" || name == "ifndef" {
+                    idx = self.skip_cond_incl2(idx + 2);
+                    continue;
+                }
+                if name == "endif" {
+                    return idx + 2;
+                }
+            }
+            idx += 1;
+        }
+        idx
+    }
+
+    fn skip_cond_incl(&self, mut idx: usize) -> usize {
+        while idx < self.tokens.len() {
+            let tok = &self.tokens[idx];
+            if matches!(tok.kind, TokenKind::Eof) {
+                return idx;
+            }
+            if is_hash(tok)
+                && let Some(TokenKind::Ident(name)) = self.tokens.get(idx + 1).map(|tok| &tok.kind)
+            {
+                if name == "if" || name == "ifdef" || name == "ifndef" {
+                    idx = self.skip_cond_incl2(idx + 2);
+                    continue;
+                }
+                if name == "elif" || name == "else" || name == "endif" {
+                    break;
+                }
+            }
+            idx += 1;
+        }
+        idx
+    }
+
+    fn copy_line(&self, mut idx: usize) -> (Vec<Token>, usize) {
+        let mut out = Vec::new();
+        while idx < self.tokens.len() && !self.tokens[idx].at_bol {
+            out.push(self.tokens[idx].clone());
+            idx += 1;
+        }
+        let eof_source = self
+            .tokens
+            .get(idx)
+            .or_else(|| self.tokens.last())
+            .expect("tokens");
+        out.push(new_eof(eof_source));
+        (out, idx)
+    }
+
+    fn eval_const_expr(&self, idx: usize) -> CompileResult<(i64, usize)> {
+        let start = self
+            .tokens
+            .get(idx)
+            .cloned()
+            .ok_or_else(|| CompileError::new("no expression"))?;
+        let (expr_tokens, rest_idx) = self.copy_line(idx + 1);
+
+        // Expand macros in the expression
+        let expr_tokens = self.expand_macros_only(expr_tokens);
+
+        if matches!(
+            expr_tokens.first().map(|tok| &tok.kind),
+            Some(TokenKind::Eof)
+        ) {
+            return Err(CompileError::at("no expression", start.location));
+        }
+
+        let value = const_expr(&expr_tokens)?;
+        Ok((value, rest_idx))
+    }
 }
 
 fn find_arg<'a>(args: &'a [MacroArg], tok: &Token) -> Option<&'a MacroArg> {
@@ -364,314 +465,227 @@ fn warn_tok(tok: &Token, message: &str) {
     }
 }
 
-fn skip_line(tokens: &[Token], mut idx: usize) -> usize {
-    if idx >= tokens.len() {
-        return idx;
-    }
-    if tokens[idx].at_bol {
-        return idx;
-    }
-    warn_tok(&tokens[idx], "extra token");
-    while idx < tokens.len() && !tokens[idx].at_bol {
-        idx += 1;
-    }
-    idx
-}
+impl Preprocessor {
+    fn preprocess_tokens(&mut self) -> CompileResult<Vec<Token>> {
+        let mut out = Vec::with_capacity(self.tokens.len());
+        let mut i = 0;
+        let mut cond_incl = vec![];
 
-fn skip_cond_incl2(tokens: &[Token], mut idx: usize) -> usize {
-    while idx < tokens.len() {
-        let tok = &tokens[idx];
-        if matches!(tok.kind, TokenKind::Eof) {
-            return idx;
-        }
-        if is_hash(tok)
-            && let Some(TokenKind::Ident(name)) = tokens.get(idx + 1).map(|tok| &tok.kind)
-        {
-            if name == "if" || name == "ifdef" || name == "ifndef" {
-                idx = skip_cond_incl2(tokens, idx + 2);
+        while i < self.tokens.len() {
+            // Try to expand macros
+            if let Some(expanded) = self.expand_macro(&self.tokens, i) {
+                self.tokens = expanded;
                 continue;
             }
-            if name == "endif" {
-                return idx + 2;
-            }
-        }
-        idx += 1;
-    }
-    idx
-}
-
-fn skip_cond_incl(tokens: &[Token], mut idx: usize) -> usize {
-    while idx < tokens.len() {
-        let tok = &tokens[idx];
-        if matches!(tok.kind, TokenKind::Eof) {
-            return idx;
-        }
-        if is_hash(tok)
-            && let Some(TokenKind::Ident(name)) = tokens.get(idx + 1).map(|tok| &tok.kind)
-        {
-            if name == "if" || name == "ifdef" || name == "ifndef" {
-                idx = skip_cond_incl2(tokens, idx + 2);
-                continue;
-            }
-            if name == "elif" || name == "else" || name == "endif" {
+            let tok = &self.tokens[i];
+            if matches!(tok.kind, TokenKind::Eof) {
+                out.push(tok.clone());
                 break;
             }
-        }
-        idx += 1;
-    }
-    idx
-}
 
-fn copy_line(tokens: &[Token], mut idx: usize) -> (Vec<Token>, usize) {
-    let mut out = Vec::new();
-    while idx < tokens.len() && !tokens[idx].at_bol {
-        out.push(tokens[idx].clone());
-        idx += 1;
-    }
-    let eof_source = tokens.get(idx).or_else(|| tokens.last()).expect("tokens");
-    out.push(new_eof(eof_source));
-    (out, idx)
-}
+            if !is_hash(tok) {
+                out.push(tok.clone());
+                i += 1;
+                continue;
+            }
 
-fn eval_const_expr(pp: &Preprocessor, tokens: &[Token], idx: usize) -> CompileResult<(i64, usize)> {
-    let start = tokens
-        .get(idx)
-        .cloned()
-        .ok_or_else(|| CompileError::new("no expression"))?;
-    let (expr_tokens, rest_idx) = copy_line(tokens, idx + 1);
-
-    // Expand macros in the expression
-    let expr_tokens = pp.expand_macros_only(expr_tokens);
-
-    if matches!(
-        expr_tokens.first().map(|tok| &tok.kind),
-        Some(TokenKind::Eof)
-    ) {
-        return Err(CompileError::at("no expression", start.location));
-    }
-
-    let value = const_expr(&expr_tokens)?;
-    Ok((value, rest_idx))
-}
-
-fn preprocess_tokens(mut tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
-    let mut out = Vec::with_capacity(tokens.len());
-    let mut i = 0;
-    let mut cond_incl: Vec<CondIncl> = Vec::new();
-    let mut pp = Preprocessor::new();
-
-    while i < tokens.len() {
-        // Try to expand macros
-        if let Some(expanded) = pp.expand_macro(&tokens, i) {
-            tokens = expanded;
-            continue;
-        }
-        let tok = &tokens[i];
-        if matches!(tok.kind, TokenKind::Eof) {
-            out.push(tok.clone());
-            break;
-        }
-
-        if !is_hash(tok) {
-            out.push(tok.clone());
+            let start = tok.clone();
             i += 1;
-            continue;
-        }
+            if i >= self.tokens.len() {
+                break;
+            }
 
-        let start = tok.clone();
-        i += 1;
-        if i >= tokens.len() {
-            break;
-        }
+            if let TokenKind::Ident(name) = &self.tokens[i].kind
+                && name == "include"
+            {
+                i += 1;
+                let Some(token) = self.tokens.get(i) else {
+                    return Err(CompileError::at(
+                        "expected a filename",
+                        self.tokens[i - 1].location,
+                    ));
+                };
 
-        if let TokenKind::Ident(name) = &tokens[i].kind
-            && name == "include"
-        {
-            i += 1;
-            let Some(token) = tokens.get(i) else {
-                return Err(CompileError::at(
-                    "expected a filename",
-                    tokens[i - 1].location,
-                ));
-            };
+                let filename = match &token.kind {
+                    TokenKind::Str { bytes, .. } => {
+                        let slice = bytes.strip_suffix(&[0]).unwrap_or(bytes.as_slice());
+                        String::from_utf8_lossy(slice).into_owned()
+                    }
+                    _ => return Err(CompileError::at("expected a filename", token.location)),
+                };
 
-            let filename = match &token.kind {
-                TokenKind::Str { bytes, .. } => {
-                    let slice = bytes.strip_suffix(&[0]).unwrap_or(bytes.as_slice());
-                    String::from_utf8_lossy(slice).into_owned()
+                let include_path = if Path::new(&filename).is_absolute() {
+                    Path::new(&filename).to_path_buf()
+                } else {
+                    let base = get_input_file(token.location.file_no)
+                        .map(|file| file.name)
+                        .unwrap_or_else(|| Path::new(".").to_path_buf());
+                    let dir = base.parent().unwrap_or(Path::new("."));
+                    dir.join(filename)
+                };
+
+                let included = tokenize_file(&include_path)
+                    .map_err(|err| CompileError::at(err.message().to_string(), token.location))?;
+                for inc in included {
+                    if !matches!(inc.kind, TokenKind::Eof) {
+                        out.push(inc);
+                    }
                 }
-                _ => return Err(CompileError::at("expected a filename", token.location)),
-            };
+                i = self.skip_line(i + 1);
+                continue;
+            }
 
-            let include_path = if Path::new(&filename).is_absolute() {
-                Path::new(&filename).to_path_buf()
-            } else {
-                let base = get_input_file(token.location.file_no)
-                    .map(|file| file.name)
-                    .unwrap_or_else(|| Path::new(".").to_path_buf());
-                let dir = base.parent().unwrap_or(Path::new("."));
-                dir.join(filename)
-            };
+            if let TokenKind::Ident(name) = &self.tokens[i].kind
+                && name == "define"
+            {
+                i += 1;
+                let Some(tok) = self.tokens.get(i) else {
+                    return Err(CompileError::at(
+                        "macro name must be an identifier",
+                        start.location,
+                    ));
+                };
+                let TokenKind::Ident(_name) = &tok.kind else {
+                    return Err(CompileError::at(
+                        "macro name must be an identifier",
+                        tok.location,
+                    ));
+                };
+                let tokens = &self.tokens.clone();
+                i = self.read_macro_definition(tokens, i);
+                continue;
+            }
 
-            let included = tokenize_file(&include_path)
-                .map_err(|err| CompileError::at(err.message().to_string(), token.location))?;
-            for inc in included {
-                if !matches!(inc.kind, TokenKind::Eof) {
-                    out.push(inc);
+            if let TokenKind::Ident(name) = &self.tokens[i].kind
+                && name == "undef"
+            {
+                i += 1;
+                let Some(tok) = self.tokens.get(i) else {
+                    return Err(CompileError::at(
+                        "macro name must be an identifier",
+                        start.location,
+                    ));
+                };
+                let TokenKind::Ident(name) = &tok.kind else {
+                    return Err(CompileError::at(
+                        "macro name must be an identifier",
+                        tok.location,
+                    ));
+                };
+                let macro_name = name.clone();
+                i = self.skip_line(i + 1);
+                self.add_macro(macro_name, true, Vec::new(), Vec::new(), true);
+                continue;
+            }
+
+            if let TokenKind::Ident(name) = &self.tokens[i].kind
+                && (name == "ifdef" || name == "ifndef")
+            {
+                let is_ifdef = name == "ifdef";
+                i += 1;
+                let defined = self.find_macro(&self.tokens[i]).is_some();
+                let included = if is_ifdef { defined } else { !defined };
+                cond_incl.push(CondIncl {
+                    ctx: CondCtx::Then,
+                    tok: start,
+                    included,
+                });
+                i = self.skip_line(i + 1);
+                if !included {
+                    i = self.skip_cond_incl(i);
                 }
+                continue;
             }
-            i = skip_line(&tokens, i + 1);
-            continue;
-        }
 
-        if let TokenKind::Ident(name) = &tokens[i].kind
-            && name == "define"
-        {
-            i += 1;
-            let Some(tok) = tokens.get(i) else {
-                return Err(CompileError::at(
-                    "macro name must be an identifier",
-                    start.location,
-                ));
-            };
-            let TokenKind::Ident(_name) = &tok.kind else {
-                return Err(CompileError::at(
-                    "macro name must be an identifier",
-                    tok.location,
-                ));
-            };
-            i = pp.read_macro_definition(&tokens, i);
-            continue;
-        }
-
-        if let TokenKind::Ident(name) = &tokens[i].kind
-            && name == "undef"
-        {
-            i += 1;
-            let Some(tok) = tokens.get(i) else {
-                return Err(CompileError::at(
-                    "macro name must be an identifier",
-                    start.location,
-                ));
-            };
-            let TokenKind::Ident(name) = &tok.kind else {
-                return Err(CompileError::at(
-                    "macro name must be an identifier",
-                    tok.location,
-                ));
-            };
-            let macro_name = name.clone();
-            i = skip_line(&tokens, i + 1);
-            pp.add_macro(macro_name, true, Vec::new(), Vec::new(), true);
-            continue;
-        }
-
-        if let TokenKind::Ident(name) = &tokens[i].kind
-            && (name == "ifdef" || name == "ifndef")
-        {
-            let is_ifdef = name == "ifdef";
-            i += 1;
-            let defined = pp.find_macro(&tokens[i]).is_some();
-            let included = if is_ifdef { defined } else { !defined };
-            cond_incl.push(CondIncl {
-                ctx: CondCtx::Then,
-                tok: start,
-                included,
-            });
-            i = skip_line(&tokens, i + 1);
-            if !included {
-                i = skip_cond_incl(&tokens, i);
+            if let TokenKind::Ident(name) = &self.tokens[i].kind
+                && name == "if"
+            {
+                let (value, rest_idx) = self.eval_const_expr(i)?;
+                cond_incl.push(CondIncl {
+                    ctx: CondCtx::Then,
+                    tok: start,
+                    included: value != 0,
+                });
+                if value == 0 {
+                    i = self.skip_cond_incl(rest_idx);
+                } else {
+                    i = rest_idx;
+                }
+                continue;
             }
-            continue;
+
+            if let TokenKind::Ident(name) = &self.tokens[i].kind
+                && name == "else"
+            {
+                let Some(last) = cond_incl.last_mut() else {
+                    return Err(CompileError::at("stray #else", start.location));
+                };
+                if last.ctx == CondCtx::Else {
+                    return Err(CompileError::at("stray #else", start.location));
+                }
+                last.ctx = CondCtx::Else;
+                i = self.skip_line(i + 1);
+                if last.included {
+                    i = self.skip_cond_incl(i);
+                }
+                continue;
+            }
+
+            if let TokenKind::Ident(name) = &self.tokens[i].kind
+                && name == "elif"
+            {
+                let Some(last) = cond_incl.last_mut() else {
+                    return Err(CompileError::at("stray #elif", start.location));
+                };
+                if last.ctx == CondCtx::Else {
+                    return Err(CompileError::at("stray #elif", start.location));
+                }
+                last.ctx = CondCtx::Elif;
+
+                let (value, rest_idx) = self.eval_const_expr(i)?;
+                if !last.included && value != 0 {
+                    last.included = true;
+                    i = rest_idx;
+                } else {
+                    i = self.skip_cond_incl(rest_idx);
+                }
+                continue;
+            }
+
+            if let TokenKind::Ident(name) = &self.tokens[i].kind
+                && name == "endif"
+            {
+                if cond_incl.is_empty() {
+                    return Err(CompileError::at("stray #endif", start.location));
+                }
+                cond_incl.pop();
+                i = self.skip_line(i + 1);
+                continue;
+            }
+
+            if self.tokens[i].at_bol {
+                continue;
+            }
+
+            return Err(CompileError::at(
+                "invalid preprocessor directive",
+                self.tokens[i].location,
+            ));
         }
 
-        if let TokenKind::Ident(name) = &tokens[i].kind
-            && name == "if"
-        {
-            let (value, rest_idx) = eval_const_expr(&pp, &tokens, i)?;
-            cond_incl.push(CondIncl {
-                ctx: CondCtx::Then,
-                tok: start,
-                included: value != 0,
-            });
-            if value == 0 {
-                i = skip_cond_incl(&tokens, rest_idx);
-            } else {
-                i = rest_idx;
-            }
-            continue;
+        if let Some(start) = cond_incl.first() {
+            return Err(CompileError::at(
+                "unterminated conditional directive",
+                start.tok.location,
+            ));
         }
 
-        if let TokenKind::Ident(name) = &tokens[i].kind
-            && name == "else"
-        {
-            let Some(last) = cond_incl.last_mut() else {
-                return Err(CompileError::at("stray #else", start.location));
-            };
-            if last.ctx == CondCtx::Else {
-                return Err(CompileError::at("stray #else", start.location));
-            }
-            last.ctx = CondCtx::Else;
-            i = skip_line(&tokens, i + 1);
-            if last.included {
-                i = skip_cond_incl(&tokens, i);
-            }
-            continue;
-        }
-
-        if let TokenKind::Ident(name) = &tokens[i].kind
-            && name == "elif"
-        {
-            let Some(last) = cond_incl.last_mut() else {
-                return Err(CompileError::at("stray #elif", start.location));
-            };
-            if last.ctx == CondCtx::Else {
-                return Err(CompileError::at("stray #elif", start.location));
-            }
-            last.ctx = CondCtx::Elif;
-
-            let (value, rest_idx) = eval_const_expr(&pp, &tokens, i)?;
-            if !last.included && value != 0 {
-                last.included = true;
-                i = rest_idx;
-            } else {
-                i = skip_cond_incl(&tokens, rest_idx);
-            }
-            continue;
-        }
-
-        if let TokenKind::Ident(name) = &tokens[i].kind
-            && name == "endif"
-        {
-            if cond_incl.is_empty() {
-                return Err(CompileError::at("stray #endif", start.location));
-            }
-            cond_incl.pop();
-            i = skip_line(&tokens, i + 1);
-            continue;
-        }
-
-        if tokens[i].at_bol {
-            continue;
-        }
-
-        return Err(CompileError::at(
-            "invalid preprocessor directive",
-            tokens[i].location,
-        ));
+        Ok(out)
     }
-
-    if let Some(start) = cond_incl.first() {
-        return Err(CompileError::at(
-            "unterminated conditional directive",
-            start.tok.location,
-        ));
-    }
-
-    Ok(out)
 }
 
 /// Entry point of the preprocessor.
 pub fn preprocess(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
-    preprocess_tokens(tokens)
+    let mut preprocessor = Preprocessor::new(tokens);
+    preprocessor.preprocess_tokens()
 }
