@@ -90,7 +90,7 @@ pub enum ExprKind {
         expr: Box<Expr>,
     },
     Call {
-        name: String,
+        callee: Box<Expr>,
         args: Vec<Expr>,
     },
     Addr(Box<Expr>),

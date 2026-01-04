@@ -456,8 +456,9 @@ impl Codegen {
                 let from = expr.ty.as_ref().unwrap_or(&Type::Int);
                 self.cast(from, ty);
             }
-            ExprKind::Call { name, args } => {
+            ExprKind::Call { callee, args } => {
                 self.push_args(args, function, globals);
+                self.gen_expr(callee, function, globals);
 
                 let mut gp = 0;
                 let mut fp = 0;
@@ -477,10 +478,10 @@ impl Codegen {
                 }
 
                 if self.depth.is_multiple_of(2) {
-                    self.emit_line(&format!("  call {}", name));
+                    self.emit_line("  call *%rax");
                 } else {
                     self.emit_line("  sub $8, %rsp");
-                    self.emit_line(&format!("  call {}", name));
+                    self.emit_line("  call *%rax");
                     self.emit_line("  add $8, %rsp");
                 }
 
@@ -889,7 +890,10 @@ impl Codegen {
                 // becomes not the value itself but the address.
                 // This is where "array is automatically converted to a pointer to
                 // the first element of the array in C" occurs.
-                Type::Array { .. } | Type::Struct { .. } | Type::Union { .. } => return,
+                Type::Array { .. }
+                | Type::Struct { .. }
+                | Type::Union { .. }
+                | Type::Func { .. } => return,
                 Type::Float => {
                     self.emit_line("  movss (%rax), %xmm0");
                     return;
@@ -971,8 +975,16 @@ impl Codegen {
             self.emit_line(&format!("  lea {}(%rbp), %rax", offset));
             return;
         }
-        let name = &globals[idx].name;
-        self.emit_line(&format!("  lea {}(%rip), %rax", name));
+        let obj = &globals[idx];
+        if obj.is_function {
+            if obj.is_definition {
+                self.emit_line(&format!("  lea {}(%rip), %rax", obj.name));
+            } else {
+                self.emit_line(&format!("  mov {}@GOTPCREL(%rip), %rax", obj.name));
+            }
+            return;
+        }
+        self.emit_line(&format!("  lea {}(%rip), %rax", obj.name));
     }
 
     fn gen_lvalue(&mut self, expr: &Expr, function: &Obj, globals: &[Obj]) {

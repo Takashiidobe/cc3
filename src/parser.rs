@@ -1725,6 +1725,12 @@ impl<'a> Parser<'a> {
 
         // Handle array subscript: x[y] is equivalent to *(x+y)
         loop {
+            if self.consume_punct(Punct::LParen) {
+                let location = self.last_location();
+                expr = self.parse_funcall(expr, location)?;
+                continue;
+            }
+
             if self.consume_punct(Punct::LBracket) {
                 let location = self.last_location();
                 let index = self.parse_expr()?;
@@ -1865,33 +1871,41 @@ impl<'a> Parser<'a> {
                 Ok(self.new_ulong_expr(align, location))
             }
             TokenKind::Ident(ref name) => {
-                if matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LParen)) {
-                    return self.parse_funcall(token);
-                }
-
                 let name = name.clone();
-                let scope = self
-                    .find_var_scope(&name)
-                    .ok_or_else(|| self.err_at(token.location, "undefined variable"))?;
-                let expr = if let Some(idx) = scope.idx {
+                let expr = if let Some(scope) = self.find_var_scope(&name) {
+                    if let Some(idx) = scope.idx {
+                        self.expr_at(
+                            ExprKind::Var {
+                                idx,
+                                is_local: scope.is_local,
+                            },
+                            token.location,
+                        )
+                    } else if let Some(val) = scope.enum_val {
+                        let mut expr = self.expr_at(
+                            ExprKind::Num {
+                                value: val,
+                                fval: 0.0,
+                            },
+                            token.location,
+                        );
+                        expr.ty = Some(Type::Enum);
+                        expr
+                    } else {
+                        self.bail_at(token.location, "undefined variable")?
+                    }
+                } else if let Some((idx, _)) = self.find_global_idx(&name) {
                     self.expr_at(
                         ExprKind::Var {
                             idx,
-                            is_local: scope.is_local,
+                            is_local: false,
                         },
                         token.location,
                     )
-                } else if let Some(val) = scope.enum_val {
-                    let mut expr = self.expr_at(
-                        ExprKind::Num {
-                            value: val,
-                            fval: 0.0,
-                        },
-                        token.location,
-                    );
-                    expr.ty = Some(Type::Enum);
-                    expr
                 } else {
+                    if matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LParen)) {
+                        self.bail_at(token.location, "implicit declaration of a function")?;
+                    }
                     self.bail_at(token.location, "undefined variable")?
                 };
                 self.pos += 1;
@@ -2173,8 +2187,11 @@ impl<'a> Parser<'a> {
         None
     }
 
-    fn find_global(&self, name: &str) -> Option<&Obj> {
-        self.globals.iter().rfind(|obj| obj.name == name)
+    fn find_global_idx(&self, name: &str) -> Option<(usize, &Obj)> {
+        self.globals
+            .iter()
+            .enumerate()
+            .rfind(|(_, obj)| obj.name == name)
     }
 
     fn find_typedef(&self, tok: &Token) -> Option<Type> {
@@ -2461,35 +2478,24 @@ impl<'a> Parser<'a> {
         Ok(stmts)
     }
 
-    fn parse_funcall(&mut self, name_token: Token) -> CompileResult<Expr> {
-        let name = match name_token.kind {
-            TokenKind::Ident(name) => name,
-            _ => unreachable!("parse_funcall expects identifier token"),
+    fn parse_funcall(&mut self, mut callee: Expr, location: SourceLocation) -> CompileResult<Expr> {
+        self.add_type_expr(&mut callee)?;
+
+        let func_ty = match callee.ty.clone() {
+            Some(Type::Func { .. }) => callee.ty.clone().unwrap(),
+            Some(Type::Ptr(base)) if matches!(*base, Type::Func { .. }) => *base,
+            _ => self.bail_at(callee.location, "not a function")?,
         };
 
-        if self.find_var_scope(&name).is_some() {
-            self.bail_at(name_token.location, "not a function")?;
-        }
-
-        let func = self.find_global(&name).ok_or_else(|| {
-            self.err_at(name_token.location, "implicit declaration of a function")
-        })?;
-        if !func.is_function {
-            self.bail_at(name_token.location, "not a function")?;
-        }
-
         // Extract param types and is_variadic from function type
-        let (param_types, is_variadic) = match &func.ty {
+        let (param_types, is_variadic, return_ty) = match &func_ty {
             Type::Func {
                 params,
                 is_variadic,
-                ..
-            } => (params.clone(), *is_variadic),
+                return_ty,
+            } => (params.clone(), *is_variadic, return_ty.as_ref().clone()),
             _ => unreachable!("function must have function type"),
         };
-
-        self.pos += 1;
-        self.expect_punct(Punct::LParen)?;
 
         let mut args = Vec::new();
         let mut param_iter = param_types.iter();
@@ -2516,10 +2522,7 @@ impl<'a> Parser<'a> {
                 }
                 args.push(arg);
                 if args.len() > 6 {
-                    self.bail_at(
-                        name_token.location,
-                        "function call can have up to 6 arguments",
-                    )?;
+                    self.bail_at(location, "function call can have up to 6 arguments")?;
                 }
                 if self.consume_punct(Punct::Comma) {
                     continue;
@@ -2530,11 +2533,19 @@ impl<'a> Parser<'a> {
 
         // Check for too few arguments
         if param_iter.next().is_some() {
-            return self.bail_at(name_token.location, "too few arguments");
+            return self.bail_at(location, "too few arguments");
         }
 
         self.expect_punct(Punct::RParen)?;
-        Ok(self.expr_at(ExprKind::Call { name, args }, name_token.location))
+        let mut expr = self.expr_at(
+            ExprKind::Call {
+                callee: Box::new(callee),
+                args,
+            },
+            location,
+        );
+        expr.ty = Some(return_ty);
+        Ok(expr)
     }
 
     fn new_add(
@@ -3482,17 +3493,18 @@ impl<'a> Parser<'a> {
                 };
                 map.get(*idx).map(|obj| obj.ty.clone()).unwrap_or(Type::Int)
             }
-            ExprKind::Call { name, args } => {
+            ExprKind::Call { callee, args } => {
+                self.add_type_expr(callee)?;
                 for arg in args {
                     self.add_type_expr(arg)?;
                 }
-                if let Some(func) = self.find_global(name)
-                    && func.is_function
-                    && let Type::Func { return_ty, .. } = &func.ty
-                {
-                    return_ty.as_ref().clone()
-                } else {
-                    Type::Int
+                match callee.ty.as_ref() {
+                    Some(Type::Func { return_ty, .. }) => return_ty.as_ref().clone(),
+                    Some(Type::Ptr(base)) if matches!(**base, Type::Func { .. }) => match &**base {
+                        Type::Func { return_ty, .. } => return_ty.as_ref().clone(),
+                        _ => Type::Int,
+                    },
+                    _ => Type::Int,
                 }
             }
             ExprKind::Unary { op, expr } => {
