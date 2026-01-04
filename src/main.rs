@@ -6,7 +6,7 @@ mod parser;
 
 use clap::Parser;
 use colored::Colorize;
-use std::{fs, io, path::PathBuf};
+use std::{fs, io, path::PathBuf, process::Command};
 
 use crate::error::{CompileError, CompileResult};
 
@@ -14,6 +14,12 @@ use crate::error::{CompileError, CompileResult};
 #[command(name = "cc3")]
 #[command(about = "A tiny C compiler in Rust")]
 struct Args {
+    /// Run cc1 (compiler proper).
+    #[arg(long = "cc1", action = clap::ArgAction::SetTrue, hide = true)]
+    cc1: bool,
+    /// Print subprocess command lines.
+    #[arg(long = "hash-hash-hash", action = clap::ArgAction::SetTrue, hide = true)]
+    hash_hash_hash: bool,
     /// Input C source file.
     input: PathBuf,
     /// Output assembly file. Writes to stdout if omitted.
@@ -22,14 +28,51 @@ struct Args {
 }
 
 fn main() {
-    let args = Args::parse();
-    if let Err(err) = run(&args) {
-        eprintln!("{}", format_diagnostic(&err, args.input.as_path()));
+    let raw_args: Vec<String> = std::env::args().collect();
+    let args = Args::parse_from(preprocess_args(&raw_args));
+
+    if args.cc1 {
+        if let Err(err) = run_cc1(&args) {
+            eprintln!("{}", format_diagnostic(&err, args.input.as_path()));
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if let Err(err) = run_cc1_subprocess(&raw_args, args.hash_hash_hash) {
+        eprintln!("error: {err}");
         std::process::exit(1);
     }
 }
 
-fn run(args: &Args) -> CompileResult<()> {
+fn preprocess_args(args: &[String]) -> Vec<String> {
+    args.iter()
+        .map(|arg| match arg.as_str() {
+            "-cc1" => "--cc1".to_string(),
+            "-###" => "--hash-hash-hash".to_string(),
+            _ => arg.clone(),
+        })
+        .collect()
+}
+
+fn run_cc1_subprocess(args: &[String], show_cmd: bool) -> io::Result<()> {
+    let mut cmd_args = args.to_vec();
+    cmd_args.push("-cc1".to_string());
+
+    if show_cmd {
+        eprintln!("{}", cmd_args.join(" "));
+    }
+
+    let status = Command::new(&cmd_args[0]).args(&cmd_args[1..]).status()?;
+
+    if !status.success() {
+        std::process::exit(1);
+    }
+
+    Ok(())
+}
+
+fn run_cc1(args: &Args) -> CompileResult<()> {
     let source = fs::read_to_string(&args.input).map_err(|err| {
         CompileError::new(format!("failed to read {}: {err}", args.input.display()))
     })?;
