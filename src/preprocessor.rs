@@ -483,7 +483,12 @@ impl Preprocessor {
         let expr_tokens = self.read_const_expr()?;
 
         // Expand macros in the expression
-        let expr_tokens = self.expand_macros_only(expr_tokens)?;
+        let mut expr_tokens = self.expand_macros_only(expr_tokens)?;
+        for tok in &mut expr_tokens {
+            if matches!(tok.kind, TokenKind::Ident(_)) {
+                *tok = new_num_token(0, tok);
+            }
+        }
 
         if matches!(
             expr_tokens.first().map(|tok| &tok.kind),

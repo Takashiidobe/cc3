@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "m => 5\nm => 7\nOK\n"
+status: 0
