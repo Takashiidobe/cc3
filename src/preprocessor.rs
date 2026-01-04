@@ -565,6 +565,30 @@ fn token_text(tok: &Token) -> String {
     }
 }
 
+fn raw_string_literal(tok: &Token) -> String {
+    if tok.len >= 2
+        && let Some(file) = get_input_file(tok.location.file_no)
+    {
+        let bytes = file.contents.as_bytes();
+        let start = tok.location.byte;
+        let end = start.saturating_add(tok.len);
+        if end <= bytes.len()
+            && start < end.saturating_sub(1)
+            && bytes.get(start) == Some(&b'"')
+            && bytes.get(end.saturating_sub(1)) == Some(&b'"')
+        {
+            return String::from_utf8_lossy(&bytes[start + 1..end - 1]).into_owned();
+        }
+    }
+
+    if let TokenKind::Str { bytes, .. } = &tok.kind {
+        let slice = bytes.strip_suffix(&[0]).unwrap_or(bytes.as_slice());
+        return String::from_utf8_lossy(slice).into_owned();
+    }
+
+    String::new()
+}
+
 fn quote_string(input: &str) -> String {
     let mut out = String::with_capacity(input.len() + 2);
     out.push('"');
@@ -682,39 +706,23 @@ impl Preprocessor {
                     self.error("expected a filename", loc)?;
                     unreachable!("expected error to return");
                 }
-                let token = self.cur_tok();
+                let (filename, _is_dquote, filename_tok) = self.read_include_filename()?;
+                let filename_path = Path::new(&filename);
 
-                let filename = match &token.kind {
-                    TokenKind::Str { bytes, .. } => {
-                        let slice = bytes.strip_suffix(&[0]).unwrap_or(bytes.as_slice());
-                        String::from_utf8_lossy(slice).into_owned()
-                    }
-                    _ => self.error("expected a filename", token.location)?,
-                };
-
-                let include_path = if Path::new(&filename).is_absolute() {
-                    Path::new(&filename).to_path_buf()
-                } else {
-                    let base = get_input_file(token.location.file_no)
+                if !filename_path.is_absolute() {
+                    let base = get_input_file(start.location.file_no)
                         .map(|file| file.name)
                         .unwrap_or_else(|| Path::new(".").to_path_buf());
                     let dir = base.parent().unwrap_or(Path::new("."));
-                    dir.join(filename)
-                };
-
-                let included = tokenize_file(&include_path)
-                    .map_err(|err| CompileError::at(err.message().to_string(), token.location))?;
-                let mut included_pp = Preprocessor::new(included);
-                included_pp.macros = self.macros.clone();
-                let included_tokens = included_pp.preprocess_tokens()?;
-                self.macros = included_pp.macros;
-                for inc in included_tokens {
-                    if !matches!(inc.kind, TokenKind::Eof) {
-                        out.push(inc);
+                    let local_path = dir.join(filename_path);
+                    if local_path.exists() {
+                        self.include_file(&mut out, &local_path, &filename_tok)?;
+                        continue;
                     }
                 }
-                self.pos += 1;
-                self.skip_line();
+
+                // TODO: Search a file from the include paths.
+                self.include_file(&mut out, filename_path, &filename_tok)?;
                 continue;
             }
 
@@ -859,6 +867,81 @@ impl Preprocessor {
         }
 
         Ok(out)
+    }
+
+    fn read_include_filename(&mut self) -> CompileResult<(String, bool, Token)> {
+        let line_tokens = self.copy_line();
+        let Some(first) = line_tokens.first() else {
+            return Err(CompileError::new("expected a filename"));
+        };
+        if matches!(first.kind, TokenKind::Eof) {
+            return self.error("expected a filename", first.location);
+        }
+
+        let tokens = if matches!(first.kind, TokenKind::Ident(_)) {
+            self.expand_macros_only(line_tokens)?
+        } else {
+            line_tokens
+        };
+
+        let (filename, is_dquote, consumed_idx, name_tok) = self.parse_include_filename(&tokens)?;
+        if let Some(extra) = tokens.get(consumed_idx)
+            && !matches!(extra.kind, TokenKind::Eof)
+        {
+            warn_tok(extra, "extra token");
+        }
+        Ok((filename, is_dquote, name_tok))
+    }
+
+    fn parse_include_filename(
+        &self,
+        tokens: &[Token],
+    ) -> CompileResult<(String, bool, usize, Token)> {
+        let Some(first) = tokens.first() else {
+            return Err(CompileError::new("expected a filename"));
+        };
+        match &first.kind {
+            TokenKind::Str { .. } => {
+                let filename = raw_string_literal(first);
+                Ok((filename, true, 1, first.clone()))
+            }
+            TokenKind::Punct(Punct::Less) => {
+                let mut idx = 1;
+                while idx < tokens.len() {
+                    let tok = &tokens[idx];
+                    if matches!(tok.kind, TokenKind::Punct(Punct::Greater)) {
+                        let filename = join_tokens(&tokens[1..idx]);
+                        return Ok((filename, false, idx + 1, first.clone()));
+                    }
+                    if tok.at_bol || matches!(tok.kind, TokenKind::Eof) {
+                        return self.error("expected '>'", tok.location);
+                    }
+                    idx += 1;
+                }
+                self.error("expected '>'", first.location)
+            }
+            _ => self.error("expected a filename", first.location),
+        }
+    }
+
+    fn include_file(
+        &mut self,
+        out: &mut Vec<Token>,
+        include_path: &Path,
+        filename_tok: &Token,
+    ) -> CompileResult<()> {
+        let included = tokenize_file(include_path)
+            .map_err(|err| CompileError::at(err.message().to_string(), filename_tok.location))?;
+        let mut included_pp = Preprocessor::new(included);
+        included_pp.macros = self.macros.clone();
+        let included_tokens = included_pp.preprocess_tokens()?;
+        self.macros = included_pp.macros;
+        for inc in included_tokens {
+            if !matches!(inc.kind, TokenKind::Eof) {
+                out.push(inc);
+            }
+        }
+        Ok(())
     }
 
     fn new_str_token(&self, text: &str, tmpl: &Token) -> CompileResult<Token> {
