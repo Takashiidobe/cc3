@@ -1603,7 +1603,11 @@ impl<'a> Parser<'a> {
 
         if self.consume_punct(Punct::Star) {
             let location = self.last_location();
-            let expr = self.parse_cast()?;
+            let mut expr = self.parse_cast()?;
+            self.add_type_expr(&mut expr)?;
+            if matches!(expr.ty, Some(Type::Func { .. })) {
+                return Ok(expr);
+            }
             return Ok(self.expr_at(ExprKind::Deref(Box::new(expr)), location));
         }
 
