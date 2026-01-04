@@ -6,7 +6,7 @@ mod parser;
 
 use clap::Parser;
 use colored::Colorize;
-use std::{fs, io, path::PathBuf, process::Command};
+use std::{fs, io, path::Path, path::PathBuf, process::Command};
 
 use crate::error::{CompileError, CompileResult};
 
@@ -20,6 +20,9 @@ struct Args {
     /// Print subprocess command lines.
     #[arg(long = "hash-hash-hash", action = clap::ArgAction::SetTrue, hide = true)]
     hash_hash_hash: bool,
+    /// Emit assembly instead of object code.
+    #[arg(short = 'S', action = clap::ArgAction::SetTrue)]
+    emit_asm: bool,
     /// Input C source file.
     input: PathBuf,
     /// Output assembly file. Writes to stdout if omitted.
@@ -39,7 +42,7 @@ fn main() {
         return;
     }
 
-    if let Err(err) = run_cc1_subprocess(&raw_args, args.hash_hash_hash) {
+    if let Err(err) = run_driver(&args) {
         eprintln!("error: {err}");
         std::process::exit(1);
     }
@@ -55,21 +58,31 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn run_cc1_subprocess(args: &[String], show_cmd: bool) -> io::Result<()> {
-    let mut cmd_args = args.to_vec();
-    cmd_args.push("-cc1".to_string());
-
+fn run_subprocess(argv: &[String], show_cmd: bool) -> io::Result<()> {
     if show_cmd {
-        eprintln!("{}", cmd_args.join(" "));
+        eprintln!("{}", argv.join(" "));
     }
 
-    let status = Command::new(&cmd_args[0]).args(&cmd_args[1..]).status()?;
-
+    let status = Command::new(&argv[0]).args(&argv[1..]).status()?;
     if !status.success() {
         std::process::exit(1);
     }
 
     Ok(())
+}
+
+fn run_cc1_subprocess(input: &Path, output: &Path, show_cmd: bool) -> io::Result<()> {
+    let exe = std::env::args()
+        .next()
+        .ok_or_else(|| io::Error::other("missing argv[0]"))?;
+    let argv = vec![
+        exe,
+        "-cc1".to_string(),
+        input.display().to_string(),
+        "-o".to_string(),
+        output.display().to_string(),
+    ];
+    run_subprocess(&argv, show_cmd)
 }
 
 fn run_cc1(args: &Args) -> CompileResult<()> {
@@ -98,6 +111,61 @@ fn run_cc1(args: &Args) -> CompileResult<()> {
     }
 
     Ok(())
+}
+
+fn run_driver(args: &Args) -> io::Result<()> {
+    let output = match &args.output {
+        Some(path) => path.clone(),
+        None => replace_ext(&args.input, if args.emit_asm { ".s" } else { ".o" }),
+    };
+
+    if args.emit_asm {
+        return run_cc1_subprocess(&args.input, &output, args.hash_hash_hash);
+    }
+
+    let tmp_asm = create_tmpfile("cc3", ".s")?;
+    run_cc1_subprocess(&args.input, &tmp_asm, args.hash_hash_hash)?;
+    assemble(&tmp_asm, &output, args.hash_hash_hash)?;
+    let _ = fs::remove_file(&tmp_asm);
+    Ok(())
+}
+
+fn replace_ext(input: &Path, ext: &str) -> PathBuf {
+    let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
+    PathBuf::from(format!("{stem}{ext}"))
+}
+
+fn create_tmpfile(prefix: &str, ext: &str) -> io::Result<PathBuf> {
+    use std::fs::OpenOptions;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static COUNTER: AtomicUsize = AtomicUsize::new(0);
+    let base = std::env::temp_dir();
+    for _ in 0..100 {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let name = format!("{prefix}-{}-{n}{ext}", std::process::id());
+        let path = base.join(name);
+        match OpenOptions::new().write(true).create_new(true).open(&path) {
+            Ok(_) => return Ok(path),
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "failed to create temp file",
+    ))
+}
+
+fn assemble(input: &Path, output: &Path, show_cmd: bool) -> io::Result<()> {
+    let argv = vec![
+        "as".to_string(),
+        "-c".to_string(),
+        input.display().to_string(),
+        "-o".to_string(),
+        output.display().to_string(),
+    ];
+    run_subprocess(&argv, show_cmd)
 }
 
 fn format_diagnostic(err: &CompileError, path: &std::path::Path) -> String {

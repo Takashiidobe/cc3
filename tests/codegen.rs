@@ -128,6 +128,7 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     let mut bin = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
     let codegen_out = bin
         .arg(&preprocessed_path)
+        .arg("-S")
         .arg("-o")
         .arg(&asm_path)
         .stderr(Stdio::piped())
