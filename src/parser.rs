@@ -1888,6 +1888,23 @@ impl<'a> Parser<'a> {
                 let align = expr.ty.as_ref().map(|ty| ty.align()).unwrap_or(1);
                 Ok(self.new_ulong_expr(align, location))
             }
+            TokenKind::Ident(ref name) if name == "__builtin_reg_class" => {
+                let location = token.location;
+                self.pos += 1;
+                self.expect_punct(Punct::LParen)?;
+                let ty = self.parse_typename()?;
+                self.expect_punct(Punct::RParen)?;
+                let value = if ty.is_integer() || matches!(ty, Type::Ptr(_)) {
+                    0
+                } else if ty.is_flonum() {
+                    1
+                } else {
+                    2
+                };
+                let mut expr = self.expr_at(ExprKind::Num { value, fval: 0.0 }, location);
+                expr.ty = Some(Type::Int);
+                Ok(expr)
+            }
             TokenKind::Ident(ref name) => {
                 let name = name.clone();
                 let expr = if let Some(scope) = self.find_var_scope(&name) {

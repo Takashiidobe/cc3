@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "sum1(1, 2, 3, 0) => 6\nsum2(1, 2.0, 3, 4.0, 0) => 10\nOK\n"
+status: 0
