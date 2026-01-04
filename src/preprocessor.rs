@@ -43,6 +43,8 @@ struct MacroArg {
     tokens: Vec<Token>,
 }
 
+type MacroHandler = fn(&Token) -> CompileResult<Token>;
+
 #[derive(Clone, Debug, Default)]
 struct Macro {
     name: String,
@@ -50,6 +52,7 @@ struct Macro {
     params: Vec<MacroParam>,
     body: Vec<Token>,
     deleted: bool,
+    handler: Option<MacroHandler>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -275,7 +278,7 @@ impl Preprocessor {
             return Ok(None);
         }
 
-        let (is_objlike, params, body, macro_name) = {
+        let (is_objlike, params, body, macro_name, handler) = {
             let Some(m) = self.find_macro_name(&macro_name) else {
                 return Ok(None);
             };
@@ -284,8 +287,20 @@ impl Preprocessor {
                 m.params.clone(),
                 m.body.clone(),
                 m.name.clone(),
+                m.handler,
             )
         };
+
+        if let Some(handler) = handler {
+            let mut expanded = handler(&tok)?;
+            expanded.at_bol = tok.at_bol;
+            expanded.has_space = tok.has_space;
+            let mut result = Vec::new();
+            result.extend_from_slice(&self.tokens[..self.pos]);
+            result.push(expanded);
+            result.extend_from_slice(&self.tokens[self.pos + 1..]);
+            return Ok(Some(result));
+        }
 
         // Object-like macro application
         if is_objlike {
@@ -300,6 +315,7 @@ impl Preprocessor {
                 body.pop();
             }
             hs.add_tokens(&mut body);
+            apply_origin(&mut body, origin_location(&tok));
 
             let mut result = Vec::new();
             result.extend_from_slice(&self.tokens[..self.pos]);
@@ -334,6 +350,7 @@ impl Preprocessor {
         let start_idx = result.len();
         let mut expanded = self.subst(&body, &args)?;
         hs.add_tokens(&mut expanded);
+        apply_origin(&mut expanded, origin_location(&tok));
         result.extend(expanded);
         result.extend_from_slice(&self.tokens[rest_pos..]);
         if let Some(first) = result.get_mut(start_idx) {
@@ -610,6 +627,10 @@ fn raw_string_literal(tok: &Token) -> String {
     String::new()
 }
 
+fn origin_location(tok: &Token) -> SourceLocation {
+    tok.origin.unwrap_or(tok.location)
+}
+
 fn search_include_paths(filename: &str) -> Option<PathBuf> {
     if Path::new(filename).is_absolute() {
         return Some(PathBuf::from(filename));
@@ -673,6 +694,48 @@ fn new_num_token(value: i64, tmpl: &Token) -> Token {
     };
     tok.len = 1;
     tok
+}
+
+fn apply_origin(tokens: &mut [Token], origin: SourceLocation) {
+    for tok in tokens {
+        if matches!(tok.kind, TokenKind::Eof) {
+            break;
+        }
+        tok.origin = Some(origin);
+    }
+}
+
+fn new_str_token_value(value: &str, tmpl: &Token, location: SourceLocation) -> Token {
+    let mut bytes = value.as_bytes().to_vec();
+    bytes.push(0);
+    let ty = Type::Array {
+        base: Box::new(Type::Char),
+        len: bytes.len() as i32,
+    };
+    Token {
+        kind: TokenKind::Str { bytes, ty },
+        location,
+        at_bol: tmpl.at_bol,
+        has_space: tmpl.has_space,
+        len: tmpl.len,
+        hideset: tmpl.hideset.clone(),
+        origin: tmpl.origin,
+    }
+}
+
+fn file_macro(tok: &Token) -> CompileResult<Token> {
+    let origin = origin_location(tok);
+    let filename = get_input_file(origin.file_no)
+        .map(|file| file.name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Ok(new_str_token_value(&filename, tok, origin))
+}
+
+fn line_macro(tok: &Token) -> CompileResult<Token> {
+    let origin = origin_location(tok);
+    let mut out = new_num_token(origin.line as i64, tok);
+    out.location = origin;
+    Ok(out)
 }
 
 fn warn_tok(tok: &Token, message: &str) {
@@ -996,6 +1059,7 @@ impl Preprocessor {
         tok.location = tmpl.location;
         tok.at_bol = tmpl.at_bol;
         tok.has_space = tmpl.has_space;
+        tok.origin = tmpl.origin;
         Ok(tok)
     }
 
@@ -1024,6 +1088,7 @@ impl Preprocessor {
         tok.location = lhs.location;
         tok.at_bol = lhs.at_bol;
         tok.has_space = lhs.has_space;
+        tok.origin = lhs.origin;
         tok.len = 0;
         Ok(tok)
     }
@@ -1173,6 +1238,15 @@ impl Preprocessor {
         Ok(())
     }
 
+    fn add_builtin(&mut self, name: &str, handler: MacroHandler) {
+        self.macros.push(Macro {
+            name: name.to_string(),
+            is_objlike: true,
+            handler: Some(handler),
+            ..Macro::default()
+        });
+    }
+
     fn init_macros(&mut self) -> CompileResult<()> {
         self.define_macro("_LP64", "1")?;
         self.define_macro("__C99_MACRO_WITH_VA_ARGS", "1")?;
@@ -1215,6 +1289,8 @@ impl Preprocessor {
         self.define_macro("__x86_64__", "1")?;
         self.define_macro("linux", "1")?;
         self.define_macro("unix", "1")?;
+        self.add_builtin("__FILE__", file_macro);
+        self.add_builtin("__LINE__", line_macro);
         Ok(())
     }
 }

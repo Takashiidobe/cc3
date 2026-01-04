@@ -388,7 +388,8 @@ pub struct Token {
     pub at_bol: bool,
     pub has_space: bool, // True if this token follows a space character
     pub len: usize,
-    pub hideset: HideSet, // For macro expansion
+    pub hideset: HideSet,               // For macro expansion
+    pub origin: Option<SourceLocation>, // Macro expansion origin
 }
 
 pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
@@ -532,6 +533,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     has_space,
                     len: i - start,
                     hideset: HideSet::default(),
+                    origin: None,
                 });
                 at_bol = false;
                 has_space = false;
@@ -692,6 +694,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     has_space,
                     len: i - start,
                     hideset: HideSet::default(),
+                    origin: None,
                 });
                 at_bol = false;
                 has_space = false;
@@ -758,6 +761,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 has_space,
                 len: i - start,
                 hideset: HideSet::default(),
+                origin: None,
             });
             at_bol = false;
             has_space = false;
@@ -827,6 +831,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 has_space,
                 len: i - start,
                 hideset: HideSet::default(),
+                origin: None,
             });
             at_bol = false;
             has_space = false;
@@ -871,6 +876,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 has_space,
                 len: end + 1 - start,
                 hideset: HideSet::default(),
+                origin: None,
             });
             at_bol = false;
             has_space = false;
@@ -919,6 +925,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 has_space,
                 len: i - start,
                 hideset: HideSet::default(),
+                origin: None,
             });
             at_bol = false;
             has_space = false;
@@ -939,6 +946,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 has_space,
                 len,
                 hideset: HideSet::default(),
+                origin: None,
             });
             at_bol = false;
             has_space = false;
@@ -970,6 +978,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
         has_space: false,
         len: 0,
         hideset: HideSet::default(),
+        origin: None,
     });
 
     Ok(tokens)

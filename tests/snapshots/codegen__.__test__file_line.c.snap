@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "strcmp(main_filename1, \"./test/file_line.c\") => 0\nmain_line1 => 5\nmain_line2 => 7\nstrcmp(include_filename, \"./test/file_line_include.h\") => 0\ninclude_line => 2\nOK\n"
+status: 0
