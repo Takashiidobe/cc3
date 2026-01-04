@@ -815,6 +815,56 @@ fn warn_tok(tok: &Token, message: &str) {
     }
 }
 
+fn join_adjacent_string_literals(tokens: &mut Vec<Token>) {
+    let mut i = 0;
+    while i + 1 < tokens.len() {
+        if !matches!(tokens[i].kind, TokenKind::Str { .. })
+            || !matches!(tokens[i + 1].kind, TokenKind::Str { .. })
+        {
+            i += 1;
+            continue;
+        }
+
+        let mut j = i + 1;
+        while j < tokens.len() && matches!(tokens[j].kind, TokenKind::Str { .. }) {
+            j += 1;
+        }
+
+        let mut combined = Vec::new();
+        for tok in &tokens[i..j] {
+            let TokenKind::Str { bytes, .. } = &tok.kind else {
+                continue;
+            };
+            let slice = bytes.strip_suffix(&[0]).unwrap_or(bytes.as_slice());
+            combined.extend_from_slice(slice);
+        }
+        combined.push(0);
+        let ty = Type::Array {
+            base: Box::new(Type::Char),
+            len: combined.len() as i32,
+        };
+        let location = tokens[i].location;
+        let at_bol = tokens[i].at_bol;
+        let has_space = tokens[i].has_space;
+        let hideset = tokens[i].hideset.clone();
+        let origin = tokens[i].origin;
+        tokens[i] = Token {
+            kind: TokenKind::Str {
+                bytes: combined,
+                ty,
+            },
+            location,
+            at_bol,
+            has_space,
+            len: 0,
+            hideset,
+            origin,
+        };
+        tokens.drain(i + 1..j);
+        i += 1;
+    }
+}
+
 impl Preprocessor {
     fn preprocess_tokens(&mut self) -> CompileResult<Vec<Token>> {
         let mut out = Vec::with_capacity(self.tokens.len());
@@ -1348,5 +1398,7 @@ impl Preprocessor {
 pub fn preprocess(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
     let mut preprocessor = Preprocessor::new(tokens);
     preprocessor.init_macros()?;
-    preprocessor.preprocess_tokens()
+    let mut tokens = preprocessor.preprocess_tokens()?;
+    join_adjacent_string_literals(&mut tokens);
+    Ok(tokens)
 }
