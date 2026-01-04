@@ -26,6 +26,9 @@ struct Args {
     /// Print subprocess command lines.
     #[arg(long = "hash-hash-hash", action = clap::ArgAction::SetTrue, hide = true)]
     hash_hash_hash: bool,
+    /// Compile and assemble only; do not link.
+    #[arg(short = 'c', action = clap::ArgAction::SetTrue)]
+    compile_only: bool,
     /// Emit assembly instead of object code.
     #[arg(short = 'S', action = clap::ArgAction::SetTrue)]
     emit_asm: bool,
@@ -136,12 +139,15 @@ fn run_driver(args: &Args) -> io::Result<()> {
             "no input files",
         ));
     }
-    if args.inputs.len() > 1 && args.output.is_some() {
+    if args.inputs.len() > 1 && args.output.is_some() && (args.compile_only || args.emit_asm) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "cannot specify '-o' with multiple files",
+            "cannot specify '-o' with '-c' or '-S' with multiple files",
         ));
     }
+
+    let mut link_inputs: Vec<PathBuf> = Vec::new();
+    let mut temp_objects: Vec<PathBuf> = Vec::new();
 
     for input in &args.inputs {
         let output = match &args.output {
@@ -149,15 +155,59 @@ fn run_driver(args: &Args) -> io::Result<()> {
             None => replace_ext(input, if args.emit_asm { ".s" } else { ".o" }),
         };
 
+        if is_object_file(input) {
+            if !args.compile_only && !args.emit_asm {
+                link_inputs.push(input.clone());
+            }
+            continue;
+        }
+
+        if is_asm_file(input) {
+            if !args.emit_asm {
+                assemble(input, &output, args.hash_hash_hash)?;
+            }
+            continue;
+        }
+
+        if !is_c_like_file(input) && !is_stdin(input) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("unknown file extension: {}", input.display()),
+            ));
+        }
+
         if args.emit_asm {
             run_cc1_subprocess(input, Some(&output), args.hash_hash_hash)?;
             continue;
         }
 
+        if args.compile_only {
+            let tmp_asm = create_tmpfile("cc3", ".s")?;
+            run_cc1_subprocess(input, Some(&tmp_asm), args.hash_hash_hash)?;
+            assemble(&tmp_asm, &output, args.hash_hash_hash)?;
+            let _ = fs::remove_file(&tmp_asm);
+            continue;
+        }
+
         let tmp_asm = create_tmpfile("cc3", ".s")?;
+        let tmp_obj = create_tmpfile("cc3", ".o")?;
         run_cc1_subprocess(input, Some(&tmp_asm), args.hash_hash_hash)?;
-        assemble(&tmp_asm, &output, args.hash_hash_hash)?;
+        assemble(&tmp_asm, &tmp_obj, args.hash_hash_hash)?;
         let _ = fs::remove_file(&tmp_asm);
+        link_inputs.push(tmp_obj.clone());
+        temp_objects.push(tmp_obj);
+    }
+
+    if !link_inputs.is_empty() && !args.compile_only && !args.emit_asm {
+        let output = args
+            .output
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("a.out"));
+        run_linker(&link_inputs, &output, args.hash_hash_hash)?;
+    }
+
+    for path in temp_objects {
+        let _ = fs::remove_file(path);
     }
     Ok(())
 }
@@ -165,6 +215,25 @@ fn run_driver(args: &Args) -> io::Result<()> {
 fn replace_ext(input: &Path, ext: &str) -> PathBuf {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
     PathBuf::from(format!("{stem}{ext}"))
+}
+
+fn is_object_file(path: &Path) -> bool {
+    matches!(path.extension().and_then(|s| s.to_str()), Some("o"))
+}
+
+fn is_asm_file(path: &Path) -> bool {
+    matches!(path.extension().and_then(|s| s.to_str()), Some("s"))
+}
+
+fn is_c_like_file(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(|s| s.to_str()),
+        Some("c") | Some("i")
+    )
+}
+
+fn is_stdin(path: &Path) -> bool {
+    path == Path::new("-")
 }
 
 fn create_tmpfile(prefix: &str, ext: &str) -> io::Result<PathBuf> {
@@ -198,6 +267,29 @@ fn assemble(input: &Path, output: &Path, show_cmd: bool) -> io::Result<()> {
         output.display().to_string(),
     ];
     run_subprocess(&argv, show_cmd)
+}
+
+fn run_linker(inputs: &[PathBuf], output: &Path, show_cmd: bool) -> io::Result<()> {
+    let mut argv = link_command();
+    argv.push("-o".to_string());
+    argv.push(output.display().to_string());
+    for input in inputs {
+        argv.push(input.display().to_string());
+    }
+    run_subprocess(&argv, show_cmd)
+}
+
+fn link_command() -> Vec<String> {
+    if cfg!(target_arch = "x86_64") {
+        vec!["clang".to_string()]
+    } else {
+        vec![
+            "zig".to_string(),
+            "cc".to_string(),
+            "--target=x86_64-linux-musl".to_string(),
+            "-static".to_string(),
+        ]
+    }
 }
 
 fn format_diagnostic(err: &CompileError, path: &std::path::Path) -> String {
