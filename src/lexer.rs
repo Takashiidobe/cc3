@@ -98,6 +98,7 @@ pub enum Punct {
     Minus,
     Star,
     Amp,
+    Hash,
     Pipe,
     Caret,
     Slash,
@@ -149,6 +150,7 @@ impl std::fmt::Display for Punct {
             Punct::Minus => "-",
             Punct::Star => "*",
             Punct::Amp => "&",
+            Punct::Hash => "#",
             Punct::Pipe => "|",
             Punct::Caret => "^",
             Punct::Slash => "/",
@@ -200,6 +202,7 @@ impl std::fmt::Display for Punct {
 pub struct Token {
     pub kind: TokenKind,
     pub location: SourceLocation,
+    pub at_bol: bool,
 }
 
 pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
@@ -208,6 +211,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
     let mut i = 0;
     let mut line = 1;
     let mut column = 1;
+    let mut at_bol = true;
 
     while i < bytes.len() {
         let b = bytes[i];
@@ -241,6 +245,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                         line += 1;
                         column = 1;
                         i += 1;
+                        at_bol = true;
                     } else {
                         i += 1;
                         column += 1;
@@ -252,13 +257,15 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 continue;
             }
         }
+        if b == b'\n' {
+            line += 1;
+            column = 1;
+            i += 1;
+            at_bol = true;
+            continue;
+        }
         if b.is_ascii_whitespace() {
-            if b == b'\n' {
-                line += 1;
-                column = 1;
-            } else {
-                column += 1;
-            }
+            column += 1;
             i += 1;
             continue;
         }
@@ -328,7 +335,9 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 tokens.push(Token {
                     kind: TokenKind::Num { value: 0, fval, ty },
                     location,
+                    at_bol,
                 });
+                at_bol = false;
                 column += i - start;
                 continue;
             }
@@ -482,7 +491,9 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 tokens.push(Token {
                     kind: TokenKind::Num { value: 0, fval, ty },
                     location,
+                    at_bol,
                 });
+                at_bol = false;
                 column += i - start;
                 continue;
             }
@@ -542,7 +553,9 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                     ty,
                 },
                 location,
+                at_bol,
             });
+            at_bol = false;
             column += i - start;
             continue;
         }
@@ -601,7 +614,12 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                 "_Noreturn" => TokenKind::Keyword(Keyword::Noreturn),
                 _ => TokenKind::Ident(word.to_string()),
             };
-            tokens.push(Token { kind, location });
+            tokens.push(Token {
+                kind,
+                location,
+                at_bol,
+            });
+            at_bol = false;
             column += i - start;
             continue;
         }
@@ -638,7 +656,9 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                     ty,
                 },
                 location,
+                at_bol,
             });
+            at_bol = false;
             i = end + 1;
             column += i - start;
             continue;
@@ -679,7 +699,9 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                     ty: Type::Int,
                 },
                 location,
+                at_bol,
             });
+            at_bol = false;
             column += i - start;
             continue;
         }
@@ -692,7 +714,9 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
                     column,
                     byte: i,
                 },
+                at_bol,
             });
+            at_bol = false;
             i += len;
             column += len;
             continue;
@@ -715,6 +739,7 @@ pub fn tokenize(input: &str) -> CompileResult<Vec<Token>> {
             column,
             byte: input.len(),
         },
+        at_bol,
     });
 
     Ok(tokens)
@@ -885,6 +910,7 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
         b'-' => Punct::Minus,
         b'*' => Punct::Star,
         b'&' => Punct::Amp,
+        b'#' => Punct::Hash,
         b'|' => Punct::Pipe,
         b'^' => Punct::Caret,
         b'/' => Punct::Slash,

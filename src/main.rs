@@ -114,7 +114,7 @@ fn run_cc1(input: &Path, output: Option<&Path>) -> CompileResult<()> {
         .map_err(|err| CompileError::new(format!("failed to read {}: {err}", input.display())))?;
 
     let tokens = lexer::tokenize(&source)?;
-    let tokens = preprocess::preprocess(tokens);
+    let tokens = preprocess::preprocess(tokens)?;
     let program = parser::parse(&tokens)?;
     let mut asm = format!(".file 1 \"{}\"\n", input.display());
     asm.push_str(&codegen::Codegen::new().generate(&program));
