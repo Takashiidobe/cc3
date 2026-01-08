@@ -66,3 +66,47 @@ fn default_include_paths() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("bar"), "stdout: {stdout}");
 }
+
+#[test]
+fn define_option_without_value() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("input.c");
+    fs::write(&input_path, "foo\n").expect("write input");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-Dfoo")
+        .arg("-E")
+        .arg(&input_path)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("1"), "stdout: {stdout}");
+}
+
+#[test]
+fn define_option_with_value() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("input.c");
+    fs::write(&input_path, "foo\n").expect("write input");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-Dfoo=bar")
+        .arg("-E")
+        .arg(&input_path)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("bar"), "stdout: {stdout}");
+}

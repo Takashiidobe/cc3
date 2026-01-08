@@ -45,6 +45,19 @@ struct Args {
     /// Add include search path.
     #[arg(short = 'I', value_name = "DIR")]
     include_dirs: Vec<PathBuf>,
+    /// Define macro.
+    #[arg(short = 'D', value_name = "MACRO[=VAL]")]
+    defines: Vec<String>,
+}
+
+fn define(s: &str) {
+    if let Some(eq_pos) = s.find('=') {
+        let name = &s[..eq_pos];
+        let value = &s[eq_pos + 1..];
+        preprocessor::define_macro(name, value);
+    } else {
+        preprocessor::define_macro(s, "1");
+    }
 }
 
 fn main() {
@@ -54,6 +67,11 @@ fn main() {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("cc3"));
     let args = Args::parse_from(preprocess_args(&raw_args));
+
+    preprocessor::init_macros();
+    for def in &args.defines {
+        define(def);
+    }
 
     if args.cc1 {
         let mut include_paths = args.include_dirs.clone();
@@ -124,6 +142,7 @@ fn run_cc1_subprocess(
     output: Option<&Path>,
     preprocess_only: bool,
     include_dirs: &[PathBuf],
+    defines: &[String],
     show_cmd: bool,
 ) -> io::Result<()> {
     let exe = std::env::args()
@@ -141,6 +160,9 @@ fn run_cc1_subprocess(
     }
     for dir in include_dirs {
         argv.push(format!("-I{}", dir.display()));
+    }
+    for def in defines {
+        argv.push(format!("-D{}", def));
     }
     run_subprocess(&argv, show_cmd)
 }
@@ -260,6 +282,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 output.as_deref(),
                 true,
                 &args.include_dirs,
+                &args.defines,
                 args.hash_hash_hash,
             )?;
             continue;
@@ -292,6 +315,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 output.as_deref(),
                 false,
                 &args.include_dirs,
+                &args.defines,
                 args.hash_hash_hash,
             )?;
             continue;
@@ -304,6 +328,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 Some(&tmp_asm),
                 false,
                 &args.include_dirs,
+                &args.defines,
                 args.hash_hash_hash,
             )?;
             assemble(&tmp_asm, output.as_ref().unwrap(), args.hash_hash_hash)?;
@@ -318,6 +343,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             Some(&tmp_asm),
             false,
             &args.include_dirs,
+            &args.defines,
             args.hash_hash_hash,
         )?;
         assemble(&tmp_asm, &tmp_obj, args.hash_hash_hash)?;

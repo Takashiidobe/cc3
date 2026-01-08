@@ -95,6 +95,32 @@ fn get_include_paths() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
+static CMDLINE_MACROS: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
+
+fn cmdline_macros_storage() -> &'static Mutex<Vec<(String, String)>> {
+    CMDLINE_MACROS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+pub fn init_macros() {
+    *cmdline_macros_storage()
+        .lock()
+        .expect("cmdline macros lock poisoned") = Vec::new();
+}
+
+pub fn define_macro(name: &str, value: &str) {
+    cmdline_macros_storage()
+        .lock()
+        .expect("cmdline macros lock poisoned")
+        .push((name.to_string(), value.to_string()));
+}
+
+fn get_cmdline_macros() -> Vec<(String, String)> {
+    cmdline_macros_storage()
+        .lock()
+        .map(|macros| macros.clone())
+        .unwrap_or_default()
+}
+
 impl Preprocessor {
     fn new(tokens: Vec<Token>) -> Self {
         Self {
@@ -1396,6 +1422,12 @@ impl Preprocessor {
         self.define_macro("unix", "1")?;
         self.add_builtin("__FILE__", file_macro);
         self.add_builtin("__LINE__", line_macro);
+
+        // Apply command-line defined macros
+        for (name, value) in get_cmdline_macros() {
+            self.define_macro(&name, &value)?;
+        }
+
         Ok(())
     }
 }
