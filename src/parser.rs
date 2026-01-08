@@ -3387,6 +3387,26 @@ impl<'a> Parser<'a> {
         ))
     }
 
+    /// Read a value from a buffer based on size (1, 2, 4, or 8 bytes).
+    fn read_buf(buf: &[u8], sz: usize, offset: usize) -> u64 {
+        match sz {
+            1 => buf[offset] as u64,
+            2 => {
+                let bytes: [u8; 2] = buf[offset..offset + 2].try_into().unwrap();
+                u16::from_le_bytes(bytes) as u64
+            }
+            4 => {
+                let bytes: [u8; 4] = buf[offset..offset + 4].try_into().unwrap();
+                u32::from_le_bytes(bytes) as u64
+            }
+            8 => {
+                let bytes: [u8; 8] = buf[offset..offset + 8].try_into().unwrap();
+                u64::from_le_bytes(bytes)
+            }
+            _ => panic!("Invalid size: {}", sz),
+        }
+    }
+
     /// Write a value to a buffer based on size (1, 2, 4, or 8 bytes).
     fn write_buf(buf: &mut [u8], val: u64, sz: usize, offset: usize) {
         match sz {
@@ -3427,12 +3447,25 @@ impl<'a> Parser<'a> {
         if let Type::Struct { members, .. } = &init.ty {
             let mut relocations = Vec::new();
             for member in members {
-                let mut rels = self.write_gvar_data(
-                    &init.children[member.idx],
-                    buf,
-                    offset + member.offset as usize,
-                )?;
-                relocations.append(&mut rels);
+                if member.is_bitfield {
+                    // Handle bitfield members
+                    if let Some(expr) = &init.children[member.idx].expr {
+                        let loc_offset = offset + member.offset as usize;
+                        let oldval = Self::read_buf(buf, member.ty.size() as usize, loc_offset);
+                        let mut expr_clone = expr.clone();
+                        let newval = self.eval(&mut expr_clone)? as u64;
+                        let mask = (1u64 << member.bit_width) - 1;
+                        let combined = oldval | ((newval & mask) << member.bit_offset);
+                        Self::write_buf(buf, combined, member.ty.size() as usize, loc_offset);
+                    }
+                } else {
+                    let mut rels = self.write_gvar_data(
+                        &init.children[member.idx],
+                        buf,
+                        offset + member.offset as usize,
+                    )?;
+                    relocations.append(&mut rels);
+                }
             }
             return Ok(relocations);
         }

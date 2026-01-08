@@ -2,5 +2,5 @@
 source: tests/codegen.rs
 expression: "&mine"
 ---
-stdout: "sizeof(struct {int x:1; }) => 4\nsizeof(struct {long x:1; }) => 8\nsizeof(struct bit1) => 4\n({ struct bit1 x; x.a=1; x.b=2; x.c=3; x.d=4; x.e=5; x.a; }) => 1\n({ struct bit1 x={1,2,3,4,5}; x.a; }) => 1\n({ struct bit1 x={1,2,3,4,5}; x.b; }) => 2\n({ struct bit1 x={1,2,3,4,5}; x.c; }) => -1\n({ struct bit1 x={1,2,3,4,5}; x.d; }) => -4\n({ struct bit1 x={1,2,3,4,5}; x.e; }) => -3\nOK\n"
+stdout: "sizeof(struct {int x:1; }) => 4\nsizeof(struct {long x:1; }) => 8\nsizeof(struct bit1) => 4\n({ struct bit1 x; x.a=1; x.b=2; x.c=3; x.d=4; x.e=5; x.a; }) => 1\n({ struct bit1 x={1,2,3,4,5}; x.a; }) => 1\n({ struct bit1 x={1,2,3,4,5}; x.b; }) => 2\n({ struct bit1 x={1,2,3,4,5}; x.c; }) => -1\n({ struct bit1 x={1,2,3,4,5}; x.d; }) => -4\n({ struct bit1 x={1,2,3,4,5}; x.e; }) => -3\ng45.a => 1\ng45.b => 2\ng45.c => 3\ng46.a => 0\ng46.b => 0\ng46.c => 0\nOK\n"
 status: 0
