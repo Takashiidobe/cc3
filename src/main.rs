@@ -53,13 +53,13 @@ struct Args {
     undefs: Vec<String>,
 }
 
-fn define(s: &str) {
+fn parse_define(s: &str) -> (String, String) {
     if let Some(eq_pos) = s.find('=') {
-        let name = &s[..eq_pos];
-        let value = &s[eq_pos + 1..];
-        preprocessor::define_macro(name, value);
+        let name = s[..eq_pos].to_string();
+        let value = s[eq_pos + 1..].to_string();
+        (name, value)
     } else {
-        preprocessor::define_macro(s, "1");
+        (s.to_string(), "1".to_string())
     }
 }
 
@@ -71,13 +71,9 @@ fn main() {
         .unwrap_or_else(|| PathBuf::from("cc3"));
     let args = Args::parse_from(preprocess_args(&raw_args));
 
-    preprocessor::init_macros();
-    for def in &args.defines {
-        define(def);
-    }
-    for undef in &args.undefs {
-        preprocessor::undef_macro(undef);
-    }
+    let cmdline_defines: Vec<(String, String)> =
+        args.defines.iter().map(|s| parse_define(s)).collect();
+    let cmdline_undefs: Vec<String> = args.undefs.clone();
 
     if args.cc1 {
         let mut include_paths = args.include_dirs.clone();
@@ -95,7 +91,13 @@ fn main() {
             .as_ref()
             .or(args.output.as_ref())
             .map(|path| path.as_path());
-        if let Err(err) = run_cc1(input, output, args.preprocess_only) {
+        if let Err(err) = run_cc1(
+            input,
+            output,
+            args.preprocess_only,
+            cmdline_defines,
+            cmdline_undefs,
+        ) {
             eprintln!("{}", format_diagnostic(&err, input.as_path()));
             std::process::exit(1);
         }
@@ -177,9 +179,15 @@ fn run_cc1_subprocess(
     run_subprocess(&argv, show_cmd)
 }
 
-fn run_cc1(input: &Path, output: Option<&Path>, preprocess_only: bool) -> CompileResult<()> {
+fn run_cc1(
+    input: &Path,
+    output: Option<&Path>,
+    preprocess_only: bool,
+    cmdline_defines: Vec<(String, String)>,
+    cmdline_undefs: Vec<String>,
+) -> CompileResult<()> {
     let tokens = lexer::tokenize_file(input)?;
-    let tokens = preprocessor::preprocess(tokens)?;
+    let tokens = preprocessor::preprocess(tokens, cmdline_defines, cmdline_undefs)?;
     if preprocess_only {
         print_tokens(&tokens, output)?;
         return Ok(());

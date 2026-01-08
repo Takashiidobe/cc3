@@ -74,6 +74,8 @@ struct Preprocessor {
     tokens: Vec<Token>,
     macros: Vec<Macro>,
     pos: usize, // Current position in token stream
+    cmdline_defines: Vec<(String, String)>,
+    cmdline_undefs: Vec<String>,
 }
 
 static INCLUDE_PATHS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
@@ -95,61 +97,18 @@ fn get_include_paths() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-static CMDLINE_MACROS: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
-
-fn cmdline_macros_storage() -> &'static Mutex<Vec<(String, String)>> {
-    CMDLINE_MACROS.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-pub fn init_macros() {
-    *cmdline_macros_storage()
-        .lock()
-        .expect("cmdline macros lock poisoned") = Vec::new();
-    *cmdline_undefs_storage()
-        .lock()
-        .expect("cmdline undefs lock poisoned") = Vec::new();
-}
-
-pub fn define_macro(name: &str, value: &str) {
-    cmdline_macros_storage()
-        .lock()
-        .expect("cmdline macros lock poisoned")
-        .push((name.to_string(), value.to_string()));
-}
-
-fn get_cmdline_macros() -> Vec<(String, String)> {
-    cmdline_macros_storage()
-        .lock()
-        .map(|macros| macros.clone())
-        .unwrap_or_default()
-}
-
-static CMDLINE_UNDEFS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
-
-fn cmdline_undefs_storage() -> &'static Mutex<Vec<String>> {
-    CMDLINE_UNDEFS.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-pub fn undef_macro(name: &str) {
-    cmdline_undefs_storage()
-        .lock()
-        .expect("cmdline undefs lock poisoned")
-        .push(name.to_string());
-}
-
-fn get_cmdline_undefs() -> Vec<String> {
-    cmdline_undefs_storage()
-        .lock()
-        .map(|undefs| undefs.clone())
-        .unwrap_or_default()
-}
-
 impl Preprocessor {
-    fn new(tokens: Vec<Token>) -> Self {
+    fn new(
+        tokens: Vec<Token>,
+        cmdline_defines: Vec<(String, String)>,
+        cmdline_undefs: Vec<String>,
+    ) -> Self {
         Self {
             tokens,
             macros: Vec::new(),
             pos: 0,
+            cmdline_defines,
+            cmdline_undefs,
         }
     }
 
@@ -482,7 +441,7 @@ impl Preprocessor {
     }
 
     fn expand_macros_only(&self, tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
-        let mut expander = Preprocessor::new(tokens);
+        let mut expander = Preprocessor::new(tokens, Vec::new(), Vec::new());
         expander.macros = self.macros.clone();
         expander.expand_macros_stream()
     }
@@ -1186,7 +1145,11 @@ impl Preprocessor {
     ) -> CompileResult<()> {
         let included = tokenize_file(include_path)
             .map_err(|err| CompileError::at(err.message().to_string(), filename_tok.location))?;
-        let mut included_pp = Preprocessor::new(included);
+        let mut included_pp = Preprocessor::new(
+            included,
+            self.cmdline_defines.clone(),
+            self.cmdline_undefs.clone(),
+        );
         included_pp.macros = self.macros.clone();
         let included_tokens = included_pp.preprocess_tokens()?;
         self.macros = included_pp.macros;
@@ -1451,12 +1414,14 @@ impl Preprocessor {
         self.add_builtin("__LINE__", line_macro);
 
         // Apply command-line defined macros
-        for (name, value) in get_cmdline_macros() {
+        let cmdline_defines = self.cmdline_defines.clone();
+        for (name, value) in cmdline_defines {
             self.define_macro(&name, &value)?;
         }
 
         // Apply command-line undefined macros
-        for name in get_cmdline_undefs() {
+        let cmdline_undefs = self.cmdline_undefs.clone();
+        for name in cmdline_undefs {
             self.undef_macro_internal(&name);
         }
 
@@ -1465,8 +1430,12 @@ impl Preprocessor {
 }
 
 /// Entry point of the preprocessor.
-pub fn preprocess(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
-    let mut preprocessor = Preprocessor::new(tokens);
+pub fn preprocess(
+    tokens: Vec<Token>,
+    cmdline_defines: Vec<(String, String)>,
+    cmdline_undefs: Vec<String>,
+) -> CompileResult<Vec<Token>> {
+    let mut preprocessor = Preprocessor::new(tokens, cmdline_defines, cmdline_undefs);
     preprocessor.init_macros()?;
     let mut tokens = preprocessor.preprocess_tokens()?;
     convert_pp_tokens(&mut tokens)?;
