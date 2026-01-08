@@ -48,6 +48,9 @@ struct Args {
     /// Define macro.
     #[arg(short = 'D', value_name = "MACRO[=VAL]")]
     defines: Vec<String>,
+    /// Undefine macro.
+    #[arg(short = 'U', value_name = "MACRO")]
+    undefs: Vec<String>,
 }
 
 fn define(s: &str) {
@@ -71,6 +74,9 @@ fn main() {
     preprocessor::init_macros();
     for def in &args.defines {
         define(def);
+    }
+    for undef in &args.undefs {
+        preprocessor::undef_macro(undef);
     }
 
     if args.cc1 {
@@ -143,6 +149,7 @@ fn run_cc1_subprocess(
     preprocess_only: bool,
     include_dirs: &[PathBuf],
     defines: &[String],
+    undefs: &[String],
     show_cmd: bool,
 ) -> io::Result<()> {
     let exe = std::env::args()
@@ -163,6 +170,9 @@ fn run_cc1_subprocess(
     }
     for def in defines {
         argv.push(format!("-D{}", def));
+    }
+    for undef in undefs {
+        argv.push(format!("-U{}", undef));
     }
     run_subprocess(&argv, show_cmd)
 }
@@ -283,6 +293,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 true,
                 &args.include_dirs,
                 &args.defines,
+                &args.undefs,
                 args.hash_hash_hash,
             )?;
             continue;
@@ -316,6 +327,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 false,
                 &args.include_dirs,
                 &args.defines,
+                &args.undefs,
                 args.hash_hash_hash,
             )?;
             continue;
@@ -329,6 +341,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 false,
                 &args.include_dirs,
                 &args.defines,
+                &args.undefs,
                 args.hash_hash_hash,
             )?;
             assemble(&tmp_asm, output.as_ref().unwrap(), args.hash_hash_hash)?;
@@ -344,6 +357,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             false,
             &args.include_dirs,
             &args.defines,
+            &args.undefs,
             args.hash_hash_hash,
         )?;
         assemble(&tmp_asm, &tmp_obj, args.hash_hash_hash)?;

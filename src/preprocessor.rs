@@ -105,6 +105,9 @@ pub fn init_macros() {
     *cmdline_macros_storage()
         .lock()
         .expect("cmdline macros lock poisoned") = Vec::new();
+    *cmdline_undefs_storage()
+        .lock()
+        .expect("cmdline undefs lock poisoned") = Vec::new();
 }
 
 pub fn define_macro(name: &str, value: &str) {
@@ -118,6 +121,26 @@ fn get_cmdline_macros() -> Vec<(String, String)> {
     cmdline_macros_storage()
         .lock()
         .map(|macros| macros.clone())
+        .unwrap_or_default()
+}
+
+static CMDLINE_UNDEFS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+
+fn cmdline_undefs_storage() -> &'static Mutex<Vec<String>> {
+    CMDLINE_UNDEFS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+pub fn undef_macro(name: &str) {
+    cmdline_undefs_storage()
+        .lock()
+        .expect("cmdline undefs lock poisoned")
+        .push(name.to_string());
+}
+
+fn get_cmdline_undefs() -> Vec<String> {
+    cmdline_undefs_storage()
+        .lock()
+        .map(|undefs| undefs.clone())
         .unwrap_or_default()
 }
 
@@ -988,12 +1011,7 @@ impl Preprocessor {
                 };
                 self.pos += 1;
                 self.skip_line();
-                self.macros.push(Macro {
-                    name: macro_name,
-                    is_objlike: true,
-                    deleted: true,
-                    ..Macro::default()
-                });
+                self.undef_macro_internal(&macro_name);
                 continue;
             }
 
@@ -1369,6 +1387,15 @@ impl Preprocessor {
         Ok(())
     }
 
+    fn undef_macro_internal(&mut self, name: &str) {
+        self.macros.push(Macro {
+            name: name.to_string(),
+            is_objlike: true,
+            deleted: true,
+            ..Macro::default()
+        });
+    }
+
     fn add_builtin(&mut self, name: &str, handler: MacroHandler) {
         self.macros.push(Macro {
             name: name.to_string(),
@@ -1426,6 +1453,11 @@ impl Preprocessor {
         // Apply command-line defined macros
         for (name, value) in get_cmdline_macros() {
             self.define_macro(&name, &value)?;
+        }
+
+        // Apply command-line undefined macros
+        for name in get_cmdline_undefs() {
+            self.undef_macro_internal(&name);
         }
 
         Ok(())

@@ -110,3 +110,28 @@ fn define_option_with_value() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("bar"), "stdout: {stdout}");
 }
+
+#[test]
+fn undef_option() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("input.c");
+    fs::write(&input_path, "foo\n").expect("write input");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-Dfoo=bar")
+        .arg("-Ufoo")
+        .arg("-E")
+        .arg(&input_path)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // After -U, foo should remain as the identifier "foo", not be replaced
+    assert!(stdout.contains("foo"), "stdout: {stdout}");
+    assert!(!stdout.contains("bar"), "stdout: {stdout}");
+}
