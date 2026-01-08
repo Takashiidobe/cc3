@@ -1043,12 +1043,24 @@ impl<'a> Parser<'a> {
             }
 
             // Assign offsets within the struct to members
-            let mut offset = 0i32;
+            let mut bits = 0i32;
             for member in members.iter_mut() {
-                // Align offset to member's alignment
-                offset = align_to(offset, member.align);
-                member.offset = offset;
-                offset += member.ty.size() as i32;
+                if member.is_bitfield {
+                    let sz = member.ty.size() as i32;
+                    // Check if the bitfield fits in the current storage unit
+                    if crosses_storage_unit(bits, member.bit_width, sz) {
+                        // Start a new storage unit
+                        bits = align_bits_to(bits, sz);
+                    }
+                    member.offset = align_down(bits_to_bytes(bits), sz);
+                    member.bit_offset = bits % bytes_to_bits(sz);
+                    bits += member.bit_width;
+                } else {
+                    // Regular member
+                    bits = align_bits_to(bits, member.align);
+                    member.offset = bits_to_bytes(bits);
+                    bits += bytes_to_bits(member.ty.size() as i32);
+                }
             }
         }
 
@@ -1095,6 +1107,14 @@ impl<'a> Parser<'a> {
                 } else {
                     ty.align() as i32
                 };
+
+                let (is_bitfield, bit_width) = if self.consume_punct(Punct::Colon) {
+                    let width = self.const_expr()?;
+                    (true, width as i32)
+                } else {
+                    (false, 0)
+                };
+
                 members.push(Member {
                     name,
                     ty,
@@ -1102,6 +1122,9 @@ impl<'a> Parser<'a> {
                     idx,
                     align,
                     offset: 0,
+                    is_bitfield,
+                    bit_offset: 0,
+                    bit_width,
                 });
                 idx += 1;
             }
@@ -3925,6 +3948,30 @@ impl<'a> Parser<'a> {
 
 fn align_to(n: i32, align: i32) -> i32 {
     (n + align - 1) / align * align
+}
+
+fn align_down(n: i32, align: i32) -> i32 {
+    align_to(n - align + 1, align)
+}
+
+// Bit/byte conversion helpers
+fn bits_to_bytes(bits: i32) -> i32 {
+    bits / 8
+}
+
+fn bytes_to_bits(bytes: i32) -> i32 {
+    bytes * 8
+}
+
+// Align bits to byte boundary
+fn align_bits_to(bits: i32, bytes: i32) -> i32 {
+    align_to(bits, bytes_to_bits(bytes))
+}
+
+// Check if bitfield crosses storage unit boundary
+fn crosses_storage_unit(bit_offset: i32, bit_width: i32, storage_size: i32) -> bool {
+    let storage_bits = bytes_to_bits(storage_size);
+    bit_offset / storage_bits != (bit_offset + bit_width - 1) / storage_bits
 }
 
 fn has_flonum(ty: &Type, lo: i64, hi: i64, offset: i64) -> bool {

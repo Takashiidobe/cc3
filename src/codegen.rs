@@ -884,9 +884,22 @@ impl Codegen {
                 self.gen_addr(*idx, *is_local, function, globals);
                 self.load(expr.ty.as_ref());
             }
-            ExprKind::Member { .. } => {
+            ExprKind::Member { member, .. } => {
                 self.gen_lvalue(expr, function, globals);
                 self.load(expr.ty.as_ref());
+
+                if member.is_bitfield {
+                    // Extract bitfield bits using shifts
+                    self.emit_line(&format!(
+                        "  shl ${}, %rax",
+                        64 - member.bit_width - member.bit_offset
+                    ));
+                    if member.ty.is_unsigned() {
+                        self.emit_line(&format!("  shr ${}, %rax", 64 - member.bit_width));
+                    } else {
+                        self.emit_line(&format!("  sar ${}, %rax", 64 - member.bit_width));
+                    }
+                }
             }
             ExprKind::StmtExpr(stmts) => {
                 for stmt in stmts {
@@ -897,6 +910,28 @@ impl Codegen {
                 self.gen_lvalue(lhs, function, globals);
                 self.push();
                 self.gen_expr(rhs, function, globals);
+
+                // Handle bitfield assignment
+                if let ExprKind::Member { member, .. } = &lhs.kind
+                    && member.is_bitfield
+                {
+                    // Mask and position the new value
+                    self.emit_line("  mov %rax, %rdi");
+                    let mask = (1i64 << member.bit_width) - 1;
+                    self.emit_line(&format!("  and ${}, %rdi", mask));
+                    self.emit_line(&format!("  shl ${}, %rdi", member.bit_offset));
+
+                    // Load current value from memory
+                    self.emit_line("  mov (%rsp), %rax");
+                    self.load(Some(&member.ty));
+
+                    // Mask out the bitfield bits and OR in new value
+                    let bit_mask = mask << member.bit_offset;
+                    self.emit_line(&format!("  mov ${}, %r9", !bit_mask));
+                    self.emit_line("  and %r9, %rax");
+                    self.emit_line("  or %rdi, %rax");
+                }
+
                 self.store(expr.ty.as_ref());
             }
             ExprKind::Cond { cond, then, els } => {

@@ -13,6 +13,21 @@ pub struct Member {
     pub idx: usize,
     pub align: i32,
     pub offset: i32,
+    // Bitfield
+    pub is_bitfield: bool,
+    pub bit_offset: i32,
+    pub bit_width: i32,
+}
+
+impl Member {
+    /// Calculate the bit position after this member ends
+    pub fn end_bit(&self) -> i64 {
+        if self.is_bitfield {
+            (self.offset as i64 * 8) + self.bit_offset as i64 + self.bit_width as i64
+        } else {
+            (self.offset as i64 + self.ty.size()) * 8
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -297,10 +312,10 @@ impl Type {
                     return 0;
                 }
                 let align = self.align();
-                let last_member = members.last().unwrap();
-                let size = last_member.offset as i64 + last_member.ty.size();
+                // Calculate the highest bit used
+                let bits = members.iter().map(|m| m.end_bit()).max().unwrap_or(0);
                 // Round up to alignment
-                ((size + align - 1) / align) * align
+                ((bits + align * 8 - 1) / (align * 8)) * align
             }
             Type::Union {
                 members,
