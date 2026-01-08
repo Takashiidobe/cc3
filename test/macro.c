@@ -253,6 +253,10 @@ int main() {
 #define paste4(x, y, z) x##y##z
   ASSERT(123, paste4(1,2,3));
 
+#define CONCAT(x,y) x##y
+  ASSERT(5, ({ int f0zz=5; CONCAT(f,0zz); }));
+  ASSERT(5, ({ CONCAT(4,.57) + 0.5; }));
+
   printf("OK\n");
   return 0;
 }

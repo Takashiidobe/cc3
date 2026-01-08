@@ -262,6 +262,7 @@ pub enum TokenKind {
         fval: f64,
         ty: Type,
     },
+    PPNum, // Preprocessing numbers
     Str {
         bytes: Vec<u8>,
         ty: Type,
@@ -392,6 +393,189 @@ pub struct Token {
     pub origin: Option<SourceLocation>, // Macro expansion origin
 }
 
+impl Token {
+    pub fn text(&self) -> String {
+        let file = get_input_file(self.location.file_no).expect("file for token");
+        file.contents[self.location.byte..self.location.byte + self.len].to_string()
+    }
+
+    // Try to convert a pp-number token to an integer.
+    fn convert_pp_int(&mut self) -> CompileResult<()> {
+        let input = self.text();
+        let bytes = input.as_bytes();
+        let mut i = 0;
+
+        // Determine base from prefix
+        let (base, prefix_len) = if i + 1 < bytes.len() && bytes[i] == b'0' {
+            if bytes[i + 1] == b'x' || bytes[i + 1] == b'X' {
+                if i + 2 < bytes.len() && bytes[i + 2].is_ascii_hexdigit() {
+                    (16, 2)
+                } else {
+                    (10, 0)
+                }
+            } else if bytes[i + 1] == b'b' || bytes[i + 1] == b'B' {
+                if i + 2 < bytes.len() && (bytes[i + 2] == b'0' || bytes[i + 2] == b'1') {
+                    (2, 2)
+                } else {
+                    (10, 0)
+                }
+            } else {
+                (8, 0)
+            }
+        } else {
+            (10, 0)
+        };
+
+        i += prefix_len;
+        let digits_start = i;
+
+        // Parse digits
+        while i < bytes.len() {
+            let ch = bytes[i];
+            let is_valid = match base {
+                2 => ch == b'0' || ch == b'1',
+                8 => (b'0'..=b'7').contains(&ch),
+                10 => ch.is_ascii_digit(),
+                16 => ch.is_ascii_hexdigit(),
+                _ => false,
+            };
+            if is_valid {
+                i += 1;
+            } else {
+                break;
+            }
+        }
+
+        let num_str = &input[digits_start..i];
+        let value = u128::from_str_radix(num_str, base)
+            .map_err(|_| CompileError::at("invalid integer constant", self.location))?;
+        let value = value.min(u64::MAX as u128) as u64;
+
+        // Read U, L or LL suffixes
+        let mut has_long = false;
+        let mut has_unsigned = false;
+        let suffix = &input[i..];
+
+        if suffix.starts_with("LLU")
+            || suffix.starts_with("LLu")
+            || suffix.starts_with("llU")
+            || suffix.starts_with("llu")
+            || suffix.starts_with("ULL")
+            || suffix.starts_with("Ull")
+            || suffix.starts_with("uLL")
+            || suffix.starts_with("ull")
+        {
+            i += 3;
+            has_long = true;
+            has_unsigned = true;
+        } else if suffix.len() >= 2
+            && (suffix[..2].eq_ignore_ascii_case("lu") || suffix[..2].eq_ignore_ascii_case("ul"))
+        {
+            i += 2;
+            has_long = true;
+            has_unsigned = true;
+        } else if suffix.starts_with("LL") || suffix.starts_with("ll") {
+            i += 2;
+            has_long = true;
+        } else if suffix.starts_with('L') || suffix.starts_with('l') {
+            i += 1;
+            has_long = true;
+        } else if suffix.starts_with('U') || suffix.starts_with('u') {
+            i += 1;
+            has_unsigned = true;
+        }
+
+        // Check we consumed the entire token
+        if i != input.len() {
+            return Err(CompileError::at("invalid integer constant", self.location));
+        }
+
+        // Infer type
+        let ty = if base == 10 {
+            if has_long && has_unsigned {
+                Type::ULong
+            } else if has_long {
+                Type::Long
+            } else if has_unsigned {
+                if (value >> 32) != 0 {
+                    Type::ULong
+                } else {
+                    Type::UInt
+                }
+            } else if (value >> 31) != 0 {
+                Type::Long
+            } else {
+                Type::Int
+            }
+        } else if has_long && has_unsigned {
+            Type::ULong
+        } else if has_long {
+            if (value >> 63) != 0 {
+                Type::ULong
+            } else {
+                Type::Long
+            }
+        } else if has_unsigned {
+            if (value >> 32) != 0 {
+                Type::ULong
+            } else {
+                Type::UInt
+            }
+        } else if (value >> 63) != 0 {
+            Type::ULong
+        } else if (value >> 32) != 0 {
+            Type::Long
+        } else if (value >> 31) != 0 {
+            Type::UInt
+        } else {
+            Type::Int
+        };
+
+        self.kind = TokenKind::Num {
+            value: value as i64,
+            fval: 0.0,
+            ty,
+        };
+        Ok(())
+    }
+
+    // Convert a pp-number token to a regular number token.
+    fn convert_pp_number(&mut self) -> CompileResult<()> {
+        // Try to parse as an integer constant
+        if self.convert_pp_int().is_ok() {
+            return Ok(());
+        }
+
+        // If it's not an integer, it must be a floating point constant
+        let input = self.text();
+        let mut parse_str = input.as_str();
+
+        // Check for suffix
+        let ty = if input.ends_with('f') || input.ends_with('F') {
+            parse_str = &input[..input.len() - 1];
+            Type::Float
+        } else if input.ends_with('l') || input.ends_with('L') {
+            parse_str = &input[..input.len() - 1];
+            Type::Double
+        } else {
+            Type::Double
+        };
+
+        let fval = if parse_str.starts_with("0x") || parse_str.starts_with("0X") {
+            parse_hex_float(parse_str).ok_or_else(|| {
+                CompileError::at("invalid numeric constant".to_string(), self.location)
+            })?
+        } else {
+            parse_str.parse::<f64>().map_err(|_| {
+                CompileError::at("invalid numeric constant".to_string(), self.location)
+            })?
+        };
+
+        self.kind = TokenKind::Num { value: 0, fval, ty };
+        Ok(())
+    }
+}
+
 pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
     let bytes = input.as_bytes();
     let mut tokens = Vec::new();
@@ -463,300 +647,35 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
             continue;
         }
 
-        // Handle numeric literals (including those starting with '.')
+        // Numeric literal
         if b.is_ascii_digit() || (b == b'.' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit())
         {
             let start = i;
-            let location = SourceLocation {
-                line,
-                column,
-                byte: start,
-                file_no,
-            };
+            i += 1;
 
-            // If starts with '.', it's a float
-            if b == b'.' {
-                let float_str = &input[start..];
-                let mut end_idx = 0;
-                let mut prev_char = '\0';
-                for (idx, c) in float_str.char_indices() {
-                    // Allow '+' or '-' only immediately after 'e', 'E', 'p', or 'P'
-                    if matches!(c, '+' | '-') {
-                        if !matches!(prev_char, 'e' | 'E' | 'p' | 'P') {
-                            break;
-                        }
-                    } else if !matches!(c, '0'..='9' | '.' | 'e' | 'E' | 'f' | 'F' | 'l' | 'L') {
-                        break;
-                    }
-                    end_idx = idx + c.len_utf8();
-                    prev_char = c;
-                }
-                if end_idx == 0 {
-                    end_idx = float_str.len();
-                }
-
-                let float_literal = &float_str[..end_idx];
-                let mut parse_str = float_literal;
-
-                // Check for suffix
-                let ty = if float_literal.ends_with('f') || float_literal.ends_with('F') {
-                    parse_str = &float_literal[..float_literal.len() - 1];
-                    Type::Float
-                } else if float_literal.ends_with('l') || float_literal.ends_with('L') {
-                    parse_str = &float_literal[..float_literal.len() - 1];
-                    Type::Double
-                } else {
-                    Type::Double
-                };
-
-                let fval = if parse_str.starts_with("0x") || parse_str.starts_with("0X") {
-                    parse_hex_float(parse_str).ok_or_else(|| {
-                        CompileError::at(
-                            format!("invalid floating-point literal: {}", parse_str),
-                            location,
-                        )
-                    })?
-                } else {
-                    parse_str.parse::<f64>().map_err(|_| {
-                        CompileError::at(
-                            format!("invalid floating-point literal: {}", parse_str),
-                            location,
-                        )
-                    })?
-                };
-
-                i = start + end_idx;
-                tokens.push(Token {
-                    kind: TokenKind::Num { value: 0, fval, ty },
-                    location,
-                    at_bol,
-                    has_space,
-                    len: i - start,
-                    hideset: HideSet::default(),
-                    origin: None,
-                });
-                at_bol = false;
-                has_space = false;
-                column += i - start;
-                continue;
-            }
-
-            // Determine base from prefix
-            let (base, prefix_len) = if i + 1 < bytes.len() && bytes[i] == b'0' {
-                if bytes[i + 1] == b'x' || bytes[i + 1] == b'X' {
-                    // Hexadecimal: 0x or 0X
-                    if i + 2 < bytes.len() && bytes[i + 2].is_ascii_hexdigit() {
-                        (16, 2)
-                    } else {
-                        (10, 0) // Just "0x" without digits - parse as 0
-                    }
-                } else if bytes[i + 1] == b'b' || bytes[i + 1] == b'B' {
-                    // Binary: 0b or 0B
-                    if i + 2 < bytes.len() && (bytes[i + 2] == b'0' || bytes[i + 2] == b'1') {
-                        (2, 2)
-                    } else {
-                        (10, 0) // Just "0b" without digits - parse as 0
-                    }
-                } else {
-                    // Octal: leading 0
-                    (8, 0)
-                }
-            } else {
-                // Decimal
-                (10, 0)
-            };
-
-            i += prefix_len;
-            let digits_start = i;
-
-            // Parse digits
-            while i < bytes.len() {
-                let ch = bytes[i];
-                let is_valid = match base {
-                    2 => ch == b'0' || ch == b'1',
-                    8 => (b'0'..=b'7').contains(&ch),
-                    10 => ch.is_ascii_digit(),
-                    16 => ch.is_ascii_hexdigit(),
-                    _ => false,
-                };
-                if is_valid {
+            // Read a pp-number following C preprocessing rules
+            loop {
+                if i + 1 < bytes.len()
+                    && matches!(bytes[i], b'e' | b'E' | b'p' | b'P')
+                    && matches!(bytes[i + 1], b'+' | b'-')
+                {
+                    i += 2;
+                } else if i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'.')
+                {
                     i += 1;
                 } else {
                     break;
                 }
             }
 
-            let num_str = &input[digits_start..i];
-            let value = u128::from_str_radix(num_str, base).map_err(|err| {
-                CompileError::at(format!("invalid number literal: {err}"), location)
-            })?;
-            let value = value.min(u64::MAX as u128) as u64;
-
-            // Read U, L or LL suffixes.
-            let mut has_long = false;
-            let mut has_unsigned = false;
-            let suffix = &input[i..];
-
-            if suffix.starts_with("LLU")
-                || suffix.starts_with("LLu")
-                || suffix.starts_with("llU")
-                || suffix.starts_with("llu")
-                || suffix.starts_with("ULL")
-                || suffix.starts_with("Ull")
-                || suffix.starts_with("uLL")
-                || suffix.starts_with("ull")
-            {
-                i += 3;
-                has_long = true;
-                has_unsigned = true;
-            } else if suffix.len() >= 2
-                && (suffix[..2].eq_ignore_ascii_case("lu")
-                    || suffix[..2].eq_ignore_ascii_case("ul"))
-            {
-                i += 2;
-                has_long = true;
-                has_unsigned = true;
-            } else if suffix.starts_with("LL") || suffix.starts_with("ll") {
-                i += 2;
-                has_long = true;
-            } else if suffix.starts_with('L') || suffix.starts_with('l') {
-                i += 1;
-                has_long = true;
-            } else if suffix.starts_with('U') || suffix.starts_with('u') {
-                i += 1;
-                has_unsigned = true;
-            }
-
-            // Check if this might be a floating-point literal
-            let next_char = if i < bytes.len() {
-                bytes[i] as char
-            } else {
-                '\0'
-            };
-
-            if matches!(next_char, '.' | 'e' | 'E' | 'f' | 'F' | 'p' | 'P') {
-                // Parse as floating-point
-                let float_str = &input[start..];
-                let mut end_idx = 0;
-                let mut prev_char = '\0';
-                for (idx, c) in float_str.char_indices() {
-                    // Allow '+' or '-' only immediately after 'e', 'E', 'p', or 'P'
-                    if matches!(c, '+' | '-') {
-                        if !matches!(prev_char, 'e' | 'E' | 'p' | 'P') {
-                            break;
-                        }
-                    } else if !matches!(c, '0'..='9' | '.' | 'e' | 'E' | 'f' | 'F' | 'l' | 'L' | 'p' | 'P' | 'x' | 'X' | 'a'..='d' | 'A'..='D')
-                    {
-                        break;
-                    }
-                    end_idx = idx + c.len_utf8();
-                    prev_char = c;
-                }
-                if end_idx == 0 {
-                    end_idx = float_str.len();
-                }
-
-                let float_literal = &float_str[..end_idx];
-                let mut parse_str = float_literal;
-
-                // Check for suffix
-                let ty = if float_literal.ends_with('f') || float_literal.ends_with('F') {
-                    parse_str = &float_literal[..float_literal.len() - 1];
-                    Type::Float
-                } else if float_literal.ends_with('l') || float_literal.ends_with('L') {
-                    parse_str = &float_literal[..float_literal.len() - 1];
-                    Type::Double
-                } else {
-                    Type::Double
-                };
-
-                let fval = if parse_str.starts_with("0x") || parse_str.starts_with("0X") {
-                    parse_hex_float(parse_str).ok_or_else(|| {
-                        CompileError::at(
-                            format!("invalid floating-point literal: {}", parse_str),
-                            location,
-                        )
-                    })?
-                } else {
-                    parse_str.parse::<f64>().map_err(|_| {
-                        CompileError::at(
-                            format!("invalid floating-point literal: {}", parse_str),
-                            location,
-                        )
-                    })?
-                };
-
-                i = start + end_idx;
-                tokens.push(Token {
-                    kind: TokenKind::Num { value: 0, fval, ty },
-                    location,
-                    at_bol,
-                    has_space,
-                    len: i - start,
-                    hideset: HideSet::default(),
-                    origin: None,
-                });
-                at_bol = false;
-                has_space = false;
-                column += i - start;
-                continue;
-            }
-
-            // Check for invalid trailing alphanumeric
-            if i < bytes.len() && bytes[i].is_ascii_alphanumeric() {
-                return Err(CompileError::at(
-                    "invalid digit in number literal".to_string(),
-                    location,
-                ));
-            }
-
-            let ty = if base == 10 {
-                if has_long && has_unsigned {
-                    Type::ULong
-                } else if has_long {
-                    Type::Long
-                } else if has_unsigned {
-                    if (value >> 32) != 0 {
-                        Type::ULong
-                    } else {
-                        Type::UInt
-                    }
-                } else if (value >> 31) != 0 {
-                    Type::Long
-                } else {
-                    Type::Int
-                }
-            } else if has_long && has_unsigned {
-                Type::ULong
-            } else if has_long {
-                if (value >> 63) != 0 {
-                    Type::ULong
-                } else {
-                    Type::Long
-                }
-            } else if has_unsigned {
-                if (value >> 32) != 0 {
-                    Type::ULong
-                } else {
-                    Type::UInt
-                }
-            } else if (value >> 63) != 0 {
-                Type::ULong
-            } else if (value >> 32) != 0 {
-                Type::Long
-            } else if (value >> 31) != 0 {
-                Type::UInt
-            } else {
-                Type::Int
-            };
-
             tokens.push(Token {
-                kind: TokenKind::Num {
-                    value: value as i64,
-                    fval: 0.0,
-                    ty,
+                kind: TokenKind::PPNum,
+                location: SourceLocation {
+                    line,
+                    column,
+                    byte: start,
+                    file_no,
                 },
-                location,
                 at_bol,
                 has_space,
                 len: i - start,
@@ -811,48 +730,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 i += 1;
             }
             let word = &input[start..i];
-            let kind = match word {
-                "void" => TokenKind::Keyword(Keyword::Void),
-                "_Bool" => TokenKind::Keyword(Keyword::Bool),
-                "char" => TokenKind::Keyword(Keyword::Char),
-                "short" => TokenKind::Keyword(Keyword::Short),
-                "int" => TokenKind::Keyword(Keyword::Int),
-                "long" => TokenKind::Keyword(Keyword::Long),
-                "float" => TokenKind::Keyword(Keyword::Float),
-                "double" => TokenKind::Keyword(Keyword::Double),
-                "enum" => TokenKind::Keyword(Keyword::Enum),
-                "struct" => TokenKind::Keyword(Keyword::Struct),
-                "union" => TokenKind::Keyword(Keyword::Union),
-                "typedef" => TokenKind::Keyword(Keyword::Typedef),
-                "static" => TokenKind::Keyword(Keyword::Static),
-                "extern" => TokenKind::Keyword(Keyword::Extern),
-                "return" => TokenKind::Keyword(Keyword::Return),
-                "if" => TokenKind::Keyword(Keyword::If),
-                "else" => TokenKind::Keyword(Keyword::Else),
-                "for" => TokenKind::Keyword(Keyword::For),
-                "while" => TokenKind::Keyword(Keyword::While),
-                "do" => TokenKind::Keyword(Keyword::Do),
-                "sizeof" => TokenKind::Keyword(Keyword::Sizeof),
-                "_Alignof" => TokenKind::Keyword(Keyword::Alignof),
-                "_Alignas" => TokenKind::Keyword(Keyword::Alignas),
-                "goto" => TokenKind::Keyword(Keyword::Goto),
-                "break" => TokenKind::Keyword(Keyword::Break),
-                "continue" => TokenKind::Keyword(Keyword::Continue),
-                "switch" => TokenKind::Keyword(Keyword::Switch),
-                "case" => TokenKind::Keyword(Keyword::Case),
-                "default" => TokenKind::Keyword(Keyword::Default),
-                "signed" => TokenKind::Keyword(Keyword::Signed),
-                "unsigned" => TokenKind::Keyword(Keyword::Unsigned),
-                "const" => TokenKind::Keyword(Keyword::Const),
-                "volatile" => TokenKind::Keyword(Keyword::Volatile),
-                "auto" => TokenKind::Keyword(Keyword::Auto),
-                "register" => TokenKind::Keyword(Keyword::Register),
-                "restrict" => TokenKind::Keyword(Keyword::Restrict),
-                "__restrict" => TokenKind::Keyword(Keyword::Restrict),
-                "__restrict__" => TokenKind::Keyword(Keyword::Restrict),
-                "_Noreturn" => TokenKind::Keyword(Keyword::Noreturn),
-                _ => TokenKind::Ident(word.to_string()),
-            };
+            let kind = TokenKind::Ident(word.to_string());
             tokens.push(Token {
                 kind,
                 location,
@@ -1216,4 +1094,108 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
         _ => return None,
     };
     Some((punct, 1))
+}
+
+fn is_keyword(name: &str) -> bool {
+    matches!(
+        name,
+        "void"
+            | "_Bool"
+            | "char"
+            | "short"
+            | "int"
+            | "long"
+            | "float"
+            | "double"
+            | "enum"
+            | "struct"
+            | "union"
+            | "typedef"
+            | "static"
+            | "extern"
+            | "return"
+            | "if"
+            | "else"
+            | "for"
+            | "while"
+            | "do"
+            | "sizeof"
+            | "_Alignof"
+            | "_Alignas"
+            | "goto"
+            | "break"
+            | "continue"
+            | "switch"
+            | "case"
+            | "default"
+            | "signed"
+            | "unsigned"
+            | "const"
+            | "volatile"
+            | "auto"
+            | "register"
+            | "restrict"
+            | "__restrict"
+            | "__restrict__"
+            | "_Noreturn"
+    )
+}
+
+fn convert_keyword(tok: &mut Token, name: &str) {
+    let keyword = match name {
+        "void" => Keyword::Void,
+        "_Bool" => Keyword::Bool,
+        "char" => Keyword::Char,
+        "short" => Keyword::Short,
+        "int" => Keyword::Int,
+        "long" => Keyword::Long,
+        "float" => Keyword::Float,
+        "double" => Keyword::Double,
+        "enum" => Keyword::Enum,
+        "struct" => Keyword::Struct,
+        "union" => Keyword::Union,
+        "typedef" => Keyword::Typedef,
+        "static" => Keyword::Static,
+        "extern" => Keyword::Extern,
+        "return" => Keyword::Return,
+        "if" => Keyword::If,
+        "else" => Keyword::Else,
+        "for" => Keyword::For,
+        "while" => Keyword::While,
+        "do" => Keyword::Do,
+        "sizeof" => Keyword::Sizeof,
+        "_Alignof" => Keyword::Alignof,
+        "_Alignas" => Keyword::Alignas,
+        "goto" => Keyword::Goto,
+        "break" => Keyword::Break,
+        "continue" => Keyword::Continue,
+        "switch" => Keyword::Switch,
+        "case" => Keyword::Case,
+        "default" => Keyword::Default,
+        "signed" => Keyword::Signed,
+        "unsigned" => Keyword::Unsigned,
+        "const" => Keyword::Const,
+        "volatile" => Keyword::Volatile,
+        "auto" => Keyword::Auto,
+        "register" => Keyword::Register,
+        "restrict" | "__restrict" | "__restrict__" => Keyword::Restrict,
+        "_Noreturn" => Keyword::Noreturn,
+        _ => return,
+    };
+    tok.kind = TokenKind::Keyword(keyword);
+}
+
+/// Convert pp-tokens to proper tokens.
+/// This converts pp-numbers to numbers and identifiers to keywords.
+pub fn convert_pp_tokens(tokens: &mut [Token]) -> CompileResult<()> {
+    for tok in tokens {
+        if let TokenKind::Ident(ref name) = tok.kind.clone() {
+            if is_keyword(name) {
+                convert_keyword(tok, name);
+            }
+        } else if matches!(tok.kind, TokenKind::PPNum) {
+            tok.convert_pp_number()?;
+        }
+    }
+    Ok(())
 }

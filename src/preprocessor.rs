@@ -25,8 +25,8 @@
 use crate::ast::Type;
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{
-    HideSet, Keyword, Punct, Token, TokenKind, get_input_file, tokenize, tokenize_builtin,
-    tokenize_file,
+    HideSet, Keyword, Punct, Token, TokenKind, convert_pp_tokens, get_input_file, tokenize,
+    tokenize_builtin, tokenize_file,
 };
 use crate::parser::const_expr;
 use std::path::{Path, PathBuf};
@@ -581,6 +581,10 @@ impl Preprocessor {
 
         // Expand macros in the expression
         let mut expr_tokens = self.expand_macros_only(expr_tokens)?;
+
+        // Convert pp-numbers to regular numbers
+        convert_pp_tokens(&mut expr_tokens)?;
+
         for tok in &mut expr_tokens {
             if matches!(tok.kind, TokenKind::Ident(_)) {
                 *tok = new_num_token(0, tok);
@@ -641,6 +645,7 @@ fn token_text(tok: &Token) -> String {
         TokenKind::Ident(name) => name.clone(),
         TokenKind::Punct(punct) => punct.to_string(),
         TokenKind::Num { value, .. } => value.to_string(),
+        TokenKind::PPNum => tok.text(),
         TokenKind::Str { bytes, .. } => {
             let inner = String::from_utf8_lossy(bytes)
                 .trim_end_matches('\0')
@@ -1170,7 +1175,8 @@ impl Preprocessor {
 
     fn paste(&self, lhs: &Token, rhs: &Token) -> CompileResult<Token> {
         let buf = format!("{}{}", token_text(lhs), token_text(rhs));
-        let tokens = tokenize(&buf, lhs.location.file_no)?;
+        let mut tokens = tokenize_builtin("<paste>", &buf)?;
+        convert_pp_tokens(&mut tokens)?;
         let mut iter = tokens.into_iter();
         let mut tok = iter
             .next()
@@ -1399,6 +1405,7 @@ pub fn preprocess(tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
     let mut preprocessor = Preprocessor::new(tokens);
     preprocessor.init_macros()?;
     let mut tokens = preprocessor.preprocess_tokens()?;
+    convert_pp_tokens(&mut tokens)?;
     join_adjacent_string_literals(&mut tokens);
     Ok(tokens)
 }

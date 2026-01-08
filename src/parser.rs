@@ -2225,6 +2225,7 @@ impl<'a> Parser<'a> {
             TokenKind::Keyword(kw) => format!("keyword '{kw:?}'"),
             TokenKind::Ident(name) => format!("identifier '{name}'"),
             TokenKind::Num { value, .. } => format!("number {value}"),
+            TokenKind::PPNum => unreachable!("PPNum should be converted during preprocessing"),
             TokenKind::Str { .. } => "string literal".to_string(),
             TokenKind::Punct(punct) => format!("'{punct}'"),
             TokenKind::Eof => "end of file".to_string(),

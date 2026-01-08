@@ -213,6 +213,7 @@ fn token_lexeme(token: &Token) -> String {
         TokenKind::Punct(punct) => punct.to_string(),
         TokenKind::Keyword(_) => "<keyword>".to_string(),
         TokenKind::Num { .. } => "<number>".to_string(),
+        TokenKind::PPNum => "<pp-number>".to_string(),
         TokenKind::Str { .. } => "<string>".to_string(),
         TokenKind::Eof => String::new(),
     }
