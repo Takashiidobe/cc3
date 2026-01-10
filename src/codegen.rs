@@ -273,8 +273,14 @@ impl Codegen {
             self.gen_stmt(stmt, function, globals);
         }
 
+        // The C spec defines a special rule for the main function. Reaching the end
+        // of the main function is equivalent to returning 0, even though the
+        // behavior is undefined for other functions.
+        // https://www.sigbus.info/n1570#5.1.2.2.3p1
         if !last_was_return {
-            self.emit_line("  mov $0, %rax");
+            if function.name == "main" {
+                self.emit_line("  mov $0, %rax");
+            }
             self.emit_epilogue();
             self.emit_line("  ret");
         }
