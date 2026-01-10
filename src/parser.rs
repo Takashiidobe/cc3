@@ -1045,7 +1045,11 @@ impl<'a> Parser<'a> {
             // Assign offsets within the struct to members
             let mut bits = 0i32;
             for member in members.iter_mut() {
-                if member.is_bitfield {
+                if member.is_bitfield && member.bit_width == 0 {
+                    // Zero-width anonymous bitfield has a special meaning.
+                    // It affects only alignment.
+                    bits = align_to(bits, bytes_to_bits(member.ty.size() as i32));
+                } else if member.is_bitfield {
                     let sz = member.ty.size() as i32;
                     // Check if the bitfield fits in the current storage unit
                     if crosses_storage_unit(bits, member.bit_width, sz) {
@@ -1098,10 +1102,7 @@ impl<'a> Parser<'a> {
                 }
                 first = false;
                 let (ty, name_token) = self.parse_declarator(basety.clone())?;
-                let name = match name_token.kind {
-                    TokenKind::Ident(name) => name,
-                    _ => self.bail_at(name_token.location, "member name expected")?,
-                };
+
                 let align = if attr.align != 0 {
                     attr.align
                 } else {
@@ -1113,6 +1114,13 @@ impl<'a> Parser<'a> {
                     (true, width as i32)
                 } else {
                     (false, 0)
+                };
+
+                // Extract member name, allowing anonymous bitfields
+                let name = match name_token.kind {
+                    TokenKind::Ident(name) => name,
+                    _ if is_bitfield => String::new(), // Anonymous bitfield
+                    _ => self.bail_at(name_token.location, "member name expected")?,
                 };
 
                 members.push(Member {

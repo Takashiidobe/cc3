@@ -34,6 +34,10 @@ int main() {
   ASSERT(0, g46.b);
   ASSERT(0, g46.c);
 
+  ASSERT(4, sizeof(struct {int a:3; int b:1; int c:5;}));
+  ASSERT(8, sizeof(struct {int a:3; int:0; int c:5;}));
+  ASSERT(4, sizeof(struct {int a:3; int:0;}));
+
   printf("OK\n");
   return 0;
 }
