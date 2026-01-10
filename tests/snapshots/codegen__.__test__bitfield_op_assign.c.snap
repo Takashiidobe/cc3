@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "({ T3 x={1,2,3}; x.a++; }) => 1\n({ T3 x={1,2,3}; x.b++; }) => 2\n({ T3 x={1,2,3}; x.c++; }) => 3\n({ T3 x={1,2,3}; ++x.a; }) => 2\n({ T3 x={1,2,3}; ++x.b; }) => 3\n({ T3 x={1,2,3}; ++x.c; }) => 4\nOK\n"
+status: 0

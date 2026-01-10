@@ -1316,7 +1316,11 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    // Convert `A op= B` to `tmp = &A, *tmp = *tmp op B`
+    // Convert op= operators to expressions containing an assignment.
+    //
+    // In general, `A op= B` is converted to `tmp = &A, *tmp = *tmp op B`.
+    // If the lhs is a member access, convert `A.x op= B` to
+    // `tmp = &A, (*tmp).x = (*tmp).x op B` to avoid taking the address of a bitfield.
     #[allow(clippy::wrong_self_convention)]
     fn to_assign(
         &mut self,
@@ -1327,6 +1331,83 @@ impl<'a> Parser<'a> {
     ) -> CompileResult<Expr> {
         self.add_type_expr(&mut lhs)?;
         self.add_type_expr(&mut rhs)?;
+
+        if let ExprKind::Member {
+            lhs: member_lhs,
+            member,
+        } = &lhs.kind
+        {
+            let base = member_lhs.as_ref().clone();
+            let base_ty = base
+                .ty
+                .clone()
+                .ok_or_else(|| self.err_at(location, "lhs has no type"))?;
+            let ptr_ty = Type::Ptr(Box::new(base_ty.clone()));
+
+            let var_idx = self.new_lvar(String::new(), ptr_ty.clone());
+            let mut tmp_var = self.expr_at(
+                ExprKind::Var {
+                    idx: var_idx,
+                    is_local: true,
+                },
+                location,
+            );
+            tmp_var.ty = Some(ptr_ty);
+
+            let expr1 = self.expr_at(
+                ExprKind::Assign {
+                    lhs: Box::new(tmp_var.clone()),
+                    rhs: Box::new(self.expr_at(ExprKind::Addr(Box::new(base)), location)),
+                },
+                location,
+            );
+
+            let mut deref_tmp = self.expr_at(ExprKind::Deref(Box::new(tmp_var.clone())), location);
+            deref_tmp.ty = Some(base_ty);
+            let member_lhs_expr = self.expr_at(
+                ExprKind::Member {
+                    lhs: Box::new(deref_tmp.clone()),
+                    member: member.clone(),
+                },
+                location,
+            );
+            let member_rhs_expr = self.expr_at(
+                ExprKind::Member {
+                    lhs: Box::new(deref_tmp),
+                    member: member.clone(),
+                },
+                location,
+            );
+
+            let bin_expr = match op {
+                BinaryOp::Add => self.new_add(member_rhs_expr, rhs, location)?,
+                BinaryOp::Sub => self.new_sub(member_rhs_expr, rhs, location)?,
+                _ => self.expr_at(
+                    ExprKind::Binary {
+                        op,
+                        lhs: Box::new(member_rhs_expr),
+                        rhs: Box::new(rhs),
+                    },
+                    location,
+                ),
+            };
+
+            let expr2 = self.expr_at(
+                ExprKind::Assign {
+                    lhs: Box::new(member_lhs_expr),
+                    rhs: Box::new(bin_expr),
+                },
+                location,
+            );
+
+            return Ok(self.expr_at(
+                ExprKind::Comma {
+                    lhs: Box::new(expr1),
+                    rhs: Box::new(expr2),
+                },
+                location,
+            ));
+        }
 
         let lhs_ty = lhs
             .ty

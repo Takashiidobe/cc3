@@ -911,10 +911,14 @@ impl Codegen {
                 self.push();
                 self.gen_expr(rhs, function, globals);
 
+                let mut restore_rax = false;
                 // Handle bitfield assignment
                 if let ExprKind::Member { member, .. } = &lhs.kind
                     && member.is_bitfield
                 {
+                    self.emit_line("  mov %rax, %r8");
+                    restore_rax = true;
+
                     // Mask and position the new value
                     self.emit_line("  mov %rax, %rdi");
                     let mask = (1i64 << member.bit_width) - 1;
@@ -933,6 +937,9 @@ impl Codegen {
                 }
 
                 self.store(expr.ty.as_ref());
+                if restore_rax {
+                    self.emit_line("  mov %r8, %rax");
+                }
             }
             ExprKind::Cond { cond, then, els } => {
                 let label = self.next_label();
