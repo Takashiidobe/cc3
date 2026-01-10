@@ -112,12 +112,33 @@ fn main() {
 
 fn preprocess_args(args: &[String]) -> Vec<String> {
     args.iter()
-        .map(|arg| match arg.as_str() {
-            "-cc1" => "--cc1".to_string(),
-            "-cc1-input" => "--cc1-input".to_string(),
-            "-cc1-output" => "--cc1-output".to_string(),
-            "-###" => "--hash-hash-hash".to_string(),
-            _ => arg.clone(),
+        .filter_map(|arg| {
+            let arg_str = arg.as_str();
+
+            // These options are ignored for now
+            if arg_str.starts_with("-O")
+                || arg_str.starts_with("-W")
+                || arg_str.starts_with("-g")
+                || arg_str.starts_with("-std=")
+                || arg_str == "-ffreestanding"
+                || arg_str == "-fno-builtin"
+                || arg_str == "-fno-omit-frame-pointer"
+                || arg_str == "-fno-stack-protector"
+                || arg_str == "-fno-strict-aliasing"
+                || arg_str == "-m64"
+                || arg_str == "-mno-red-zone"
+                || arg_str == "-w"
+            {
+                return None;
+            }
+
+            Some(match arg_str {
+                "-cc1" => "--cc1".to_string(),
+                "-cc1-input" => "--cc1-input".to_string(),
+                "-cc1-output" => "--cc1-output".to_string(),
+                "-###" => "--hash-hash-hash".to_string(),
+                _ => arg.clone(),
+            })
         })
         .collect()
 }

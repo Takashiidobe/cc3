@@ -135,3 +135,38 @@ fn undef_option() {
     assert!(stdout.contains("foo"), "stdout: {stdout}");
     assert!(!stdout.contains("bar"), "stdout: {stdout}");
 }
+
+#[test]
+fn ignored_options() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("empty.c");
+    fs::write(&input_path, "int main() { return 0; }\n").expect("write input");
+    let output_path = dir.path().join("out.o");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-c")
+        .arg("-O")
+        .arg("-Wall")
+        .arg("-g")
+        .arg("-std=c11")
+        .arg("-ffreestanding")
+        .arg("-fno-builtin")
+        .arg("-fno-omit-frame-pointer")
+        .arg("-fno-stack-protector")
+        .arg("-fno-strict-aliasing")
+        .arg("-m64")
+        .arg("-mno-red-zone")
+        .arg("-w")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&input_path)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output_path.exists(), "output file should exist");
+}
