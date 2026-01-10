@@ -1094,6 +1094,31 @@ impl<'a> Parser<'a> {
         while !self.check_punct(Punct::RBrace) {
             let mut attr = VarAttr::default();
             let basety = self.parse_declspec(Some(&mut attr))?;
+
+            // Anonymous struct/union member
+            if matches!(basety, Type::Struct { .. } | Type::Union { .. })
+                && self.consume_punct(Punct::Semicolon)
+            {
+                let align = if attr.align != 0 {
+                    attr.align
+                } else {
+                    basety.align() as i32
+                };
+                members.push(Member {
+                    name: String::new(), // Anonymous - no name
+                    ty: basety,
+                    location: self.last_location(),
+                    idx,
+                    align,
+                    offset: 0,
+                    is_bitfield: false,
+                    bit_offset: 0,
+                    bit_width: 0,
+                });
+                idx += 1;
+                continue;
+            }
+
             let mut first = true;
 
             while !self.check_punct(Punct::Semicolon) {
@@ -1924,6 +1949,31 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    /// Find a struct member by name, recursively searching anonymous struct/union members.
+    /// Returns Some(member) if found, None otherwise.
+    fn get_struct_member(members: &[Member], name: &str) -> Option<Member> {
+        for member in members {
+            // Check if this is the member we're looking for
+            if member.name == name {
+                return Some(member.clone());
+            }
+
+            // Recursively search anonymous struct/union members
+            if member.name.is_empty()
+                && matches!(member.ty, Type::Struct { .. } | Type::Union { .. })
+            {
+                let inner_members = match &member.ty {
+                    Type::Struct { members, .. } | Type::Union { members, .. } => members,
+                    _ => continue,
+                };
+                if Self::get_struct_member(inner_members, name).is_some() {
+                    return Some(member.clone());
+                }
+            }
+        }
+        None
+    }
+
     fn struct_ref(&self, mut lhs: Expr, name_token: Token) -> CompileResult<Expr> {
         self.add_type_expr(&mut lhs)?;
         let members = match lhs.ty.clone().unwrap_or(Type::Int) {
@@ -1949,18 +1999,38 @@ impl<'a> Parser<'a> {
             TokenKind::Ident(name) => name,
             _ => self.bail_at(name_token.location, "member name expected")?,
         };
-        let member = members
-            .iter()
-            .find(|member| member.name == name)
-            .cloned()
-            .ok_or_else(|| self.err_at(name_token.location, "no such member"))?;
-        Ok(self.expr_at(
-            ExprKind::Member {
-                lhs: Box::new(lhs),
-                member,
-            },
-            name_token.location,
-        ))
+
+        // Create a chain of member accesses for anonymous struct/union members.
+        // For example, if we have: struct { struct { int a; }; } x;
+        // And we access x.a, we need to create: x.<anonymous>. a
+        let mut node = lhs;
+        let mut current_members = members;
+
+        loop {
+            let member = Self::get_struct_member(&current_members, &name)
+                .ok_or_else(|| self.err_at(name_token.location, "no such member"))?;
+
+            node = self.expr_at(
+                ExprKind::Member {
+                    lhs: Box::new(node),
+                    member: member.clone(),
+                },
+                name_token.location,
+            );
+
+            // If this member has a name, we're done (we found the target member)
+            if !member.name.is_empty() {
+                break;
+            }
+
+            // Otherwise, this is an anonymous member, continue searching within it
+            current_members = match &member.ty {
+                Type::Struct { members, .. } | Type::Union { members, .. } => members.clone(),
+                _ => break,
+            };
+        }
+
+        Ok(node)
     }
 
     fn parse_primary(&mut self) -> CompileResult<Expr> {
