@@ -4162,8 +4162,19 @@ fn assign_lvar_offsets(locals: &mut [Obj], param_indices: &[usize]) -> i32 {
         if var.offset != 0 {
             continue;
         }
+
+        // AMD64 System V ABI has a special alignment rule for an array of
+        // length at least 16 bytes. We need to align such array to at least
+        // 16-byte boundaries. See p.14 of
+        // https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-draft.pdf.
+        let align = if matches!(var.ty, Type::Array { .. }) && var.ty.size() >= 16 {
+            var.align.max(16)
+        } else {
+            var.align
+        };
+
         bottom += var.ty.size() as i32;
-        bottom = align_to(bottom, var.align);
+        bottom = align_to(bottom, align);
         var.offset = -bottom;
     }
 

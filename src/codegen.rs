@@ -89,7 +89,17 @@ impl Codegen {
                 } else {
                     self.emit_line(&format!("  .globl {}", obj.name));
                 }
-                self.emit_line(&format!("  .align {}", obj.align));
+
+                // AMD64 System V ABI has a special alignment rule for an array of
+                // length at least 16 bytes. We need to align such array to at least
+                // 16-byte boundaries. See p.14 of
+                // https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-draft.pdf.
+                let align = if matches!(obj.ty, Type::Array { .. }) && obj.ty.size() >= 16 {
+                    obj.align.max(16)
+                } else {
+                    obj.align
+                };
+                self.emit_line(&format!("  .align {}", align));
             }
 
             if let Some(init_data) = &obj.init_data {
