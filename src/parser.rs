@@ -1709,7 +1709,13 @@ impl<'a> Parser<'a> {
 
         if self.consume_punct(Punct::Amp) {
             let location = self.last_location();
-            let expr = self.parse_cast()?;
+            let mut expr = self.parse_cast()?;
+            self.add_type_expr(&mut expr)?;
+            if let ExprKind::Member { member, .. } = &expr.kind
+                && member.is_bitfield
+            {
+                self.bail_at(location, "cannot take address of bitfield")?;
+            }
             return Ok(self.expr_at(ExprKind::Addr(Box::new(expr)), location));
         }
 
