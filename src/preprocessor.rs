@@ -29,6 +29,7 @@ use crate::lexer::{
     tokenize_builtin, tokenize_file,
 };
 use crate::parser::const_expr;
+use chrono::{Datelike, Local, Timelike};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -1368,6 +1369,29 @@ impl Preprocessor {
         });
     }
 
+    /// __DATE__ is expanded to the current date, e.g. "Jan  1 2026".
+    /// The format is always "Mmm DD YYYY" (11 characters).
+    fn format_date() -> String {
+        let now = Local::now();
+        let month_names = [
+            "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+        ];
+        let month = month_names[now.month0() as usize];
+        format!("\"{} {:2} {}\"", month, now.day(), now.year())
+    }
+
+    /// __TIME__ is expanded to the current time, e.g. "12:34:56".
+    /// The format is always "HH:MM:SS" (8 characters).
+    fn format_time() -> String {
+        let now = Local::now();
+        format!(
+            "\"{:02}:{:02}:{:02}\"",
+            now.hour(),
+            now.minute(),
+            now.second()
+        )
+    }
+
     fn init_macros(&mut self) -> CompileResult<()> {
         self.define_macro("_LP64", "1")?;
         self.define_macro("__C99_MACRO_WITH_VA_ARGS", "1")?;
@@ -1412,6 +1436,8 @@ impl Preprocessor {
         self.define_macro("unix", "1")?;
         self.add_builtin("__FILE__", file_macro);
         self.add_builtin("__LINE__", line_macro);
+        self.define_macro("__DATE__", &Self::format_date())?;
+        self.define_macro("__TIME__", &Self::format_time())?;
 
         // Apply command-line defined macros
         let cmdline_defines = self.cmdline_defines.clone();
