@@ -363,3 +363,54 @@ fn fno_common_flag() {
     assert!(asm.contains("foo:"), "asm: {asm}");
     assert!(!asm.contains(".comm foo"), "asm: {asm}");
 }
+
+#[test]
+fn include_option() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let header_path = dir.path().join("out.h");
+    fs::write(&header_path, "foo\n").expect("write header");
+
+    let input_path = dir.path().join("input.c");
+    fs::write(&input_path, "bar\n").expect("write input");
+
+    // Test 1: -include should include the file before main input
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg(format!("--include={}", header_path.display()))
+        .arg("-E")
+        .arg(&input_path)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("foo"), "stdout: {stdout}");
+    assert!(stdout.contains("bar"), "stdout: {stdout}");
+    // foo should appear before bar
+    let foo_pos = stdout.find("foo").expect("find foo");
+    let bar_pos = stdout.find("bar").expect("find bar");
+    assert!(foo_pos < bar_pos, "foo should appear before bar");
+
+    // Test 2: -include with standard header
+    let input_path2 = dir.path().join("input2.c");
+    fs::write(&input_path2, "NULL\n").expect("write input2");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-Iinclude")
+        .arg("--include=stdio.h")
+        .arg("-E")
+        .arg(&input_path2)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("0"), "stdout: {stdout}");
+}

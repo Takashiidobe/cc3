@@ -766,7 +766,7 @@ fn origin_location(tok: &Token) -> SourceLocation {
     tok.origin.unwrap_or(tok.location)
 }
 
-fn search_include_paths(filename: &str) -> Option<PathBuf> {
+pub fn search_include_paths(filename: &str) -> Option<PathBuf> {
     if Path::new(filename).is_absolute() {
         return Some(PathBuf::from(filename));
     }

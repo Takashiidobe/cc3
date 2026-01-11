@@ -48,6 +48,9 @@ struct Args {
     /// Add include search path (searched after -I paths).
     #[arg(long = "idirafter", value_name = "DIR")]
     idirafter_dirs: Vec<PathBuf>,
+    /// Include file before processing main input.
+    #[arg(long = "include", value_name = "FILE")]
+    include_files: Vec<PathBuf>,
     /// Define macro.
     #[arg(short = 'D', value_name = "MACRO[=VAL]")]
     defines: Vec<String>,
@@ -114,6 +117,7 @@ fn main() {
             args.preprocess_only,
             cmdline_defines,
             cmdline_undefs,
+            args.include_files.clone(),
         ) {
             eprintln!("{}", format_diagnostic(&err, input.as_path()));
             std::process::exit(1);
@@ -191,6 +195,7 @@ fn run_cc1_subprocess(
     preprocess_only: bool,
     include_dirs: &[PathBuf],
     idirafter_dirs: &[PathBuf],
+    include_files: &[PathBuf],
     defines: &[String],
     undefs: &[String],
     fcommon: bool,
@@ -216,6 +221,9 @@ fn run_cc1_subprocess(
     for dir in idirafter_dirs {
         argv.push(format!("--idirafter={}", dir.display()));
     }
+    for file in include_files {
+        argv.push(format!("--include={}", file.display()));
+    }
     for def in defines {
         argv.push(format!("-D{}", def));
     }
@@ -236,8 +244,36 @@ fn run_cc1(
     preprocess_only: bool,
     cmdline_defines: Vec<(String, String)>,
     cmdline_undefs: Vec<String>,
+    include_files: Vec<PathBuf>,
 ) -> CompileResult<()> {
-    let tokens = lexer::tokenize_file(input)?;
+    // Process -include files first
+    let mut tokens = Vec::new();
+    for include_file in &include_files {
+        let path = if include_file.exists() {
+            include_file.clone()
+        } else {
+            preprocessor::search_include_paths(include_file.to_str().unwrap()).ok_or_else(|| {
+                CompileError::new(format!(
+                    "-include: {}: {}",
+                    include_file.display(),
+                    io::Error::from(io::ErrorKind::NotFound)
+                ))
+            })?
+        };
+        let mut include_tokens = lexer::tokenize_file(&path)?;
+        // Remove EOF from include tokens to allow appending
+        if let Some(last) = include_tokens.last()
+            && matches!(last.kind, TokenKind::Eof)
+        {
+            include_tokens.pop();
+        }
+        tokens.extend(include_tokens);
+    }
+
+    // Then process main input file
+    let mut main_tokens = lexer::tokenize_file(input)?;
+    tokens.append(&mut main_tokens);
+
     let tokens = preprocessor::preprocess(tokens, cmdline_defines, cmdline_undefs)?;
     if preprocess_only {
         print_tokens(&tokens, output)?;
@@ -352,6 +388,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 true,
                 &args.include_dirs,
                 &args.idirafter_dirs,
+                &args.include_files,
                 &args.defines,
                 &args.undefs,
                 args.fcommon,
@@ -389,6 +426,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 false,
                 &args.include_dirs,
                 &args.idirafter_dirs,
+                &args.include_files,
                 &args.defines,
                 &args.undefs,
                 args.fcommon,
@@ -406,6 +444,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 false,
                 &args.include_dirs,
                 &args.idirafter_dirs,
+                &args.include_files,
                 &args.defines,
                 &args.undefs,
                 args.fcommon,
@@ -425,6 +464,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             false,
             &args.include_dirs,
             &args.idirafter_dirs,
+            &args.include_files,
             &args.defines,
             &args.undefs,
             args.fcommon,
