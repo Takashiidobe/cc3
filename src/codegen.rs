@@ -1415,6 +1415,41 @@ impl Codegen {
                 // Return result (0 or 1) in %rax
                 self.emit_line("  movzbl %cl, %eax");
             }
+            ExprKind::Exch { addr, val } => {
+                // Generate: __builtin_atomic_exchange(addr, val)
+                // This atomically swaps *addr with val and returns the old value
+
+                // Evaluate addr and push
+                self.gen_expr(addr, function, globals);
+                self.push();
+
+                // Evaluate val into rax
+                self.gen_expr(val, function, globals);
+
+                // Pop addr into rdi
+                self.pop("%rdi");
+
+                // Get the size of the value being exchanged
+                let sz = if let Some(Type::Ptr(base)) = &addr.ty {
+                    base.size()
+                } else {
+                    8
+                };
+
+                // Use the appropriate register size for rax
+                let reg_ax = match sz {
+                    1 => "%al",
+                    2 => "%ax",
+                    4 => "%eax",
+                    _ => "%rax",
+                };
+
+                // Atomic exchange using xchg
+                // xchg automatically has lock semantics (no lock prefix needed)
+                self.emit_line(&format!("  xchg {}, (%rdi)", reg_ax));
+
+                // Result (old value) is now in %rax
+            }
         }
     }
 

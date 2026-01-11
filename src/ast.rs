@@ -166,6 +166,11 @@ pub enum ExprKind {
         old: Box<Expr>,
         new: Box<Expr>,
     },
+    /// Atomic exchange
+    Exch {
+        addr: Box<Expr>,
+        val: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -2616,6 +2616,16 @@ impl<'a> Parser<'a> {
                 self.expect_punct(Punct::RParen)?;
                 Ok(self.expr_at(ExprKind::Cas { addr, old, new }, location))
             }
+            TokenKind::Ident(ref name) if name == "__builtin_atomic_exchange" => {
+                let location = token.location;
+                self.pos += 1;
+                self.expect_punct(Punct::LParen)?;
+                let addr = Box::new(self.parse_assign()?);
+                self.expect_punct(Punct::Comma)?;
+                let val = Box::new(self.parse_assign()?);
+                self.expect_punct(Punct::RParen)?;
+                Ok(self.expr_at(ExprKind::Exch { addr, val }, location))
+            }
             TokenKind::Ident(ref name) => {
                 let name = name.clone();
                 let expr = if let Some(scope) = self.find_var_scope(&name) {
@@ -4873,6 +4883,18 @@ impl<'a> Parser<'a> {
                 }
 
                 Type::Bool
+            }
+            ExprKind::Exch { addr, val } => {
+                self.add_type_expr(addr)?;
+                self.add_type_expr(val)?;
+
+                // Check that addr is a pointer
+                let base_ty = match &addr.ty {
+                    Some(Type::Ptr(base)) => base.as_ref().clone(),
+                    _ => self.bail_at(addr.location, "pointer expected")?,
+                };
+
+                base_ty
             }
         };
 
