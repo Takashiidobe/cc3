@@ -423,6 +423,7 @@ pub enum Keyword {
     Register,
     Restrict,
     Noreturn,
+    Typeof,
 }
 
 impl std::fmt::Display for Keyword {
@@ -465,6 +466,7 @@ impl std::fmt::Display for Keyword {
             Keyword::Register => "register",
             Keyword::Restrict => "restrict",
             Keyword::Noreturn => "_Noreturn",
+            Keyword::Typeof => "typeof",
         };
         f.write_str(text)
     }
@@ -1842,6 +1844,7 @@ fn is_keyword(name: &str) -> bool {
             | "__restrict"
             | "__restrict__"
             | "_Noreturn"
+            | "typeof"
     )
 }
 
@@ -1884,6 +1887,7 @@ fn convert_keyword(tok: &mut Token, name: &str) {
         "register" => Keyword::Register,
         "restrict" | "__restrict" | "__restrict__" => Keyword::Restrict,
         "_Noreturn" => Keyword::Noreturn,
+        "typeof" => Keyword::Typeof,
         _ => return,
     };
     tok.kind = TokenKind::Keyword(keyword);

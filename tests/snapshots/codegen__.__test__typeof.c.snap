@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "({ typeof(int) x=3; x; }) => 3\n({ typeof(1) x=3; x; }) => 3\n({ int x; typeof(x) y; sizeof(y); }) => 4\n({ int x; typeof(&x) y; sizeof(y); }) => 8\n({ typeof(\"foo\") x; sizeof(x); }) => 4\nsizeof(typeof(struct { int a,b,c; })) => 12\nOK\n"
+status: 0

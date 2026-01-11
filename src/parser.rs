@@ -240,7 +240,8 @@ impl<'a> Parser<'a> {
                 token.kind,
                 TokenKind::Keyword(Keyword::Struct | Keyword::Union | Keyword::Enum)
             );
-            if is_struct_union_enum || typedef_ty.is_some() {
+            let is_typeof = matches!(token.kind, TokenKind::Keyword(Keyword::Typeof));
+            if is_struct_union_enum || is_typeof || typedef_ty.is_some() {
                 if counter != 0 {
                     break;
                 }
@@ -251,6 +252,8 @@ impl<'a> Parser<'a> {
                     ty = self.parse_union_decl()?;
                 } else if self.consume_keyword(Keyword::Enum) {
                     ty = self.parse_enum_specifier()?;
+                } else if self.consume_keyword(Keyword::Typeof) {
+                    ty = self.parse_typeof_specifier()?;
                 } else if let Some(ty2) = typedef_ty {
                     self.pos += 1;
                     ty = ty2;
@@ -340,7 +343,8 @@ impl<'a> Parser<'a> {
                 | Keyword::Auto
                 | Keyword::Register
                 | Keyword::Restrict
-                | Keyword::Noreturn,
+                | Keyword::Noreturn
+                | Keyword::Typeof,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
@@ -965,6 +969,21 @@ impl<'a> Parser<'a> {
         }
 
         Ok(Type::Enum)
+    }
+
+    fn parse_typeof_specifier(&mut self) -> CompileResult<Type> {
+        self.expect_punct(Punct::LParen)?;
+        let ty = if self.is_typename() {
+            self.parse_typename()?
+        } else {
+            let mut expr = self.parse_expr()?;
+            self.add_type_expr(&mut expr)?;
+            expr.ty
+                .clone()
+                .ok_or_else(|| self.err_at(expr.location, "invalid typeof expression"))?
+        };
+        self.expect_punct(Punct::RParen)?;
+        Ok(ty)
     }
 
     fn parse_struct_union_decl(&mut self, kind: RecordKind) -> CompileResult<Type> {
