@@ -30,6 +30,7 @@ use crate::lexer::{
 };
 use crate::parser::const_expr;
 use chrono::{Datelike, Local, Timelike};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -55,7 +56,6 @@ struct Macro {
     params: Vec<MacroParam>,
     va_args_name: Option<String>,
     body: Vec<Token>,
-    deleted: bool,
     handler: Option<MacroHandler>,
 }
 
@@ -75,7 +75,7 @@ struct CondIncl {
 
 struct Preprocessor {
     tokens: Vec<Token>,
-    macros: Vec<Macro>,
+    macros: HashMap<String, Macro>,
     pos: usize, // Current position in token stream
     cmdline_defines: Vec<(String, String)>,
     cmdline_undefs: Vec<String>,
@@ -108,7 +108,7 @@ impl Preprocessor {
     ) -> Self {
         Self {
             tokens,
-            macros: Vec::new(),
+            macros: HashMap::new(),
             pos: 0,
             cmdline_defines,
             cmdline_undefs,
@@ -128,13 +128,7 @@ impl Preprocessor {
     }
 
     fn find_macro_name(&self, name: &str) -> Option<&Macro> {
-        for m in self.macros.iter().rev() {
-            if m.name != name {
-                continue;
-            }
-            return if m.deleted { None } else { Some(m) };
-        }
-        None
+        self.macros.get(name)
     }
 
     fn find_macro(&self, tok: &Token) -> Option<&Macro> {
@@ -220,25 +214,31 @@ impl Preprocessor {
             let mut va_args_name = None;
             let params = self.read_macro_params(&mut va_args_name);
             let body = self.copy_line();
-            self.macros.push(Macro {
-                name: macro_name,
-                is_objlike: false,
-                params,
-                va_args_name,
-                body,
-                ..Macro::default()
-            });
+            self.macros.insert(
+                macro_name.clone(),
+                Macro {
+                    name: macro_name,
+                    is_objlike: false,
+                    params,
+                    va_args_name,
+                    body,
+                    ..Macro::default()
+                },
+            );
             return;
         }
 
         // Object-like macro
         let body = self.copy_line();
-        self.macros.push(Macro {
-            name: macro_name,
-            is_objlike: true,
-            body,
-            ..Macro::default()
-        });
+        self.macros.insert(
+            macro_name.clone(),
+            Macro {
+                name: macro_name,
+                is_objlike: true,
+                body,
+                ..Macro::default()
+            },
+        );
     }
 
     fn read_macro_arg_one(&mut self, read_rest: bool) -> Vec<Token> {
@@ -1662,31 +1662,32 @@ impl Preprocessor {
 
     fn define_macro(&mut self, name: &str, body: &str) -> CompileResult<()> {
         let tokens = tokenize_builtin("<built-in>", body)?;
-        self.macros.push(Macro {
-            name: name.to_string(),
-            is_objlike: true,
-            body: tokens,
-            ..Macro::default()
-        });
+        self.macros.insert(
+            name.to_string(),
+            Macro {
+                name: name.to_string(),
+                is_objlike: true,
+                body: tokens,
+                ..Macro::default()
+            },
+        );
         Ok(())
     }
 
     fn undef_macro_internal(&mut self, name: &str) {
-        self.macros.push(Macro {
-            name: name.to_string(),
-            is_objlike: true,
-            deleted: true,
-            ..Macro::default()
-        });
+        self.macros.remove(name);
     }
 
     fn add_builtin(&mut self, name: &str, handler: MacroHandler) {
-        self.macros.push(Macro {
-            name: name.to_string(),
-            is_objlike: true,
-            handler: Some(handler),
-            ..Macro::default()
-        });
+        self.macros.insert(
+            name.to_string(),
+            Macro {
+                name: name.to_string(),
+                is_objlike: true,
+                handler: Some(handler),
+                ..Macro::default()
+            },
+        );
     }
 
     /// __DATE__ is expanded to the current date, e.g. "Jan  1 2026".
