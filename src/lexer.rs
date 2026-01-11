@@ -137,11 +137,97 @@ fn canonicalize_newline(input: &str) -> String {
     String::from_utf8(out).expect("newline canonicalization")
 }
 
+fn read_universal_char(bytes: &[u8]) -> Option<u32> {
+    let mut c = 0u32;
+    for &b in bytes {
+        if !is_hex_digit(b) {
+            return None;
+        }
+        c = (c << 4) | from_hex(b);
+    }
+    Some(c)
+}
+
+fn encode_utf8(out: &mut Vec<u8>, c: u32) -> usize {
+    if c <= 0x7F {
+        out.push(c as u8);
+        return 1;
+    }
+
+    if c <= 0x7FF {
+        out.push((0b1100_0000 | (c >> 6)) as u8);
+        out.push((0b1000_0000 | (c & 0b0011_1111)) as u8);
+        return 2;
+    }
+
+    if c <= 0xFFFF {
+        out.push((0b1110_0000 | (c >> 12)) as u8);
+        out.push((0b1000_0000 | ((c >> 6) & 0b0011_1111)) as u8);
+        out.push((0b1000_0000 | (c & 0b0011_1111)) as u8);
+        return 3;
+    }
+
+    out.push((0b1111_0000 | (c >> 18)) as u8);
+    out.push((0b1000_0000 | ((c >> 12) & 0b0011_1111)) as u8);
+    out.push((0b1000_0000 | ((c >> 6) & 0b0011_1111)) as u8);
+    out.push((0b1000_0000 | (c & 0b0011_1111)) as u8);
+    4
+}
+
+fn convert_universal_chars(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'\\' && i + 1 < bytes.len() {
+            if bytes[i + 1] == b'u' {
+                if i + 6 <= bytes.len()
+                    && let Some(c) = read_universal_char(&bytes[i + 2..i + 6])
+                    && c != 0
+                {
+                    i += 6;
+                    encode_utf8(&mut out, c);
+                    continue;
+                }
+                out.push(bytes[i]);
+                i += 1;
+                continue;
+            }
+
+            if bytes[i + 1] == b'U' {
+                if i + 10 <= bytes.len()
+                    && let Some(c) = read_universal_char(&bytes[i + 2..i + 10])
+                    && c != 0
+                {
+                    i += 10;
+                    encode_utf8(&mut out, c);
+                    continue;
+                }
+                out.push(bytes[i]);
+                i += 1;
+                continue;
+            }
+
+            out.push(bytes[i]);
+            out.push(bytes[i + 1]);
+            i += 2;
+            continue;
+        }
+
+        out.push(bytes[i]);
+        i += 1;
+    }
+
+    String::from_utf8(out).expect("universal character conversion")
+}
+
 pub fn tokenize_file(path: &Path) -> CompileResult<Vec<Token>> {
     let contents = fs::read_to_string(path)
         .map_err(|err| CompileError::new(format!("failed to read {}: {err}", path.display())))?;
     let contents = canonicalize_newline(&contents);
     let contents = remove_backslash_newline(&contents);
+    let contents = convert_universal_chars(&contents);
     let file = register_file(path.to_path_buf(), contents);
     tokenize(&file.contents, file.file_no)
 }

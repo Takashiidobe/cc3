@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "sizeof(L'\\0') => 4\nL'a' => 97\nstrcmp(\"αβγ\", \"αβγ\") => 0\nstrcmp(\"日本語\", \"日本語\") => 0\nstrcmp(\"日本語\", \"日本語\") => 0\nstrcmp(\"🌮\", \"🌮\") => 0\nOK\n"
+status: 0
