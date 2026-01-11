@@ -894,6 +894,35 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
             continue;
         }
 
+        if b == b'U' && i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+            let start = i;
+            let location = SourceLocation {
+                line,
+                column,
+                byte: start,
+                file_no,
+            };
+            let (value, end) = read_char_literal(bytes, start, start + 1, location)?;
+            tokens.push(Token {
+                kind: TokenKind::Num {
+                    value,
+                    fval: 0.0,
+                    ty: Type::UInt,
+                },
+                location,
+                at_bol,
+                has_space,
+                len: end - start,
+                hideset: HideSet::default(),
+                origin: None,
+            });
+            at_bol = false;
+            has_space = false;
+            i = end;
+            column += i - start;
+            continue;
+        }
+
         if is_ident_start(b) {
             let start = i;
             let location = SourceLocation {

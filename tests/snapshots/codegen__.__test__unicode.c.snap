@@ -2,5 +2,5 @@
 source: tests/codegen.rs
 expression: "&mine"
 ---
-stdout: "sizeof(L'\\0') => 4\nL'a' => 97\nstrcmp(\"αβγ\", \"αβγ\") => 0\nstrcmp(\"日本語\", \"日本語\") => 0\nstrcmp(\"日本語\", \"日本語\") => 0\nstrcmp(\"🌮\", \"🌮\") => 0\nL'\\xffffffff'>>31 => -1\nL'β' => 946\nL'あ' => 12354\nL'🍣' => 127843\nsizeof(u'\\0') => 2\nu'\\xffff'>>15 => 1\nu'a' => 97\nu'β' => 946\nu'あ' => 12354\nu'🍣' => 62307\nstrcmp(STR(u'a'), \"u'a'\") => 0\nOK\n"
+stdout: "sizeof(L'\\0') => 4\nL'a' => 97\nstrcmp(\"αβγ\", \"αβγ\") => 0\nstrcmp(\"日本語\", \"日本語\") => 0\nstrcmp(\"日本語\", \"日本語\") => 0\nstrcmp(\"🌮\", \"🌮\") => 0\nL'\\xffffffff'>>31 => -1\nL'β' => 946\nL'あ' => 12354\nL'🍣' => 127843\nsizeof(u'\\0') => 2\nu'\\xffff'>>15 => 1\nu'a' => 97\nu'β' => 946\nu'あ' => 12354\nu'🍣' => 62307\nstrcmp(STR(u'a'), \"u'a'\") => 0\nsizeof(U'\\0') => 4\nU'\\xffffffff'>>31 => 1\nU'a' => 97\nU'β' => 946\nU'あ' => 12354\nU'🍣' => 127843\nstrcmp(STR(U'a'), \"U'a'\") => 0\nOK\n"
 status: 0
