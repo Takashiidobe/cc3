@@ -9,7 +9,7 @@ use std::{
 
 fn cc_command() -> StdCommand {
     if cfg!(target_arch = "x86_64") {
-        StdCommand::new("clang")
+        StdCommand::new("cc")
     } else {
         let mut cmd = StdCommand::new("zig");
         cmd.arg("cc")

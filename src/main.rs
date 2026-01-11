@@ -987,7 +987,7 @@ fn run_linker(
 
 fn link_command() -> Vec<String> {
     if cfg!(target_arch = "x86_64") {
-        vec!["clang".to_string()]
+        vec!["cc".to_string()]
     } else {
         vec![
             "zig".to_string(),

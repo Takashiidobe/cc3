@@ -452,10 +452,46 @@ impl<'a> Parser<'a> {
         // Check if this is a declaration (;) or definition ({...})
         let is_definition = !self.consume_punct(Punct::Semicolon);
 
+        // Check if function already exists
+        let existing_fn_idx = self.find_global_by_name(&name);
+
+        if let Some(idx) = existing_fn_idx {
+            let existing = &self.globals[idx];
+
+            // Check if it was redeclared as a different kind of symbol
+            if !existing.is_function {
+                self.bail_at(
+                    name_token.location,
+                    "redeclared as a different kind of symbol",
+                )?;
+            }
+
+            // Check for redefinition
+            if existing.is_definition && is_definition {
+                self.bail_at(name_token.location, format!("redefinition of {}", name))?;
+            }
+
+            // Check for static after non-static
+            let is_static = attr.is_static || (attr.is_inline && !attr.is_extern);
+            if !existing.is_static && is_static {
+                self.bail_at(
+                    name_token.location,
+                    "static declaration follows a non-static declaration",
+                )?;
+            }
+
+            // Update is_definition if this is a definition
+            if is_definition {
+                self.globals[idx].is_definition = true;
+            }
+        }
+
         if !is_definition {
             // Function declaration - no body
             let is_static = attr.is_static || (attr.is_inline && !attr.is_extern);
-            self.new_function_decl(name, ty, is_static, attr.is_inline);
+            if existing_fn_idx.is_none() {
+                self.new_function_decl(name, ty, is_static, attr.is_inline);
+            }
             return Ok(());
         }
 
@@ -489,7 +525,9 @@ impl<'a> Parser<'a> {
 
         // Ensure the function is visible for recursive calls.
         let is_static = attr.is_static || (attr.is_inline && !attr.is_extern);
-        self.new_function_decl(name.clone(), ty.clone(), is_static, attr.is_inline);
+        if existing_fn_idx.is_none() {
+            self.new_function_decl(name.clone(), ty.clone(), is_static, attr.is_inline);
+        }
         self.fn_refs.entry(name.clone()).or_default();
         let prev_fn = self.current_fn.take();
         self.current_fn = Some(name.clone());
@@ -1763,127 +1801,155 @@ impl<'a> Parser<'a> {
         self.add_type_expr(&mut rhs)?;
 
         // Handle atomic op= by converting to CAS loop
-        if let Some(ref lhs_ty) = lhs.ty {
-            if lhs_ty.is_atomic() {
-                // Get the base type (unwrap the Atomic wrapper)
-                let base_ty = lhs_ty.base().ok_or_else(|| self.err_at(location, "atomic type has no base"))?;
-                let base_ty = base_ty.clone();
-                let ptr_ty = Type::Ptr(Box::new(lhs_ty.clone()));
+        if let Some(ref lhs_ty) = lhs.ty
+            && lhs_ty.is_atomic()
+        {
+            // Get the base type (unwrap the Atomic wrapper)
+            let base_ty = lhs_ty
+                .base()
+                .ok_or_else(|| self.err_at(location, "atomic type has no base"))?;
+            let base_ty = base_ty.clone();
+            let ptr_ty = Type::Ptr(Box::new(lhs_ty.clone()));
 
-                // Create local variables
-                let addr_idx = self.new_lvar(String::new(), ptr_ty.clone());
-                let val_idx = self.new_lvar(String::new(), base_ty.clone());
-                let old_idx = self.new_lvar(String::new(), base_ty.clone());
-                let new_idx = self.new_lvar(String::new(), base_ty.clone());
+            // Create local variables
+            let addr_idx = self.new_lvar(String::new(), ptr_ty.clone());
+            let val_idx = self.new_lvar(String::new(), base_ty.clone());
+            let old_idx = self.new_lvar(String::new(), base_ty.clone());
+            let new_idx = self.new_lvar(String::new(), base_ty.clone());
 
-                let mut stmts = vec![];
+            let mut stmts = vec![];
 
-                // addr = &lhs
-                let addr_var = self.expr_at(ExprKind::Var { idx: addr_idx, is_local: true }, location);
-                let addr_init = self.expr_at(
-                    ExprKind::Assign {
-                        lhs: Box::new(addr_var.clone()),
-                        rhs: Box::new(self.expr_at(ExprKind::Addr(Box::new(lhs.clone())), location)),
-                    },
-                    location,
-                );
-                stmts.push(Stmt {
-                    kind: StmtKind::Expr(addr_init),
-                    location,
-                });
+            // addr = &lhs
+            let addr_var = self.expr_at(
+                ExprKind::Var {
+                    idx: addr_idx,
+                    is_local: true,
+                },
+                location,
+            );
+            let addr_init = self.expr_at(
+                ExprKind::Assign {
+                    lhs: Box::new(addr_var.clone()),
+                    rhs: Box::new(self.expr_at(ExprKind::Addr(Box::new(lhs.clone())), location)),
+                },
+                location,
+            );
+            stmts.push(Stmt {
+                kind: StmtKind::Expr(addr_init),
+                location,
+            });
 
-                // val = rhs
-                let val_var = self.expr_at(ExprKind::Var { idx: val_idx, is_local: true }, location);
-                let val_init = self.expr_at(
-                    ExprKind::Assign {
-                        lhs: Box::new(val_var.clone()),
-                        rhs: Box::new(rhs),
-                    },
-                    location,
-                );
-                stmts.push(Stmt {
-                    kind: StmtKind::Expr(val_init),
-                    location,
-                });
+            // val = rhs
+            let val_var = self.expr_at(
+                ExprKind::Var {
+                    idx: val_idx,
+                    is_local: true,
+                },
+                location,
+            );
+            let val_init = self.expr_at(
+                ExprKind::Assign {
+                    lhs: Box::new(val_var.clone()),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            );
+            stmts.push(Stmt {
+                kind: StmtKind::Expr(val_init),
+                location,
+            });
 
-                // old = *addr
-                let old_var = self.expr_at(ExprKind::Var { idx: old_idx, is_local: true }, location);
-                let old_init = self.expr_at(
-                    ExprKind::Assign {
-                        lhs: Box::new(old_var.clone()),
-                        rhs: Box::new(self.expr_at(ExprKind::Deref(Box::new(addr_var.clone())), location)),
-                    },
-                    location,
-                );
-                stmts.push(Stmt {
-                    kind: StmtKind::Expr(old_init),
-                    location,
-                });
-
-                // Create loop body: new = old op val
-                let new_var = self.expr_at(ExprKind::Var { idx: new_idx, is_local: true }, location);
-                let bin_expr = match op {
-                    BinaryOp::Add => self.new_add(old_var.clone(), val_var.clone(), location)?,
-                    BinaryOp::Sub => self.new_sub(old_var.clone(), val_var.clone(), location)?,
-                    _ => self.expr_at(
-                        ExprKind::Binary {
-                            op,
-                            lhs: Box::new(old_var.clone()),
-                            rhs: Box::new(val_var.clone()),
-                        },
-                        location,
+            // old = *addr
+            let old_var = self.expr_at(
+                ExprKind::Var {
+                    idx: old_idx,
+                    is_local: true,
+                },
+                location,
+            );
+            let old_init = self.expr_at(
+                ExprKind::Assign {
+                    lhs: Box::new(old_var.clone()),
+                    rhs: Box::new(
+                        self.expr_at(ExprKind::Deref(Box::new(addr_var.clone())), location),
                     ),
-                };
-                let new_assign = self.expr_at(
-                    ExprKind::Assign {
-                        lhs: Box::new(new_var.clone()),
-                        rhs: Box::new(bin_expr),
-                    },
-                    location,
-                );
+                },
+                location,
+            );
+            stmts.push(Stmt {
+                kind: StmtKind::Expr(old_init),
+                location,
+            });
 
-                // Create CAS: !atomic_compare_exchange_strong(&old, old, new)
-                let old_addr = self.expr_at(ExprKind::Addr(Box::new(old_var.clone())), location);
-                let cas = self.expr_at(
-                    ExprKind::Cas {
-                        addr: Box::new(addr_var),
-                        old: Box::new(old_addr),
-                        new: Box::new(new_var.clone()),
+            // Create loop body: new = old op val
+            let new_var = self.expr_at(
+                ExprKind::Var {
+                    idx: new_idx,
+                    is_local: true,
+                },
+                location,
+            );
+            let bin_expr = match op {
+                BinaryOp::Add => self.new_add(old_var.clone(), val_var.clone(), location)?,
+                BinaryOp::Sub => self.new_sub(old_var.clone(), val_var.clone(), location)?,
+                _ => self.expr_at(
+                    ExprKind::Binary {
+                        op,
+                        lhs: Box::new(old_var.clone()),
+                        rhs: Box::new(val_var.clone()),
                     },
                     location,
-                );
-                let not_cas = self.expr_at(
-                    ExprKind::Unary {
-                        op: UnaryOp::Not,
-                        expr: Box::new(cas),
-                    },
-                    location,
-                );
+                ),
+            };
+            let new_assign = self.expr_at(
+                ExprKind::Assign {
+                    lhs: Box::new(new_var.clone()),
+                    rhs: Box::new(bin_expr),
+                },
+                location,
+            );
 
-                // Create do-while loop
-                let loop_stmt = Stmt {
-                    kind: StmtKind::DoWhile {
-                        body: Box::new(Stmt {
-                            kind: StmtKind::Block(vec![Stmt {
-                                kind: StmtKind::Expr(new_assign),
-                                location,
-                            }]),
+            // Create CAS: !atomic_compare_exchange_strong(&old, old, new)
+            let old_addr = self.expr_at(ExprKind::Addr(Box::new(old_var.clone())), location);
+            let cas = self.expr_at(
+                ExprKind::Cas {
+                    addr: Box::new(addr_var),
+                    old: Box::new(old_addr),
+                    new: Box::new(new_var.clone()),
+                },
+                location,
+            );
+            let not_cas = self.expr_at(
+                ExprKind::Unary {
+                    op: UnaryOp::Not,
+                    expr: Box::new(cas),
+                },
+                location,
+            );
+
+            // Create do-while loop
+            let loop_stmt = Stmt {
+                kind: StmtKind::DoWhile {
+                    body: Box::new(Stmt {
+                        kind: StmtKind::Block(vec![Stmt {
+                            kind: StmtKind::Expr(new_assign),
                             location,
-                        }),
-                        cond: not_cas,
-                    },
-                    location,
-                };
-                stmts.push(loop_stmt);
+                        }]),
+                        location,
+                    }),
+                    cond: not_cas,
+                },
+                location,
+            };
+            stmts.push(loop_stmt);
 
-                // Final expression is new
-                stmts.push(Stmt {
-                    kind: StmtKind::Expr(new_var),
-                    location,
-                });
+            // Final expression is new
+            stmts.push(Stmt {
+                kind: StmtKind::Expr(new_var),
+                location,
+            });
 
-                return Ok(self.expr_at(ExprKind::StmtExpr(stmts), location));
-            }
+            return Ok(self.expr_at(ExprKind::StmtExpr(stmts), location));
         }
 
         if let ExprKind::Member {
@@ -3195,6 +3261,14 @@ impl<'a> Parser<'a> {
             .map(|(idx, _)| idx)
     }
 
+    fn find_global_by_name(&self, name: &str) -> Option<usize> {
+        self.globals
+            .iter()
+            .enumerate()
+            .rfind(|(_, obj)| obj.name == name)
+            .map(|(idx, _)| idx)
+    }
+
     fn find_typedef(&self, tok: &Token) -> Option<Type> {
         if let TokenKind::Ident(name) = &tok.kind {
             for scope in self.scopes.iter().rev() {
@@ -3324,6 +3398,7 @@ impl<'a> Parser<'a> {
             is_function: true,
             is_static,
             is_inline,
+            is_root: !(is_static && is_inline),
             params,
             ..Default::default()
         });
@@ -3343,21 +3418,40 @@ impl<'a> Parser<'a> {
         is_static: bool,
         is_inline: bool,
     ) {
-        self.globals.push(Obj {
-            name,
-            ty,
-            is_function: true,
-            is_definition: true,
-            is_static,
-            is_inline,
-            params,
-            body,
-            locals,
-            va_area,
-            alloca_bottom,
-            stack_size,
-            ..Default::default()
-        });
+        // Check if function already exists (as a declaration)
+        if let Some(idx) = self.find_global_by_name(&name) {
+            // Update existing function declaration with definition
+            let existing = &mut self.globals[idx];
+            existing.ty = ty;
+            existing.is_definition = true;
+            existing.is_static = is_static;
+            existing.is_inline = is_inline;
+            existing.params = params;
+            existing.body = body;
+            existing.locals = locals;
+            existing.va_area = va_area;
+            existing.alloca_bottom = alloca_bottom;
+            existing.stack_size = stack_size;
+            existing.is_root = !(is_static && is_inline);
+        } else {
+            // Create new function definition
+            self.globals.push(Obj {
+                name,
+                ty,
+                is_function: true,
+                is_definition: true,
+                is_static,
+                is_inline,
+                is_root: !(is_static && is_inline),
+                params,
+                body,
+                locals,
+                va_area,
+                alloca_bottom,
+                stack_size,
+                ..Default::default()
+            });
+        }
     }
 
     fn new_unique_name(&mut self) -> String {
@@ -5034,12 +5128,11 @@ impl<'a> Parser<'a> {
                 self.add_type_expr(val)?;
 
                 // Check that addr is a pointer
-                let base_ty = match &addr.ty {
+
+                match &addr.ty {
                     Some(Type::Ptr(base)) => base.as_ref().clone(),
                     _ => self.bail_at(addr.location, "pointer expected")?,
-                };
-
-                base_ty
+                }
             }
         };
 

@@ -1,0 +1,6 @@
+---
+source: tests/diagnostics.rs
+expression: "&log"
+---
+stderr: "error: redefinition of foo\n  --> ./tests/invalid/redefinition.c:2:5\n    |\n  2 | int foo() { return 2; }\n    |     ^\n\n"
+status: 1
