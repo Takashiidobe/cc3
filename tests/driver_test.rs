@@ -484,3 +484,21 @@ fn x_option() {
     );
     assert!(output_path.exists(), "output file should exist");
 }
+
+#[test]
+fn preprocess_only_implies_c_language() {
+    // Test that -E implies -xc, allowing preprocessing from stdin without explicit -xc
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("input.txt");
+    fs::write(&input_path, "foo\n").expect("write input");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd.arg("-E").arg(&input_path).output().expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("foo"), "stdout: {stdout}");
+}

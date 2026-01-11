@@ -424,6 +424,9 @@ fn run_driver(args: &Args) -> io::Result<()> {
 
     let opt_x = if let Some(lang) = args.languages.last() {
         parse_language(lang)?
+    } else if args.preprocess_only {
+        // -E implies -xc (C language)
+        FileType::C
     } else {
         FileType::None
     };
