@@ -212,42 +212,60 @@ fn main() {
 }
 
 fn preprocess_args(args: &[String]) -> Vec<String> {
-    args.iter()
-        .filter_map(|arg| {
-            let arg_str = arg.as_str();
+    let mut out = Vec::with_capacity(args.len());
+    let mut i = 0;
 
-            // These options are ignored for now
-            if arg_str.starts_with("-O")
-                || arg_str.starts_with("-W")
-                || arg_str.starts_with("-g")
-                || arg_str.starts_with("-std=")
-                || arg_str == "-ffreestanding"
-                || arg_str == "-fno-builtin"
-                || arg_str == "-fno-omit-frame-pointer"
-                || arg_str == "-fno-stack-protector"
-                || arg_str == "-fno-strict-aliasing"
-                || arg_str == "-m64"
-                || arg_str == "-mno-red-zone"
-                || arg_str == "-w"
-            {
-                return None;
+    while i < args.len() {
+        let arg = &args[i];
+        let arg_str = arg.as_str();
+
+        // These options are ignored for now
+        if arg_str.starts_with("-O")
+            || arg_str.starts_with("-W")
+            || arg_str.starts_with("-g")
+            || arg_str.starts_with("-std=")
+            || arg_str == "-ffreestanding"
+            || arg_str == "-fno-builtin"
+            || arg_str == "-fno-omit-frame-pointer"
+            || arg_str == "-fno-stack-protector"
+            || arg_str == "-fno-strict-aliasing"
+            || arg_str == "-m64"
+            || arg_str == "-mno-red-zone"
+            || arg_str == "-w"
+        {
+            i += 1;
+            continue;
+        }
+
+        match arg_str {
+            "-cc1" => out.push("--cc1".to_string()),
+            "-cc1-input" => out.push("--cc1-input".to_string()),
+            "-cc1-output" => out.push("--cc1-output".to_string()),
+            "-###" => out.push("--hash-hash-hash".to_string()),
+            "-fcommon" => out.push("--fcommon".to_string()),
+            "-fno-common" => out.push("--fno-common".to_string()),
+            "-MF" => out.push("--MF".to_string()),
+            "-MD" => out.push("--MD".to_string()),
+            "-MP" => out.push("--MP".to_string()),
+            "-MT" => out.push("--MT".to_string()),
+            "-MQ" | "--MQ" => {
+                out.push("--MT".to_string());
+                if i + 1 < args.len() {
+                    out.push(quote_makefile(&args[i + 1]));
+                    i += 1;
+                }
             }
+            _ if arg_str.starts_with("--MQ=") => {
+                let value = &arg_str["--MQ=".len()..];
+                out.push(format!("--MT={}", quote_makefile(value)));
+            }
+            _ => out.push(arg.clone()),
+        }
 
-            Some(match arg_str {
-                "-cc1" => "--cc1".to_string(),
-                "-cc1-input" => "--cc1-input".to_string(),
-                "-cc1-output" => "--cc1-output".to_string(),
-                "-###" => "--hash-hash-hash".to_string(),
-                "-fcommon" => "--fcommon".to_string(),
-                "-fno-common" => "--fno-common".to_string(),
-                "-MF" => "--MF".to_string(),
-                "-MD" => "--MD".to_string(),
-                "-MP" => "--MP".to_string(),
-                "-MT" => "--MT".to_string(),
-                _ => arg.clone(),
-            })
-        })
-        .collect()
+        i += 1;
+    }
+
+    out
 }
 
 fn default_include_paths(argv0: &Path) -> Vec<PathBuf> {
@@ -468,7 +486,7 @@ fn print_dependencies(
     };
 
     let target = if dep_targets.is_empty() {
-        replace_ext(input, ".o").display().to_string()
+        quote_makefile(&replace_ext(input, ".o").display().to_string())
     } else {
         dep_targets.join(" ")
     };
@@ -485,11 +503,42 @@ fn print_dependencies(
 
     if dep_phony {
         for file in lexer::get_input_files().into_iter().skip(1) {
-            writeln!(writer, "{}:\n", file.name.display())
-                .map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
+            writeln!(
+                writer,
+                "{}:\n",
+                quote_makefile(&file.name.display().to_string())
+            )
+            .map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
         }
     }
     Ok(())
+}
+
+fn quote_makefile(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = String::with_capacity(bytes.len() * 2 + 1);
+
+    for (idx, &byte) in bytes.iter().enumerate() {
+        match byte {
+            b'$' => out.push_str("$$"),
+            b'#' => {
+                out.push('\\');
+                out.push('#');
+            }
+            b' ' | b'\t' => {
+                let mut k = idx;
+                while k > 0 && bytes[k - 1] == b'\\' {
+                    out.push('\\');
+                    k -= 1;
+                }
+                out.push('\\');
+                out.push(byte as char);
+            }
+            _ => out.push(byte as char),
+        }
+    }
+
+    out
 }
 
 fn token_lexeme(token: &Token) -> String {

@@ -242,6 +242,34 @@ fn preprocess_dash_mt_sets_dependency_target() {
 }
 
 #[test]
+fn preprocess_dash_mq_quotes_dependency_target() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let header1 = dir.path().join("out2.h");
+    fs::write(&header1, "int foo;\n").expect("write header1");
+
+    let input_path = dir.path().join("input.c");
+    let input = "#include \"out2.h\"\n";
+    fs::write(&input_path, input).expect("write input");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-M")
+        .arg("--MQ")
+        .arg("foo bar$#")
+        .arg(format!("-I{}", dir.path().display()))
+        .arg(&input_path)
+        .output()
+        .expect("run cc3 -MQ");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.starts_with("foo\\ bar$$\\#:"), "stdout: {stdout}");
+}
+
+#[test]
 fn preprocess_dash_md_writes_dependency_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     let header1 = dir.path().join("out2.h");
