@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "offsetof(T, a) => 0\noffsetof(T, b) => 4\noffsetof(T, c) => 8\noffsetof(T, d) => 16\nOK\n"
+status: 0
