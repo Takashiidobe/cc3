@@ -1736,6 +1736,15 @@ impl Codegen {
                 self.gen_lvalue(lhs, function, globals);
                 self.emit_line(&format!("  add ${}, %rax", member.offset));
             }
+            ExprKind::Assign { .. } | ExprKind::Cond { .. } => {
+                if let Some(ty) = expr.ty.as_ref()
+                    && matches!(ty, Type::Struct { .. } | Type::Union { .. })
+                {
+                    self.gen_expr(expr, function, globals);
+                } else {
+                    self.emit_line("  mov $0, %rax");
+                }
+            }
             ExprKind::Call {
                 ret_buffer: Some(_),
                 ..
