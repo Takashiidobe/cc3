@@ -47,6 +47,9 @@ struct Args {
     /// Preprocess only.
     #[arg(short = 'E', action = clap::ArgAction::SetTrue)]
     preprocess_only: bool,
+    /// Print dependency list for make.
+    #[arg(short = 'M', action = clap::ArgAction::SetTrue)]
+    dep_only: bool,
     /// Input C source file(s).
     inputs: Vec<PathBuf>,
     /// Output file. Writes to stdout if omitted in cc1 mode.
@@ -175,6 +178,7 @@ fn main() {
             input,
             output,
             args.preprocess_only,
+            args.dep_only,
             cmdline_defines,
             cmdline_undefs,
             args.include_files.clone(),
@@ -254,6 +258,7 @@ fn run_cc1_subprocess(
     input: &Path,
     output: Option<&Path>,
     preprocess_only: bool,
+    dep_only: bool,
     include_dirs: &[PathBuf],
     idirafter_dirs: &[PathBuf],
     include_files: &[PathBuf],
@@ -269,6 +274,9 @@ fn run_cc1_subprocess(
     let mut argv = vec![exe, "-cc1".to_string()];
     if preprocess_only {
         argv.push("-E".to_string());
+    }
+    if dep_only {
+        argv.push("-M".to_string());
     }
     argv.push("-cc1-input".to_string());
     argv.push(input.display().to_string());
@@ -303,6 +311,7 @@ fn run_cc1(
     input: &Path,
     output: Option<&Path>,
     preprocess_only: bool,
+    dep_only: bool,
     cmdline_defines: Vec<(String, String)>,
     cmdline_undefs: Vec<String>,
     include_files: Vec<PathBuf>,
@@ -336,6 +345,10 @@ fn run_cc1(
     tokens.append(&mut main_tokens);
 
     let tokens = preprocessor::preprocess(tokens, cmdline_defines, cmdline_undefs)?;
+    if dep_only {
+        print_dependencies(input, output)?;
+        return Ok(());
+    }
     if preprocess_only {
         print_tokens(&tokens, output)?;
         return Ok(());
@@ -387,6 +400,31 @@ fn print_tokens(tokens: &[Token], output: Option<&Path>) -> CompileResult<()> {
     Ok(())
 }
 
+fn print_dependencies(input: &Path, output: Option<&Path>) -> CompileResult<()> {
+    use std::io::Write;
+
+    let mut writer: Box<dyn Write> = if let Some(path) = output {
+        Box::new(fs::File::create(path).map_err(|err| {
+            CompileError::new(format!("failed to write {}: {err}", path.display()))
+        })?)
+    } else {
+        Box::new(io::stdout())
+    };
+
+    let obj = replace_ext(input, ".o");
+    write!(writer, "{}:", obj.display())
+        .map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
+
+    for file in lexer::get_input_files() {
+        write!(writer, " \\\n  {}", file.name.display())
+            .map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
+    }
+
+    writeln!(writer, "\n")
+        .map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
+    Ok(())
+}
+
 fn token_lexeme(token: &Token) -> String {
     if let Some(file) = lexer::get_input_file(token.location.file_no) {
         let bytes = file.contents.as_bytes();
@@ -416,18 +454,18 @@ fn run_driver(args: &Args) -> io::Result<()> {
     }
     if args.inputs.len() > 1
         && args.output.is_some()
-        && (args.compile_only || args.emit_asm || args.preprocess_only)
+        && (args.compile_only || args.emit_asm || args.preprocess_only || args.dep_only)
     {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "cannot specify '-o' with '-c', '-S' or '-E' with multiple files",
+            "cannot specify '-o' with '-c', '-S', '-E' or '-M' with multiple files",
         ));
     }
 
     let opt_x = if let Some(lang) = args.languages.last() {
         parse_language(lang)?
-    } else if args.preprocess_only {
-        // -E implies -xc (C language)
+    } else if args.preprocess_only || args.dep_only {
+        // -E/-M implies -xc (C language)
         FileType::C
     } else {
         FileType::None
@@ -448,7 +486,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
 
         let file_type = get_file_type(input, opt_x)?;
 
-        let output = if args.preprocess_only {
+        let output = if args.preprocess_only || args.dep_only {
             args.output.clone()
         } else if let Some(path) = &args.output {
             Some(path.clone())
@@ -475,11 +513,12 @@ fn run_driver(args: &Args) -> io::Result<()> {
         // Handle C files
         assert_eq!(file_type, FileType::C);
 
-        if args.preprocess_only {
+        if args.preprocess_only || args.dep_only {
             run_cc1_subprocess(
                 input,
                 output.as_deref(),
-                true,
+                args.preprocess_only,
+                args.dep_only,
                 &args.include_dirs,
                 &args.idirafter_dirs,
                 &args.include_files,
@@ -496,6 +535,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             run_cc1_subprocess(
                 input,
                 output.as_deref(),
+                false,
                 false,
                 &args.include_dirs,
                 &args.idirafter_dirs,
@@ -514,6 +554,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             run_cc1_subprocess(
                 input,
                 Some(&tmp_asm),
+                false,
                 false,
                 &args.include_dirs,
                 &args.idirafter_dirs,
@@ -534,6 +575,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
         run_cc1_subprocess(
             input,
             Some(&tmp_asm),
+            false,
             false,
             &args.include_dirs,
             &args.idirafter_dirs,
