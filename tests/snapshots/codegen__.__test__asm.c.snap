@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "asm_fn1() => 50\nasm_fn2() => 55\nOK\n"
+status: 0

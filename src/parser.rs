@@ -733,6 +733,10 @@ impl<'a> Parser<'a> {
             return Ok(self.stmt_last(StmtKind::Continue));
         }
 
+        if self.consume_keyword(Keyword::Asm) {
+            return self.parse_asm_stmt();
+        }
+
         if self.consume_keyword(Keyword::Goto) {
             let name_token = self.expect_ident_token()?;
             let label = match name_token.kind {
@@ -769,6 +773,36 @@ impl<'a> Parser<'a> {
         }
 
         self.parse_expr_stmt()
+    }
+
+    fn parse_asm_stmt(&mut self) -> CompileResult<Stmt> {
+        let location = self.last_location();
+        loop {
+            if self.consume_keyword(Keyword::Volatile) {
+                continue;
+            }
+            if matches!(self.peek().kind, TokenKind::Ident(ref name) if name == "inline") {
+                self.pos += 1;
+                continue;
+            }
+            break;
+        }
+        self.expect_punct(Punct::LParen)?;
+        let TokenKind::Str { bytes, ty } = self.peek().kind.clone() else {
+            return self.bail_here("expected string literal");
+        };
+        if !matches!(
+            ty,
+            Type::Array { base, .. } if matches!(*base, Type::Char)
+        ) {
+            return self.bail_here("expected string literal");
+        }
+        let asm_str = String::from_utf8_lossy(&bytes)
+            .trim_end_matches('\0')
+            .to_string();
+        self.pos += 1;
+        self.expect_punct(Punct::RParen)?;
+        Ok(self.stmt_at(StmtKind::Asm(asm_str), location))
     }
 
     fn parse_declaration(&mut self, basety: Type, attr: &VarAttr) -> CompileResult<Stmt> {
@@ -4117,6 +4151,7 @@ impl<'a> Parser<'a> {
             }
             StmtKind::Expr(expr) => self.add_type_expr(expr)?,
             StmtKind::Decl(_) => {}
+            StmtKind::Asm(_) => {}
         }
         Ok(())
     }

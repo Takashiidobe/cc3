@@ -742,6 +742,9 @@ impl Codegen {
                 self.emit_line(&format!("{}:", symbol));
                 self.gen_stmt(stmt, function, globals);
             }
+            StmtKind::Asm(text) => {
+                self.emit_line(&format!("  {text}"));
+            }
             StmtKind::Block(stmts) => {
                 for stmt in stmts {
                     self.gen_stmt(stmt, function, globals);

@@ -83,6 +83,7 @@ pub enum StmtKind {
         label: String,
         stmt: Box<Stmt>,
     },
+    Asm(String),
     Expr(Expr),
     Decl(usize),
 }
