@@ -113,11 +113,16 @@ struct InitDesg {
 
 impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
-        Self {
+        let mut parser = Self {
             tokens,
             scopes: vec![Scope::default()],
             ..Default::default()
-        }
+        };
+        parser.push_scope_typedef(
+            "__builtin_va_list".to_string(),
+            Type::Ptr(Box::new(Type::Void)),
+        );
+        parser
     }
 
     fn declare_builtin_functions(&mut self) {
