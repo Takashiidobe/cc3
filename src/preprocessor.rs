@@ -82,9 +82,14 @@ struct Preprocessor {
 }
 
 static INCLUDE_PATHS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
+static INCLUDE_CACHE: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
 
 fn include_paths_storage() -> &'static Mutex<Vec<PathBuf>> {
     INCLUDE_PATHS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn include_cache() -> &'static Mutex<HashMap<String, PathBuf>> {
+    INCLUDE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub fn set_include_paths(paths: Vec<PathBuf>) {
@@ -771,9 +776,18 @@ pub fn search_include_paths(filename: &str) -> Option<PathBuf> {
         return Some(PathBuf::from(filename));
     }
 
+    if let Ok(cache) = include_cache().lock()
+        && let Some(cached) = cache.get(filename)
+    {
+        return Some(cached.clone());
+    }
+
     for path in get_include_paths() {
         let candidate = path.join(filename);
         if candidate.exists() {
+            if let Ok(mut cache) = include_cache().lock() {
+                cache.insert(filename.to_string(), candidate.clone());
+            }
             return Some(candidate);
         }
     }
