@@ -1545,6 +1545,28 @@ impl Preprocessor {
                 continue;
             }
 
+            if matches!(tok.kind, TokenKind::Punct(Punct::Comma))
+                && matches!(
+                    body.get(i + 1).map(|tok| &tok.kind),
+                    Some(TokenKind::Punct(Punct::HashHash))
+                )
+                && let Some(next) = body.get(i + 2)
+                && let Some(arg) = find_arg(args, next)
+                && arg.name == "__VA_ARGS__"
+            {
+                let is_empty = arg
+                    .tokens
+                    .first()
+                    .is_some_and(|tok| matches!(tok.kind, TokenKind::Eof));
+                if is_empty {
+                    i += 3;
+                } else {
+                    result.push(tok.clone());
+                    i += 2;
+                }
+                continue;
+            }
+
             if let Some(arg) = find_arg(args, tok)
                 && let Some(next) = body.get(i + 1)
                 && matches!(next.kind, TokenKind::Punct(Punct::HashHash))
