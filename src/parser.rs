@@ -2452,18 +2452,41 @@ impl<'a> Parser<'a> {
                 {
                     self.pos += 1;
                     self.expect_punct(Punct::LParen)?;
-                    let ty = self.parse_typename()?;
+                    let mut ty = self.parse_typename()?;
                     self.expect_punct(Punct::RParen)?;
+
                     // Check if VLA
-                    if let Type::Vla {
-                        size_var: Some(idx),
-                        ..
-                    } = ty
-                    {
-                        return Ok(self.expr_at(
+                    if let Type::Vla { size_var, .. } = &ty {
+                        if let Some(idx) = size_var {
+                            return Ok(self.expr_at(
+                                ExprKind::Var {
+                                    idx: *idx,
+                                    is_local: true,
+                                },
+                                location,
+                            ));
+                        }
+
+                        // Need to compute VLA size
+                        let lhs = self.compute_vla_size(&mut ty, location)?;
+                        let Type::Vla {
+                            size_var: Some(idx),
+                            ..
+                        } = ty
+                        else {
+                            unreachable!()
+                        };
+                        let rhs = self.expr_at(
                             ExprKind::Var {
                                 idx,
                                 is_local: true,
+                            },
+                            location,
+                        );
+                        return Ok(self.expr_at(
+                            ExprKind::Comma {
+                                lhs: Box::new(lhs),
+                                rhs: Box::new(rhs),
                             },
                             location,
                         ));
