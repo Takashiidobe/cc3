@@ -362,11 +362,6 @@ impl<'a> Parser<'a> {
                 }
                 FLOAT => Type::Float,
                 DOUBLE => Type::Double,
-                // NOTE: long double is recognized as a 16-byte type but is NOT
-                // properly implemented in codegen. It currently uses the same f64
-                // representation as double and does not emit x87 FPU instructions.
-                // Full support would require implementing fldt/fstpt and x87 stack
-                // operations (~200-300 lines of codegen changes).
                 LONG_DOUBLE => Type::LDouble,
                 _ => self.bail_at(location, "invalid type")?,
             };
@@ -2037,7 +2032,8 @@ impl<'a> Parser<'a> {
             member,
         } = &lhs.kind
         {
-            let base = member_lhs.as_ref().clone();
+            let mut base = member_lhs.as_ref().clone();
+            self.add_type_expr(&mut base)?;
             let base_ty = base
                 .ty
                 .clone()
@@ -2873,7 +2869,7 @@ impl<'a> Parser<'a> {
                 self.expect_punct(Punct::RParen)?;
                 let value = if ty.is_integer() || matches!(ty, Type::Ptr(_)) {
                     0
-                } else if ty.is_flonum() {
+                } else if matches!(ty, Type::Float | Type::Double) {
                     1
                 } else {
                     2
@@ -3016,6 +3012,9 @@ impl<'a> Parser<'a> {
             return Type::Ptr(Box::new(ty2.clone()));
         }
 
+        if matches!(ty1, Type::LDouble) || matches!(ty2, Type::LDouble) {
+            return Type::LDouble;
+        }
         if matches!(ty1, Type::Double) || matches!(ty2, Type::Double) {
             return Type::Double;
         }
@@ -5588,7 +5587,10 @@ fn has_flonum(ty: &Type, lo: i64, hi: i64, offset: i64) -> bool {
         Type::Array { base, len } => {
             (0..*len).all(|idx| has_flonum(base, lo, hi, offset + base.size() * idx as i64))
         }
-        _ => offset < lo || hi <= offset || ty.is_flonum(),
+        _ => {
+            let is_flonum = matches!(ty, Type::Float | Type::Double);
+            offset < lo || hi <= offset || is_flonum
+        }
     }
 }
 
@@ -5623,6 +5625,7 @@ fn assign_lvar_offsets(locals: &mut [Obj], param_indices: &[usize]) -> i32 {
                     continue;
                 }
             }
+            Type::LDouble => {}
             _ => {
                 if gp < GP_MAX {
                     gp += 1;

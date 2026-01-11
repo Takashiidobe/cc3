@@ -331,7 +331,15 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
 fn default_include_paths(argv0: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let base_dir = argv0.parent().unwrap_or(Path::new("."));
-    paths.push(base_dir.join("include"));
+    let base_include = base_dir.join("include");
+    if base_include.is_dir() {
+        paths.push(base_include);
+    } else {
+        let manifest_include = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("include");
+        if manifest_include.is_dir() {
+            paths.push(manifest_include);
+        }
+    }
     paths.push(PathBuf::from("/usr/local/include"));
     paths.push(PathBuf::from("/usr/include/x86_64-linux-gnu"));
     paths.push(PathBuf::from("/usr/include"));

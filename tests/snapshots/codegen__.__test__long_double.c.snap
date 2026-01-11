@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "(long double)3 => 3\n(long double)3 + 2 => 5\n(long double)3 * 2 => 6\n(long double)3 + 2.0 => 5\n({ char buf[100]; sprintf(buf, \"%Lf\", (long double)12.3); strncmp(buf, \"12.3\", 4); }) => 0\nto_double(3.5) == 3.5 => 1\nto_double(3.5) == 3 => 0\n(long double)5.0 == (long double)5.0 => 1\n(long double)5.0 == (long double)5.2 => 0\nto_ldouble(5.0) == 5.0 => 1\nto_ldouble(5.0) == 5.2 => 0\nOK\n"
+status: 0

@@ -274,10 +274,6 @@ pub enum Type {
     Float,
     Double,
     /// 80-bit extended precision float (stored as 16 bytes on x86-64).
-    /// NOTE: This is only partially implemented. The type system recognizes it
-    /// as 16 bytes, but codegen does NOT emit proper x87 FPU instructions and
-    /// internally treats values as f64. Full implementation would require x87
-    /// FPU stack operations (fldt, fstpt, faddp, etc.).
     LDouble,
     Enum,
     Ptr(Box<Type>),
@@ -575,6 +571,7 @@ pub fn is_compatible(t1: &Type, t2: &Type) -> bool {
         | (ULong, ULong)
         | (Float, Float)
         | (Double, Double)
+        | (LDouble, LDouble)
         | (Enum, Enum) => true,
         (Ptr(base1), Ptr(base2)) => is_compatible(base1, base2),
         (

@@ -1,9 +1,3 @@
-// NOTE: This codegen does NOT properly support long double (Type::LDouble).
-// While the type system recognizes it as a 16-byte type, all flonum operations
-// in this module only handle Float and Double using XMM registers. Long double
-// would require x87 FPU stack operations (fldt, fstpt, faddp, fsubrp, etc.) which
-// are not implemented. Currently, long double values are treated like doubles.
-
 use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
 use crate::error::SourceLocation;
 use crate::lexer::get_input_files;
@@ -58,7 +52,10 @@ fn has_flonum(ty: &Type, lo: i64, hi: i64, offset: i64) -> bool {
         Type::Array { base, len } => {
             (0..*len).all(|idx| has_flonum(base, lo, hi, offset + base.size() * idx as i64))
         }
-        _ => offset < lo || hi <= offset || ty.is_flonum(),
+        _ => {
+            let is_flonum = matches!(ty, Type::Float | Type::Double);
+            offset < lo || hi <= offset || is_flonum
+        }
     }
 }
 
@@ -280,10 +277,14 @@ impl Codegen {
             let mut gp = 0;
             let mut fp = 0;
             for param in &function.params {
-                if param.ty.is_flonum() {
-                    fp += 1;
-                } else {
-                    gp += 1;
+                match param.ty {
+                    Type::Float | Type::Double => {
+                        fp += 1;
+                    }
+                    Type::LDouble => {}
+                    _ => {
+                        gp += 1;
+                    }
                 }
             }
             let va_area = &function.locals[va_area_idx];
@@ -348,6 +349,7 @@ impl Codegen {
                     self.store_fp(fp, param.offset, param.ty.size());
                     fp += 1;
                 }
+                Type::LDouble => {}
                 _ => {
                     self.store_gp(gp, param.offset, param.ty.size());
                     gp += 1;
@@ -402,6 +404,12 @@ impl Codegen {
         self.emit_line("  sub $8, %rsp");
         self.emit_line("  movsd %xmm0, (%rsp)");
         self.depth += 1;
+    }
+
+    fn pushld(&mut self) {
+        self.emit_line("  sub $16, %rsp");
+        self.emit_line("  fstpt (%rsp)");
+        self.depth += 2;
     }
 
     fn popf(&mut self, reg: i32) {
@@ -493,6 +501,13 @@ impl Codegen {
                         });
                     }
                 }
+                Type::LDouble => {
+                    infos.push(ArgInfo {
+                        pass_by_stack: true,
+                        reg_classes: Vec::new(),
+                        stack_slots: 2,
+                    });
+                }
                 _ => {
                     if gp >= GP_MAX {
                         infos.push(ArgInfo {
@@ -532,6 +547,7 @@ impl Codegen {
                 match ty {
                     Type::Struct { .. } | Type::Union { .. } => self.push_struct(ty),
                     Type::Float | Type::Double => self.pushf(),
+                    Type::LDouble => self.pushld(),
                     _ => self.push(),
                 }
             } else {
@@ -831,6 +847,9 @@ impl Codegen {
             }
             StmtKind::Expr(expr) => {
                 self.gen_expr(expr, function, globals);
+                if expr.ty.as_ref().is_some_and(|ty| matches!(ty, Type::LDouble)) {
+                    self.emit_line("  fstp %st(0)");
+                }
             }
             StmtKind::Decl(_) => {}
         }
@@ -900,6 +919,15 @@ impl Codegen {
                             self.emit_line(&format!("  mov ${}, %rax  # double {}", bits, fval));
                             self.emit_line("  movq %rax, %xmm0");
                         }
+                        Type::LDouble => {
+                            let bits = fval.to_bits();
+                            self.emit_line(&format!(
+                                "  mov ${}, %rax  # long double {}",
+                                bits, fval
+                            ));
+                            self.emit_line("  mov %rax, -8(%rsp)");
+                            self.emit_line("  fldl -8(%rsp)");
+                        }
                         _ => {
                             self.emit_line(&format!("  mov ${}, %rax", value));
                         }
@@ -929,6 +957,9 @@ impl Codegen {
                                 self.emit_line("  shl $63, %rax");
                                 self.emit_line("  movq %rax, %xmm1");
                                 self.emit_line("  xorpd %xmm1, %xmm0");
+                            }
+                            Type::LDouble => {
+                                self.emit_line("  fchs");
                             }
                             _ => {
                                 self.emit_line("  neg %rax");
@@ -1083,7 +1114,14 @@ impl Codegen {
                 }
             }
             ExprKind::StmtExpr(stmts) => {
-                for stmt in stmts {
+                for (idx, stmt) in stmts.iter().enumerate() {
+                    let is_last = idx + 1 == stmts.len();
+                    if is_last {
+                        if let StmtKind::Expr(expr) = &stmt.kind {
+                            self.gen_expr(expr, function, globals);
+                            continue;
+                        }
+                    }
                     self.gen_stmt(stmt, function, globals);
                 }
             }
@@ -1136,6 +1174,9 @@ impl Codegen {
             }
             ExprKind::Comma { lhs, rhs } => {
                 self.gen_expr(lhs, function, globals);
+                if lhs.ty.as_ref().is_some_and(|ty| matches!(ty, Type::LDouble)) {
+                    self.emit_line("  fstp %st(0)");
+                }
                 self.gen_expr(rhs, function, globals);
             }
             ExprKind::Binary { op, lhs, rhs } => {
@@ -1246,6 +1287,45 @@ impl Codegen {
                         self.emit_line("  and $1, %al");
                         self.emit_line("  movzb %al, %rax");
                         return;
+                    }
+                    if matches!(lhs_ty, Type::LDouble) {
+                        self.gen_expr(lhs, function, globals);
+                        self.gen_expr(rhs, function, globals);
+
+                        match op {
+                            BinaryOp::Add => {
+                                self.emit_line("  faddp");
+                                return;
+                            }
+                            BinaryOp::Sub => {
+                                self.emit_line("  fsubrp");
+                                return;
+                            }
+                            BinaryOp::Mul => {
+                                self.emit_line("  fmulp");
+                                return;
+                            }
+                            BinaryOp::Div => {
+                                self.emit_line("  fdivrp");
+                                return;
+                            }
+                            BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le => {
+                                self.emit_line("  fcomip");
+                                self.emit_line("  fstp %st(0)");
+
+                                match op {
+                                    BinaryOp::Eq => self.emit_line("  sete %al"),
+                                    BinaryOp::Ne => self.emit_line("  setne %al"),
+                                    BinaryOp::Lt => self.emit_line("  seta %al"),
+                                    BinaryOp::Le => self.emit_line("  setae %al"),
+                                    _ => unreachable!(),
+                                }
+
+                                self.emit_line("  movzb %al, %rax");
+                                return;
+                            }
+                            _ => {}
+                        }
                     }
                 }
 
@@ -1467,7 +1547,8 @@ impl Codegen {
             Type::ULong => 7,  // U64
             Type::Float => 8,  // F32
             Type::Double => 9, // F64
-            _ => 7,            // U64
+            Type::LDouble => 10, // F80
+            _ => 7,              // U64
         }
     }
 
@@ -1490,16 +1571,20 @@ impl Codegen {
         const I32F32: &str = "cvtsi2ssl %eax, %xmm0";
         const I32I64: &str = "movslq %eax, %rax";
         const I32F64: &str = "cvtsi2sdl %eax, %xmm0";
+        const I32F80: &str = "mov %eax, -4(%rsp); fildl -4(%rsp)";
 
         const U32F32: &str = "mov %eax, %eax; cvtsi2ssq %rax, %xmm0";
         const U32I64: &str = "mov %eax, %eax";
         const U32F64: &str = "mov %eax, %eax; cvtsi2sdq %rax, %xmm0";
+        const U32F80: &str = "mov %eax, %eax; mov %rax, -8(%rsp); fildll -8(%rsp)";
 
         const I64F32: &str = "cvtsi2ssq %rax, %xmm0";
         const I64F64: &str = "cvtsi2sdq %rax, %xmm0";
+        const I64F80: &str = "movq %rax, -8(%rsp); fildll -8(%rsp)";
 
         const U64F32: &str = "cvtsi2ssq %rax, %xmm0";
         const U64F64: &str = "test %rax,%rax; js 1f; pxor %xmm0,%xmm0; cvtsi2sd %rax,%xmm0; jmp 2f; 1: mov %rax,%rdi; and $1,%eax; pxor %xmm0,%xmm0; shr %rdi; or %rax,%rdi; cvtsi2sd %rdi,%xmm0; addsd %xmm0,%xmm0; 2:";
+        const U64F80: &str = "mov %rax, -8(%rsp); fildq -8(%rsp); test %rax, %rax; jns 1f; mov $1602224128, %eax; mov %eax, -4(%rsp); fadds -4(%rsp); 1:";
 
         const F32I8: &str = "cvttss2sil %xmm0, %eax; movsbl %al, %eax";
         const F32U8: &str = "cvttss2sil %xmm0, %eax; movzbl %al, %eax";
@@ -1510,6 +1595,7 @@ impl Codegen {
         const F32I64: &str = "cvttss2siq %xmm0, %rax";
         const F32U64: &str = "cvttss2siq %xmm0, %rax";
         const F32F64: &str = "cvtss2sd %xmm0, %xmm0";
+        const F32F80: &str = "movss %xmm0, -4(%rsp); flds -4(%rsp)";
 
         const F64I8: &str = "cvttsd2sil %xmm0, %eax; movsbl %al, %eax";
         const F64U8: &str = "cvttsd2sil %xmm0, %eax; movzbl %al, %eax";
@@ -1520,22 +1606,35 @@ impl Codegen {
         const F64F32: &str = "cvtsd2ss %xmm0, %xmm0";
         const F64I64: &str = "cvttsd2siq %xmm0, %rax";
         const F64U64: &str = "cvttsd2siq %xmm0, %rax";
+        const F64F80: &str = "movsd %xmm0, -8(%rsp); fldl -8(%rsp)";
+
+        const F80I8: &str = "fnstcw -10(%rsp); movzwl -10(%rsp), %eax; or $12, %ah; mov %ax, -12(%rsp); fldcw -12(%rsp); fistps -24(%rsp); fldcw -10(%rsp); movsbl -24(%rsp), %eax";
+        const F80U8: &str = "fnstcw -10(%rsp); movzwl -10(%rsp), %eax; or $12, %ah; mov %ax, -12(%rsp); fldcw -12(%rsp); fistps -24(%rsp); fldcw -10(%rsp); movzbl -24(%rsp), %eax";
+        const F80I16: &str = "fnstcw -10(%rsp); movzwl -10(%rsp), %eax; or $12, %ah; mov %ax, -12(%rsp); fldcw -12(%rsp); fistps -24(%rsp); fldcw -10(%rsp); movzbl -24(%rsp), %eax";
+        const F80U16: &str = "fnstcw -10(%rsp); movzwl -10(%rsp), %eax; or $12, %ah; mov %ax, -12(%rsp); fldcw -12(%rsp); fistpl -24(%rsp); fldcw -10(%rsp); movswl -24(%rsp), %eax";
+        const F80I32: &str = "fnstcw -10(%rsp); movzwl -10(%rsp), %eax; or $12, %ah; mov %ax, -12(%rsp); fldcw -12(%rsp); fistpl -24(%rsp); fldcw -10(%rsp); mov -24(%rsp), %eax";
+        const F80U32: &str = "fnstcw -10(%rsp); movzwl -10(%rsp), %eax; or $12, %ah; mov %ax, -12(%rsp); fldcw -12(%rsp); fistpl -24(%rsp); fldcw -10(%rsp); mov -24(%rsp), %eax";
+        const F80I64: &str = "fnstcw -10(%rsp); movzwl -10(%rsp), %eax; or $12, %ah; mov %ax, -12(%rsp); fldcw -12(%rsp); fistpq -24(%rsp); fldcw -10(%rsp); mov -24(%rsp), %rax";
+        const F80U64: &str = "fnstcw -10(%rsp); movzwl -10(%rsp), %eax; or $12, %ah; mov %ax, -12(%rsp); fldcw -12(%rsp); fistpq -24(%rsp); fldcw -10(%rsp); mov -24(%rsp), %rax";
+        const F80F32: &str = "fstps -8(%rsp); movss -8(%rsp), %xmm0";
+        const F80F64: &str = "fstpl -8(%rsp); movsd -8(%rsp), %xmm0";
 
         #[rustfmt::skip]
-        const CAST_TABLE: [[Option<&str>; 10]; 10] = [
-            // i8            i16            i32            i64            u8             u16            u32            u64            f32            f64
-            [None,          None,          None,          Some(I32I64),  Some(I32U8),   Some(I32U16),  None,          Some(I32I64),  Some(I32F32),  Some(I32F64)], // i8
-            [Some(I32I8),   None,          None,          Some(I32I64),  Some(I32U8),   Some(I32U16),  None,          Some(I32I64),  Some(I32F32),  Some(I32F64)], // i16
-            [Some(I32I8),   Some(I32I16),  None,          Some(I32I64),  Some(I32U8),   Some(I32U16),  None,          Some(I32I64),  Some(I32F32),  Some(I32F64)], // i32
-            [Some(I32I8),   Some(I32I16),  None,          None,          Some(I32U8),   Some(I32U16),  None,          None,          Some(I64F32),  Some(I64F64)], // i64
+        const CAST_TABLE: [[Option<&str>; 11]; 11] = [
+            // i8            i16            i32            i64            u8             u16            u32            u64            f32            f64            f80
+            [None,          None,          None,          Some(I32I64),  Some(I32U8),   Some(I32U16),  None,          Some(I32I64),  Some(I32F32),  Some(I32F64),  Some(I32F80)], // i8
+            [Some(I32I8),   None,          None,          Some(I32I64),  Some(I32U8),   Some(I32U16),  None,          Some(I32I64),  Some(I32F32),  Some(I32F64),  Some(I32F80)], // i16
+            [Some(I32I8),   Some(I32I16),  None,          Some(I32I64),  Some(I32U8),   Some(I32U16),  None,          Some(I32I64),  Some(I32F32),  Some(I32F64),  Some(I32F80)], // i32
+            [Some(I32I8),   Some(I32I16),  None,          None,          Some(I32U8),   Some(I32U16),  None,          None,          Some(I64F32),  Some(I64F64),  Some(I64F80)], // i64
 
-            [Some(I32I8),   None,          None,          Some(I32I64),  None,          None,          None,          Some(I32I64),  Some(I32F32),  Some(I32F64)], // u8
-            [Some(I32I8),   Some(I32I16),  None,          Some(I32I64),  Some(I32U8),   None,          None,          Some(I32I64),  Some(I32F32),  Some(I32F64)], // u16
-            [Some(I32I8),   Some(I32I16),  None,          Some(U32I64),  Some(I32U8),   Some(I32U16),  None,          Some(U32I64),  Some(U32F32),  Some(U32F64)], // u32
-            [Some(I32I8),   Some(I32I16),  None,          None,          Some(I32U8),   Some(I32U16),  None,          None,          Some(U64F32),  Some(U64F64)], // u64
+            [Some(I32I8),   None,          None,          Some(I32I64),  None,          None,          None,          Some(I32I64),  Some(I32F32),  Some(I32F64),  Some(I32F80)], // u8
+            [Some(I32I8),   Some(I32I16),  None,          Some(I32I64),  Some(I32U8),   None,          None,          Some(I32I64),  Some(I32F32),  Some(I32F64),  Some(I32F80)], // u16
+            [Some(I32I8),   Some(I32I16),  None,          Some(U32I64),  Some(I32U8),   Some(I32U16),  None,          Some(U32I64),  Some(U32F32),  Some(U32F64),  Some(U32F80)], // u32
+            [Some(I32I8),   Some(I32I16),  None,          None,          Some(I32U8),   Some(I32U16),  None,          None,          Some(U64F32),  Some(U64F64),  Some(U64F80)], // u64
 
-            [Some(F32I8),   Some(F32I16),  Some(F32I32),  Some(F32I64),  Some(F32U8),   Some(F32U16),  Some(F32U32),  Some(F32U64),  None,          Some(F32F64)], // f32
-            [Some(F64I8),   Some(F64I16),  Some(F64I32),  Some(F64I64),  Some(F64U8),   Some(F64U16),  Some(F64U32),  Some(F64U64),  Some(F64F32),  None        ], // f64
+            [Some(F32I8),   Some(F32I16),  Some(F32I32),  Some(F32I64),  Some(F32U8),   Some(F32U16),  Some(F32U32),  Some(F32U64),  None,          Some(F32F64),  Some(F32F80)], // f32
+            [Some(F64I8),   Some(F64I16),  Some(F64I32),  Some(F64I64),  Some(F64U8),   Some(F64U16),  Some(F64U32),  Some(F64U64),  Some(F64F32),  None,          Some(F64F80)], // f64
+            [Some(F80I8),   Some(F80I16),  Some(F80I32),  Some(F80I64),  Some(F80U8),   Some(F80U16),  Some(F80U32),  Some(F80U64),  Some(F80F32),  Some(F80F64),  None        ], // f80
         ];
 
         let t1 = self.type_id(from);
@@ -1557,6 +1656,12 @@ impl Codegen {
                 self.emit_line("  ucomisd %xmm1, %xmm0");
                 return;
             }
+            Type::LDouble => {
+                self.emit_line("  fldz");
+                self.emit_line("  fucomip");
+                self.emit_line("  fstp %st(0)");
+                return;
+            }
             _ => {}
         }
 
@@ -1567,9 +1672,7 @@ impl Codegen {
         }
     }
 
-    fn load(&mut self, ty: Option<&crate::ast::Type>) {
-        use crate::ast::Type;
-
+    fn load(&mut self, ty: Option<&Type>) {
         if let Some(ty) = ty {
             match ty {
                 // If it is an array, struct, or union, do not attempt to load a value to the
@@ -1592,6 +1695,10 @@ impl Codegen {
                     self.emit_line("  movsd (%rax), %xmm0");
                     return;
                 }
+                Type::LDouble => {
+                    self.emit_line("  fldt (%rax)");
+                    return;
+                }
                 _ => {}
             }
 
@@ -1612,13 +1719,12 @@ impl Codegen {
                 }
                 4 => self.emit_line("  movslq (%rax), %rax"),
                 8 => self.emit_line("  mov (%rax), %rax"),
-                _ => unreachable!(),
+                _ => panic!("Cannot load type: {:?}", ty),
             }
         }
     }
 
-    fn store(&mut self, ty: Option<&crate::ast::Type>) {
-        use crate::ast::Type;
+    fn store(&mut self, ty: Option<&Type>) {
         self.pop("%rdi");
 
         // For struct/union, copy bytes one by one
@@ -1639,6 +1745,11 @@ impl Codegen {
                     self.emit_line("  movsd %xmm0, (%rdi)");
                     return;
                 }
+                Type::LDouble => {
+                    self.emit_line("  fstpt (%rdi)");
+                    self.emit_line("  fldt (%rdi)");
+                    return;
+                }
                 Type::Vla { .. } => {
                     // VLA variables are pointers, store as 8 bytes
                     self.emit_line("  mov %rax, (%rdi)");
@@ -1654,7 +1765,7 @@ impl Codegen {
                 2 => self.emit_line("  mov %ax, (%rdi)"),
                 4 => self.emit_line("  mov %eax, (%rdi)"),
                 8 => self.emit_line("  mov %rax, (%rdi)"),
-                _ => unreachable!(),
+                _ => panic!("Cannot store type: {:?}", ty),
             }
         }
     }
