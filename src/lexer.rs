@@ -114,9 +114,33 @@ fn remove_backslash_newline(input: &str) -> String {
     String::from_utf8(out).expect("line continuation removal")
 }
 
+fn canonicalize_newline(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'\r' {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+                i += 2;
+            } else {
+                i += 1;
+            }
+            out.push(b'\n');
+            continue;
+        }
+
+        out.push(bytes[i]);
+        i += 1;
+    }
+
+    String::from_utf8(out).expect("newline canonicalization")
+}
+
 pub fn tokenize_file(path: &Path) -> CompileResult<Vec<Token>> {
     let contents = fs::read_to_string(path)
         .map_err(|err| CompileError::new(format!("failed to read {}: {err}", path.display())))?;
+    let contents = canonicalize_newline(&contents);
     let contents = remove_backslash_newline(&contents);
     let file = register_file(path.to_path_buf(), contents);
     tokenize(&file.contents, file.file_no)
