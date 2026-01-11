@@ -202,6 +202,9 @@ int main() {
   ASSERT(7, ((int[10]){ [3]=7 })[3]);
   ASSERT(0, ((int[10]){ [3]=7 })[4]);
 
+  ASSERT(10, ({ char x[]={[10-3]=1,2,3}; sizeof(x); }));
+  ASSERT(20, ({ char x[][2]={[8][1]=1,2}; sizeof(x); }));
+
   printf("OK\n");
   return 0;
 }

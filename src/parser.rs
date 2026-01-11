@@ -3123,20 +3123,40 @@ impl<'a> Parser<'a> {
     /// Count the number of elements in an array initializer.
     /// This is used for flexible arrays to determine their length.
     fn count_array_init_elements(&mut self, base_ty: &Type) -> CompileResult<usize> {
-        let dummy = self.new_initializer(base_ty.clone(), false);
-        let mut count = 0;
+        let dummy = self.new_initializer(base_ty.clone(), true);
+        let mut first = true;
+        let mut idx = 0i64;
+        let mut max = 0i64;
 
         while !self.is_end() {
-            if count > 0 {
+            if !first {
                 self.expect_punct(Punct::Comma)?;
             }
-            // Parse (and discard) the initializer to advance position
-            let mut dummy_copy = dummy.clone();
-            self.parse_initializer2(&mut dummy_copy)?;
-            count += 1;
+            first = false;
+
+            if self.check_punct(Punct::LBracket) {
+                self.expect_punct(Punct::LBracket)?;
+                idx = self.const_expr()?;
+                if self.consume_punct(Punct::Ellipsis) {
+                    idx = self.const_expr()?;
+                }
+                self.expect_punct(Punct::RBracket)?;
+
+                let mut dummy_copy = dummy.clone();
+                self.designation(&mut dummy_copy)?;
+            } else {
+                // Parse (and discard) the initializer to advance position
+                let mut dummy_copy = dummy.clone();
+                self.parse_initializer2(&mut dummy_copy)?;
+            }
+
+            idx += 1;
+            if idx > max {
+                max = idx;
+            }
         }
 
-        Ok(count)
+        if max < 0 { Ok(0) } else { Ok(max as usize) }
     }
 
     /// Parse an array designator: "[" const-expr "]"
