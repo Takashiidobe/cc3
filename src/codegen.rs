@@ -1418,7 +1418,9 @@ impl Codegen {
                 // becomes not the value itself but the address.
                 // This is where "array is automatically converted to a pointer to
                 // the first element of the array in C" occurs.
+                // VLA is also treated as an aggregate - we want the pointer, not the value.
                 Type::Array { .. }
+                | Type::Vla { .. }
                 | Type::Struct { .. }
                 | Type::Union { .. }
                 | Type::Func { .. } => return,
@@ -1475,6 +1477,11 @@ impl Codegen {
                 }
                 Type::Double => {
                     self.emit_line("  movsd %xmm0, (%rdi)");
+                    return;
+                }
+                Type::Vla { .. } => {
+                    // VLA variables are pointers, store as 8 bytes
+                    self.emit_line("  mov %rax, (%rdi)");
                     return;
                 }
                 _ => {}

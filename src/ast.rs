@@ -12,7 +12,7 @@ pub struct Program {
     pub globals: Vec<Obj>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Member {
     pub name: String,
     pub ty: Type,
@@ -229,7 +229,7 @@ pub struct SwitchCase {
     pub label: String,
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
+#[derive(Default, Debug, Clone, PartialEq)]
 pub enum Type {
     #[default]
     Void,
@@ -269,6 +269,11 @@ pub enum Type {
         base: Box<Type>,
         len: i32,
     },
+    Vla {
+        base: Box<Type>,
+        len: Box<Expr>,
+        size_var: Option<usize>, // Index of local variable holding sizeof() value
+    },
 }
 
 impl Type {
@@ -289,13 +294,14 @@ impl Type {
     }
 
     pub fn is_array(&self) -> bool {
-        matches!(self, Type::Array { .. })
+        matches!(self, Type::Array { .. } | Type::Vla { .. })
     }
 
     pub fn base(&self) -> Option<&Type> {
         match self {
             Type::Ptr(base) => Some(base),
             Type::Array { base, .. } => Some(base),
+            Type::Vla { base, .. } => Some(base),
             _ => None,
         }
     }
@@ -360,6 +366,10 @@ impl Type {
                 }
                 base_size * (*len as i64)
             }
+            Type::Vla { .. } => {
+                // VLA size is computed at runtime
+                -1
+            }
         }
     }
 
@@ -400,6 +410,7 @@ impl Type {
                     .unwrap_or(1)
             }
             Type::Array { base, .. } => base.align(),
+            Type::Vla { base, .. } => base.align(),
         }
     }
 
@@ -416,6 +427,14 @@ impl Type {
         Type::Array {
             base: Box::new(base),
             len,
+        }
+    }
+
+    pub fn vla(base: Type, len: Expr) -> Type {
+        Type::Vla {
+            base: Box::new(base),
+            len: Box::new(len),
+            size_var: None,
         }
     }
 

@@ -40,6 +40,7 @@ struct Parser<'a> {
     break_depth: usize,
     loop_depth: usize,
     current_switch: Option<SwitchContext>,
+    builtin_alloca_idx: Option<usize>, // Index of the builtin alloca function in globals
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -132,6 +133,7 @@ impl<'a> Parser<'a> {
             params: vec![("size".to_string(), Type::Int)],
             is_variadic: false,
         };
+        let alloca_idx = self.globals.len();
         self.globals.push(Obj {
             name: "alloca".to_string(),
             ty: alloca_ty,
@@ -139,6 +141,7 @@ impl<'a> Parser<'a> {
             is_definition: false, // Declaration only
             ..Default::default()
         });
+        self.builtin_alloca_idx = Some(alloca_idx);
     }
 
     fn parse_program(&mut self) -> CompileResult<Program> {
@@ -863,6 +866,148 @@ impl<'a> Parser<'a> {
         Ok(self.stmt_at(StmtKind::Asm(asm_str), location))
     }
 
+    /// Generate code for computing a VLA size.
+    /// This returns an expression that computes and stores the VLA size in a local variable.
+    fn compute_vla_size(&mut self, ty: &mut Type, location: SourceLocation) -> CompileResult<Expr> {
+        // Start with a null expression
+        let mut node = self.expr_at(ExprKind::Null, location);
+
+        // Recursively compute VLA sizes for base types first
+        // This ensures inner dimensions have their size_var set before outer dimensions need them
+        match ty {
+            Type::Vla { base, .. } => {
+                let base_expr = self.compute_vla_size(base, location)?;
+                node = self.expr_at(
+                    ExprKind::Comma {
+                        lhs: Box::new(node),
+                        rhs: Box::new(base_expr),
+                    },
+                    location,
+                );
+            }
+            Type::Array { base, .. } => {
+                let base_expr = self.compute_vla_size(base, location)?;
+                node = self.expr_at(
+                    ExprKind::Comma {
+                        lhs: Box::new(node),
+                        rhs: Box::new(base_expr),
+                    },
+                    location,
+                );
+            }
+            Type::Ptr(base) => {
+                let base_expr = self.compute_vla_size(base, location)?;
+                node = self.expr_at(
+                    ExprKind::Comma {
+                        lhs: Box::new(node),
+                        rhs: Box::new(base_expr),
+                    },
+                    location,
+                );
+            }
+            _ => {}
+        }
+
+        // Now compute this VLA's size if it is a VLA
+        if let Type::Vla {
+            base,
+            len,
+            size_var,
+        } = ty
+        {
+            // Determine base size - at this point, if base is VLA, it has its size_var set
+            let base_sz = if let Type::Vla {
+                size_var: Some(idx),
+                ..
+            } = **base
+            {
+                self.expr_at(
+                    ExprKind::Var {
+                        idx,
+                        is_local: true,
+                    },
+                    location,
+                )
+            } else {
+                // Otherwise, use compile-time size
+                self.expr_at(
+                    ExprKind::Num {
+                        value: base.size(),
+                        fval: 0.0,
+                    },
+                    location,
+                )
+            };
+
+            // Create a local variable to hold the VLA size
+            let idx = self.new_lvar("".to_string(), Type::ULong);
+            *size_var = Some(idx);
+
+            // Create expression: size_var = vla_len * base_sz
+            let mul_expr = self.expr_at(
+                ExprKind::Binary {
+                    op: BinaryOp::Mul,
+                    lhs: Box::new(*len.clone()),
+                    rhs: Box::new(base_sz),
+                },
+                location,
+            );
+
+            let assign_expr = self.expr_at(
+                ExprKind::Assign {
+                    lhs: Box::new(self.expr_at(
+                        ExprKind::Var {
+                            idx,
+                            is_local: true,
+                        },
+                        location,
+                    )),
+                    rhs: Box::new(mul_expr),
+                },
+                location,
+            );
+
+            node = self.expr_at(
+                ExprKind::Comma {
+                    lhs: Box::new(node),
+                    rhs: Box::new(assign_expr),
+                },
+                location,
+            );
+        }
+
+        Ok(node)
+    }
+
+    /// Create an expression that calls alloca(sz).
+    fn new_alloca(&self, sz: Expr, location: SourceLocation) -> CompileResult<Expr> {
+        let alloca_idx = self
+            .builtin_alloca_idx
+            .ok_or_else(|| CompileError::at("alloca not declared", location))?;
+
+        let alloca_ty = self.globals[alloca_idx].ty.clone();
+        if !matches!(&alloca_ty, Type::Func { .. }) {
+            return Err(CompileError::at("alloca is not a function", location));
+        }
+
+        let callee = self.expr_at(
+            ExprKind::Var {
+                idx: alloca_idx,
+                is_local: false,
+            },
+            location,
+        );
+
+        Ok(self.expr_at(
+            ExprKind::Call {
+                callee: Box::new(callee),
+                args: vec![sz],
+                ret_buffer: None,
+            },
+            location,
+        ))
+    }
+
     fn parse_declaration(&mut self, basety: Type, attr: &VarAttr) -> CompileResult<Stmt> {
         let location = self.peek().location;
 
@@ -875,13 +1020,65 @@ impl<'a> Parser<'a> {
             }
             first = false;
 
-            let (ty, name_token) = self.parse_declarator(basety.clone())?;
+            let (mut ty, name_token) = self.parse_declarator(basety.clone())?;
             let name = match name_token.kind {
                 TokenKind::Ident(name) => name,
                 _ => self.bail_at(name_token.location, "variable name omitted")?,
             };
             if ty == Type::Void {
                 self.bail_at(name_token.location, "variable declared void")?;
+            }
+
+            // Generate code for computing a VLA size. We need to do this
+            // even if ty is not VLA because ty may be a pointer to VLA
+            // (e.g. int (*foo)[n][m] where n and m are variables.)
+            let vla_size_expr = self.compute_vla_size(&mut ty, name_token.location)?;
+            stmts.push(self.stmt_at(StmtKind::Expr(vla_size_expr), name_token.location));
+
+            // Handle VLA declarations
+            if matches!(ty, Type::Vla { .. }) {
+                if self.check_punct(Punct::Assign) {
+                    return self.bail_here("variable-sized object may not be initialized");
+                }
+
+                // Variable length arrays (VLAs) are translated to alloca() calls.
+                // For example, `int x[n+2]` is translated to `tmp = n + 2,
+                // x = alloca(tmp)`.
+                let Type::Vla { size_var, .. } = &ty else {
+                    unreachable!();
+                };
+                let Some(size_idx) = size_var else {
+                    return self.bail_at(name_token.location, "VLA has no size variable");
+                };
+
+                let idx = self.new_lvar(name, ty.clone());
+                let alloca_call = self.new_alloca(
+                    self.expr_at(
+                        ExprKind::Var {
+                            idx: *size_idx,
+                            is_local: true,
+                        },
+                        name_token.location,
+                    ),
+                    name_token.location,
+                )?;
+
+                let assign_expr = self.expr_at(
+                    ExprKind::Assign {
+                        lhs: Box::new(self.expr_at(
+                            ExprKind::Var {
+                                idx,
+                                is_local: true,
+                            },
+                            name_token.location,
+                        )),
+                        rhs: Box::new(alloca_call),
+                    },
+                    name_token.location,
+                );
+
+                stmts.push(self.stmt_at(StmtKind::Expr(assign_expr), name_token.location));
+                continue;
             }
 
             // Handle static local variables
@@ -1375,19 +1572,26 @@ impl<'a> Parser<'a> {
             || self.consume_keyword(Keyword::Const)
         {}
 
-        let len = if self.consume_punct(Punct::RBracket) {
-            -1
-        } else {
-            let len = self.const_expr()? as i32;
-            self.expect_punct(Punct::RBracket)?;
-            len
-        };
+        if self.consume_punct(Punct::RBracket) {
+            // Empty brackets: flexible array
+            let ty = self.parse_type_suffix(ty)?;
+            return Ok(Type::array(ty, -1));
+        }
+
+        // Parse the array size expression
+        let mut expr = self.parse_conditional()?;
+        self.expect_punct(Punct::RBracket)?;
 
         // Recursively parse remaining suffixes (could be more arrays or functions)
         let ty = self.parse_type_suffix(ty)?;
 
-        // Build array type with the result
-        Ok(Type::array(ty, len))
+        // Check if this should be a VLA
+        if matches!(ty, Type::Vla { .. }) || !self.is_const_expr(&mut expr)? {
+            return Ok(Type::vla(ty, expr));
+        }
+
+        // Build array type with the constant result
+        Ok(Type::array(ty, self.eval(&mut expr)? as i32))
     }
 
     fn parse_expr_stmt(&mut self) -> CompileResult<Stmt> {
@@ -2256,13 +2460,45 @@ impl<'a> Parser<'a> {
                     self.expect_punct(Punct::LParen)?;
                     let ty = self.parse_typename()?;
                     self.expect_punct(Punct::RParen)?;
+                    // Check if VLA
+                    if let Type::Vla {
+                        size_var: Some(idx),
+                        ..
+                    } = ty
+                    {
+                        return Ok(self.expr_at(
+                            ExprKind::Var {
+                                idx,
+                                is_local: true,
+                            },
+                            location,
+                        ));
+                    }
                     return Ok(self.new_ulong_expr(ty.size(), location));
                 }
 
                 self.pos += 1;
                 let mut expr = self.parse_unary()?;
                 self.add_type_expr(&mut expr)?;
-                let size = expr.ty.as_ref().map(|ty| ty.size()).unwrap_or(8);
+                let ty = expr
+                    .ty
+                    .as_ref()
+                    .ok_or_else(|| CompileError::at("expression has no type", location))?;
+                // Check if VLA
+                if let Type::Vla {
+                    size_var: Some(idx),
+                    ..
+                } = ty
+                {
+                    return Ok(self.expr_at(
+                        ExprKind::Var {
+                            idx: *idx,
+                            is_local: true,
+                        },
+                        location,
+                    ));
+                }
+                let size = ty.size();
                 Ok(self.new_ulong_expr(size, location))
             }
             TokenKind::Keyword(Keyword::Alignof) => {
@@ -4403,8 +4639,8 @@ impl<'a> Parser<'a> {
                 self.add_type_expr(lhs)?;
                 self.add_type_expr(rhs)?;
                 let lhs_ty = lhs.ty.clone().unwrap_or(Type::Int);
-                // Arrays are not assignable
-                if lhs_ty.is_array() {
+                // Arrays are not assignable (but VLAs are, since they're pointers)
+                if matches!(lhs_ty, Type::Array { .. }) {
                     self.bail_at(lhs.location, "not an lvalue")?
                 }
                 if !matches!(lhs_ty, Type::Struct { .. }) {
@@ -4687,6 +4923,52 @@ impl<'a> Parser<'a> {
             }
             _ => self.bail_at(expr.location, "invalid initializer"),
         }
+    }
+
+    /// Check if an expression can be evaluated at compile-time.
+    fn is_const_expr(&mut self, expr: &mut Expr) -> CompileResult<bool> {
+        self.add_type_expr(expr)?;
+
+        Ok(match &expr.kind {
+            ExprKind::Binary { op, lhs, rhs } => {
+                matches!(
+                    op,
+                    BinaryOp::Add
+                        | BinaryOp::Sub
+                        | BinaryOp::Mul
+                        | BinaryOp::Div
+                        | BinaryOp::BitAnd
+                        | BinaryOp::BitOr
+                        | BinaryOp::BitXor
+                        | BinaryOp::Shl
+                        | BinaryOp::Shr
+                        | BinaryOp::Eq
+                        | BinaryOp::Ne
+                        | BinaryOp::Lt
+                        | BinaryOp::Le
+                        | BinaryOp::LogAnd
+                        | BinaryOp::LogOr
+                ) && self.is_const_expr(&mut lhs.clone())?
+                    && self.is_const_expr(&mut rhs.clone())?
+            }
+            ExprKind::Cond { cond, then, els } => {
+                let mut cond_clone = *cond.clone();
+                if !self.is_const_expr(&mut cond_clone)? {
+                    return Ok(false);
+                }
+                let cond_val = self.eval(&mut cond_clone)?;
+                let chosen = if cond_val != 0 { then } else { els };
+                self.is_const_expr(&mut chosen.clone())?
+            }
+            ExprKind::Comma { rhs, .. } => self.is_const_expr(&mut rhs.clone())?,
+            ExprKind::Unary { op, expr } => {
+                matches!(op, UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitNot)
+                    && self.is_const_expr(&mut expr.clone())?
+            }
+            ExprKind::Cast { expr, .. } => self.is_const_expr(&mut expr.clone())?,
+            ExprKind::Num { .. } => true,
+            _ => false,
+        })
     }
 
     /// Parse and evaluate a constant expression.

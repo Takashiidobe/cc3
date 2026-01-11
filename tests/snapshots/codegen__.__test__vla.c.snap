@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "({ int n=5; int x[n]; sizeof(x); }) => 20\n({ int m=5, n=8; int x[m+1][n*2]; sizeof(x); }) => 384\n({ char n=10; int (*x)[n][n+2]; sizeof(x); }) => 8\n({ char n=10; int (*x)[n][n+2]; sizeof(*x); }) => 480\n({ char n=10; int (*x)[n][n+2]; sizeof(**x); }) => 48\n({ char n=10; int (*x)[n][n+2]; sizeof(***x); }) => 4\n({ char n=3; int x[5][n]; sizeof(x); }) => 60\n({ char n=3; int x[5][n]; sizeof(*x); }) => 12\n({ char n=3; int x[n][5]; sizeof(x); }) => 60\n({ char n=3; int x[n][5]; sizeof(*x); }) => 20\nOK\n"
+status: 0
