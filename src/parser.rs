@@ -3005,11 +3005,24 @@ impl<'a> Parser<'a> {
     /// Initialize a char array with a string literal.
     /// For example: char x[4] = "abc";
     fn string_initializer(&mut self, init: &mut Initializer, str_bytes: &[u8]) {
+        let base = match &init.ty {
+            Type::Array { base, .. } => base.clone(),
+            _ => return,
+        };
+        let base_size = base.size() as usize;
+        if base_size == 0 {
+            return;
+        }
+
+        let string_len = match base_size {
+            1 => str_bytes.len(),
+            2 => str_bytes.len() / 2,
+            _ => return,
+        };
+
         // If this is a flexible array (e.g., char x[] = "abc"), determine the length from the string
-        if init.is_flexible
-            && let Type::Array { base, .. } = &init.ty
-        {
-            let new_ty = Type::array(*base.clone(), str_bytes.len() as i32);
+        if init.is_flexible {
+            let new_ty = Type::array(*base.clone(), string_len as i32);
             *init = self.new_initializer(new_ty, false);
         }
 
@@ -3023,23 +3036,50 @@ impl<'a> Parser<'a> {
             return;
         };
 
-        let len = array_len.min(str_bytes.len());
-
+        let len = array_len.min(string_len);
         let file_no = self.last_location().file_no;
-        (0..len).for_each(|i| {
-            init.children[i].expr = Some(self.expr_at(
-                ExprKind::Num {
-                    value: str_bytes[i] as i64,
-                    fval: 0.0,
-                },
-                SourceLocation {
-                    line: 0,
-                    column: 0,
-                    byte: 0,
-                    file_no,
-                },
-            ));
-        });
+
+        match base_size {
+            1 => {
+                (0..len).for_each(|i| {
+                    init.children[i].expr = Some(self.expr_at(
+                        ExprKind::Num {
+                            value: str_bytes[i] as i64,
+                            fval: 0.0,
+                        },
+                        SourceLocation {
+                            line: 0,
+                            column: 0,
+                            byte: 0,
+                            file_no,
+                        },
+                    ));
+                });
+            }
+            2 => {
+                (0..len).for_each(|i| {
+                    let offset = i * 2;
+                    let value = u16::from_le_bytes(
+                        str_bytes[offset..offset + 2]
+                            .try_into()
+                            .expect("utf-16 string initializer"),
+                    );
+                    init.children[i].expr = Some(self.expr_at(
+                        ExprKind::Num {
+                            value: value as i64,
+                            fval: 0.0,
+                        },
+                        SourceLocation {
+                            line: 0,
+                            column: 0,
+                            byte: 0,
+                            file_no,
+                        },
+                    ));
+                });
+            }
+            _ => {}
+        }
     }
 
     /// Skip an excess initializer element (one that exceeds the array size).
