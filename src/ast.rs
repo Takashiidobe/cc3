@@ -280,6 +280,7 @@ pub enum Type {
     LDouble,
     Enum,
     Ptr(Box<Type>),
+    Atomic(Box<Type>),
     Func {
         return_ty: Box<Type>,
         params: Vec<(String, Type)>,
@@ -334,10 +335,15 @@ impl Type {
     pub fn base(&self) -> Option<&Type> {
         match self {
             Type::Ptr(base) => Some(base),
+            Type::Atomic(base) => Some(base),
             Type::Array { base, .. } => Some(base),
             Type::Vla { base, .. } => Some(base),
             _ => None,
         }
+    }
+
+    pub fn is_atomic(&self) -> bool {
+        matches!(self, Type::Atomic(_))
     }
 
     pub fn size(&self) -> i64 {
@@ -405,6 +411,7 @@ impl Type {
                 // VLA size is computed at runtime
                 -1
             }
+            Type::Atomic(base) => base.size(),
         }
     }
 
@@ -447,6 +454,7 @@ impl Type {
             }
             Type::Array { base, .. } => base.align(),
             Type::Vla { base, .. } => base.align(),
+            Type::Atomic(base) => base.align(),
         }
     }
 

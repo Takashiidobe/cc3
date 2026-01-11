@@ -207,6 +207,7 @@ impl<'a> Parser<'a> {
         let mut ty = Type::Int;
         let mut counter = 0i32;
         let mut saw_typename = false;
+        let mut is_atomic_qualifier = false;
 
         while self.is_typename() {
             saw_typename = true;
@@ -272,6 +273,21 @@ impl<'a> Parser<'a> {
                     self.expect_punct(Punct::RParen)?;
                 } else {
                     self.bail_here("_Alignas is not allowed in this context")?;
+                }
+                continue;
+            }
+
+            // Handle _Atomic
+            if self.consume_keyword(Keyword::Atomic) {
+                if self.consume_punct(Punct::LParen) {
+                    // _Atomic(type) form
+                    ty = self.parse_typename()?;
+                    ty = Type::Atomic(Box::new(ty));
+                    self.expect_punct(Punct::RParen)?;
+                    counter += OTHER;
+                } else {
+                    // _Atomic as a type qualifier (will be handled below at the end)
+                    is_atomic_qualifier = true;
                 }
                 continue;
             }
@@ -359,6 +375,10 @@ impl<'a> Parser<'a> {
             self.bail_here("typename expected")?;
         }
 
+        if is_atomic_qualifier {
+            ty = Type::Atomic(Box::new(ty));
+        }
+
         Ok(ty)
     }
 
@@ -394,7 +414,8 @@ impl<'a> Parser<'a> {
                 | Keyword::Noreturn
                 | Keyword::Typeof
                 | Keyword::Inline
-                | Keyword::ThreadLocal,
+                | Keyword::ThreadLocal
+                | Keyword::Atomic,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
