@@ -128,7 +128,6 @@ impl Codegen {
                 } else {
                     obj.align
                 };
-                self.emit_line(&format!("  .align {}", align));
 
                 if get_opt_fcommon() && obj.is_tentative {
                     self.emit_line(&format!("  .comm {}, {}, {}", symbol, obj.ty.size(), align));
@@ -143,6 +142,15 @@ impl Codegen {
                 } else {
                     self.emit_line("  .data");
                 }
+
+                let align = if matches!(obj.ty, Type::Array { .. }) && obj.ty.size() >= 16 {
+                    obj.align.max(16)
+                } else {
+                    obj.align
+                };
+                self.emit_line(&format!("  .type {}, @object", symbol));
+                self.emit_line(&format!("  .size {}, {}", symbol, obj.ty.size()));
+                self.emit_line(&format!("  .align {}", align));
                 self.emit_line(&format!("{}:", symbol));
 
                 let mut pos = 0;
@@ -181,6 +189,12 @@ impl Codegen {
             } else {
                 self.emit_line("  .bss");
             }
+            let align = if matches!(obj.ty, Type::Array { .. }) && obj.ty.size() >= 16 {
+                obj.align.max(16)
+            } else {
+                obj.align
+            };
+            self.emit_line(&format!("  .align {}", align));
             self.emit_line(&format!("{}:", symbol));
             self.emit_line(&format!("  .zero {}", obj.ty.size()));
         }
@@ -235,6 +249,7 @@ impl Codegen {
             self.emit_line(&format!("  .globl {}", symbol));
         }
         self.emit_line("  .text");
+        self.emit_line(&format!("  .type {}, @function", symbol));
         self.emit_line(&format!("{}:", symbol));
         self.emit_line("  push %rbp");
         self.emit_line("  mov %rsp, %rbp");
