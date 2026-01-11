@@ -971,7 +971,8 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 byte: start,
                 file_no,
             };
-            let mut token = read_utf32_string_literal(bytes, start, start + 1, location)?;
+            let mut token =
+                read_utf32_string_literal(bytes, start, start + 1, location, Type::UInt)?;
             token.at_bol = at_bol;
             token.has_space = has_space;
             let len = token.len;
@@ -992,6 +993,27 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 file_no,
             };
             let mut token = read_string_literal(bytes, start, start + 2, location)?;
+            token.at_bol = at_bol;
+            token.has_space = has_space;
+            let len = token.len;
+            tokens.push(token);
+            at_bol = false;
+            has_space = false;
+            i += len;
+            column += len;
+            continue;
+        }
+
+        if b == b'L' && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+            let start = i;
+            let location = SourceLocation {
+                line,
+                column,
+                byte: start,
+                file_no,
+            };
+            let mut token =
+                read_utf32_string_literal(bytes, start, start + 1, location, Type::Int)?;
             token.at_bol = at_bol;
             token.has_space = has_space;
             let len = token.len;
@@ -1290,6 +1312,7 @@ fn read_utf32_string_literal(
     start: usize,
     quote: usize,
     location: SourceLocation,
+    base: Type,
 ) -> CompileResult<Token> {
     let end = string_literal_end(input, quote + 1, location)?;
     let mut buf = Vec::with_capacity((end - quote + 1) * 4);
@@ -1309,7 +1332,7 @@ fn read_utf32_string_literal(
     }
     buf.extend_from_slice(&0u32.to_le_bytes());
     let ty = Type::Array {
-        base: Box::new(Type::UInt),
+        base: Box::new(base),
         len: (buf.len() / 4) as i32,
     };
     Ok(Token {
