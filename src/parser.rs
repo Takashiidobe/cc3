@@ -3017,6 +3017,7 @@ impl<'a> Parser<'a> {
         let string_len = match base_size {
             1 => str_bytes.len(),
             2 => str_bytes.len() / 2,
+            4 => str_bytes.len() / 4,
             _ => return,
         };
 
@@ -3063,6 +3064,28 @@ impl<'a> Parser<'a> {
                         str_bytes[offset..offset + 2]
                             .try_into()
                             .expect("utf-16 string initializer"),
+                    );
+                    init.children[i].expr = Some(self.expr_at(
+                        ExprKind::Num {
+                            value: value as i64,
+                            fval: 0.0,
+                        },
+                        SourceLocation {
+                            line: 0,
+                            column: 0,
+                            byte: 0,
+                            file_no,
+                        },
+                    ));
+                });
+            }
+            4 => {
+                (0..len).for_each(|i| {
+                    let offset = i * 4;
+                    let value = u32::from_le_bytes(
+                        str_bytes[offset..offset + 4]
+                            .try_into()
+                            .expect("utf-32 string initializer"),
                     );
                     init.children[i].expr = Some(self.expr_at(
                         ExprKind::Num {
