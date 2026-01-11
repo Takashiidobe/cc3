@@ -495,15 +495,15 @@ fn format_diagnostic(err: &CompileError, path: &std::path::Path) -> String {
         return header;
     };
 
-    let (source_path, source) = if let Some(file) = lexer::get_input_file(location.file_no) {
-        (file.name, file.contents)
+    let (source_name, source) = if let Some(file) = lexer::get_input_file(location.file_no) {
+        (file.display_name, file.contents)
     } else {
         (
-            path.to_path_buf(),
+            path.display().to_string(),
             fs::read_to_string(path).unwrap_or_default(),
         )
     };
-    let line_text = source.lines().nth(location.line.saturating_sub(1));
+    let line_text = line_at_byte(&source, location.byte);
     let width = location.line.to_string().len().max(3);
 
     let mut out = String::new();
@@ -511,9 +511,7 @@ fn format_diagnostic(err: &CompileError, path: &std::path::Path) -> String {
     out.push('\n');
     out.push_str(&format!(
         "  --> {}:{}:{}\n",
-        source_path.display(),
-        location.line,
-        location.column
+        source_name, location.line, location.column
     ));
     out.push_str(&format!("{:>width$} |\n", "", width = width));
 
@@ -536,4 +534,23 @@ fn format_diagnostic(err: &CompileError, path: &std::path::Path) -> String {
     }
 
     out
+}
+
+fn line_at_byte(contents: &str, byte: usize) -> Option<&str> {
+    if contents.is_empty() {
+        return None;
+    }
+    let bytes = contents.as_bytes();
+    let pos = byte.min(bytes.len());
+    let start = bytes[..pos]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let end = bytes[pos..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map(|idx| pos + idx)
+        .unwrap_or(bytes.len());
+    Some(&contents[start..end])
 }

@@ -10,6 +10,8 @@ pub struct File {
     pub name: PathBuf,
     pub file_no: usize,
     pub contents: String,
+    pub display_name: String,
+    pub line_delta: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -68,13 +70,30 @@ pub fn get_input_file(file_no: usize) -> Option<File> {
         .and_then(|files| files.get(file_no - 1).cloned())
 }
 
+pub fn set_line_marker(file_no: usize, line_delta: i32, display_name: Option<String>) {
+    if file_no == 0 {
+        return;
+    }
+    if let Ok(mut files) = input_files().lock()
+        && let Some(file) = files.get_mut(file_no - 1)
+    {
+        file.line_delta = line_delta;
+        if let Some(name) = display_name {
+            file.display_name = name;
+        }
+    }
+}
+
 fn register_file(path: PathBuf, contents: String) -> File {
     let mut files = input_files().lock().expect("input files lock poisoned");
     let file_no = files.len() + 1;
+    let display_name = path.to_string_lossy().into_owned();
     let file = File {
         name: path,
         file_no,
         contents,
+        display_name,
+        line_delta: 0,
     };
     files.push(file.clone());
     file
@@ -578,6 +597,7 @@ pub struct Token {
     pub len: usize,
     pub hideset: HideSet,               // For macro expansion
     pub origin: Option<SourceLocation>, // Macro expansion origin
+    pub line_delta: i32,
 }
 
 impl Token {
@@ -868,6 +888,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 len: i - start,
                 hideset: HideSet::default(),
                 origin: None,
+                line_delta: 0,
             });
             at_bol = false;
             has_space = false;
@@ -896,6 +917,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 len: end - start,
                 hideset: HideSet::default(),
                 origin: None,
+                line_delta: 0,
             });
             at_bol = false;
             has_space = false;
@@ -926,6 +948,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 len: end - start,
                 hideset: HideSet::default(),
                 origin: None,
+                line_delta: 0,
             });
             at_bol = false;
             has_space = false;
@@ -955,6 +978,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 len: end - start,
                 hideset: HideSet::default(),
                 origin: None,
+                line_delta: 0,
             });
             at_bol = false;
             has_space = false;
@@ -1084,6 +1108,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                     len: ident_len,
                     hideset: HideSet::default(),
                     origin: None,
+                    line_delta: 0,
                 });
                 at_bol = false;
                 has_space = false;
@@ -1115,6 +1140,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 len: end - start,
                 hideset: HideSet::default(),
                 origin: None,
+                line_delta: 0,
             });
             at_bol = false;
             has_space = false;
@@ -1137,6 +1163,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 len,
                 hideset: HideSet::default(),
                 origin: None,
+                line_delta: 0,
             });
             at_bol = false;
             has_space = false;
@@ -1169,6 +1196,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
         len: 0,
         hideset: HideSet::default(),
         origin: None,
+        line_delta: 0,
     });
 
     Ok(tokens)
@@ -1292,6 +1320,7 @@ fn read_string_literal(
         len: end + 1 - start,
         hideset: HideSet::default(),
         origin: None,
+        line_delta: 0,
     })
 }
 
@@ -1343,6 +1372,7 @@ fn read_utf16_string_literal(
         len: end + 1 - start,
         hideset: HideSet::default(),
         origin: None,
+        line_delta: 0,
     })
 }
 
@@ -1382,6 +1412,7 @@ fn read_utf32_string_literal(
         len: end + 1 - start,
         hideset: HideSet::default(),
         origin: None,
+        line_delta: 0,
     })
 }
 

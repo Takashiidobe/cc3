@@ -524,6 +524,48 @@ impl Preprocessor {
         out
     }
 
+    fn read_line_marker(&mut self, start: &Token) -> CompileResult<()> {
+        let line_tokens = self.copy_line();
+        let mut tokens = self.expand_macros_only(line_tokens)?;
+        convert_pp_tokens(&mut tokens)?;
+
+        let first = tokens
+            .first()
+            .ok_or_else(|| CompileError::new("invalid line marker"))?;
+        let (value, ty) = match &first.kind {
+            TokenKind::Num { value, ty, .. } => (*value, ty),
+            _ => {
+                return self.error("invalid line marker", first.location);
+            }
+        };
+        if *ty != Type::Int {
+            return self.error("invalid line marker", first.location);
+        }
+
+        let line_delta = value - start.location.line as i64;
+        let mut display_name = None;
+
+        if let Some(tok) = tokens.get(1) {
+            if matches!(tok.kind, TokenKind::Eof) {
+                crate::lexer::set_line_marker(
+                    start.location.file_no,
+                    line_delta as i32,
+                    display_name,
+                );
+                return Ok(());
+            }
+
+            if matches!(tok.kind, TokenKind::Str { .. }) {
+                display_name = Some(raw_string_literal(tok));
+            } else {
+                return self.error("filename expected", tok.location);
+            }
+        }
+
+        crate::lexer::set_line_marker(start.location.file_no, line_delta as i32, display_name);
+        Ok(())
+    }
+
     fn read_const_expr(&mut self) -> CompileResult<Vec<Token>> {
         let tokens = self.copy_line();
         let mut out = Vec::new();
@@ -783,20 +825,24 @@ fn new_str_token_value(value: &str, tmpl: &Token, location: SourceLocation) -> T
         len: tmpl.len,
         hideset: tmpl.hideset.clone(),
         origin: tmpl.origin,
+        line_delta: tmpl.line_delta,
     }
 }
 
 fn file_macro(tok: &Token) -> CompileResult<Token> {
     let origin = origin_location(tok);
     let filename = get_input_file(origin.file_no)
-        .map(|file| file.name.to_string_lossy().into_owned())
+        .map(|file| file.display_name)
         .unwrap_or_default();
     Ok(new_str_token_value(&filename, tok, origin))
 }
 
 fn line_macro(tok: &Token) -> CompileResult<Token> {
     let origin = origin_location(tok);
-    let mut out = new_num_token(origin.line as i64, tok);
+    let line_delta = get_input_file(origin.file_no)
+        .map(|file| file.line_delta)
+        .unwrap_or(0);
+    let mut out = new_num_token(origin.line as i64 + line_delta as i64, tok);
     out.location = origin;
     Ok(out)
 }
@@ -818,25 +864,40 @@ fn warn_tok(tok: &Token, message: &str) {
         return;
     };
 
-    let line_text = file
-        .contents
-        .lines()
-        .nth(tok.location.line.saturating_sub(1));
-    let width = tok.location.line.to_string().len().max(3);
+    let display_line = (tok.location.line as i64 + tok.line_delta as i64).max(1) as usize;
+    let line_text = line_at_byte(&file.contents, tok.location.byte);
+    let width = display_line.to_string().len().max(3);
 
     eprintln!(
         "  --> {}:{}:{}",
-        file.name.display(),
-        tok.location.line,
-        tok.location.column
+        file.display_name, display_line, tok.location.column
     );
     eprintln!("{:>width$} |", "", width = width);
     if let Some(text) = line_text {
-        eprintln!("{:>width$} | {}", tok.location.line, text, width = width);
+        eprintln!("{:>width$} | {}", display_line, text, width = width);
         let caret_width = crate::lexer::display_width(text, tok.location.column.saturating_sub(1));
         let caret_pad = " ".repeat(caret_width);
         eprintln!("{:>width$} | {}^", "", caret_pad, width = width);
     }
+}
+
+fn line_at_byte(contents: &str, byte: usize) -> Option<&str> {
+    if contents.is_empty() {
+        return None;
+    }
+    let bytes = contents.as_bytes();
+    let pos = byte.min(bytes.len());
+    let start = bytes[..pos]
+        .iter()
+        .rposition(|&b| b == b'\n')
+        .map(|idx| idx + 1)
+        .unwrap_or(0);
+    let end = bytes[pos..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map(|idx| pos + idx)
+        .unwrap_or(bytes.len());
+    Some(&contents[start..end])
 }
 
 fn join_adjacent_string_literals(tokens: &mut Vec<Token>) -> CompileResult<()> {
@@ -917,6 +978,7 @@ fn join_adjacent_string_literals(tokens: &mut Vec<Token>) -> CompileResult<()> {
                         len: converted.len,
                         hideset: tok.hideset.clone(),
                         origin: tok.origin,
+                        line_delta: tok.line_delta,
                     };
                 }
             }
@@ -970,6 +1032,7 @@ fn join_adjacent_string_literals(tokens: &mut Vec<Token>) -> CompileResult<()> {
         let has_space = tokens[i].has_space;
         let hideset = tokens[i].hideset.clone();
         let origin = tokens[i].origin;
+        let line_delta = tokens[i].line_delta;
         tokens[i] = Token {
             kind: TokenKind::Str {
                 bytes: combined,
@@ -981,6 +1044,7 @@ fn join_adjacent_string_literals(tokens: &mut Vec<Token>) -> CompileResult<()> {
             len: 0,
             hideset,
             origin,
+            line_delta,
         };
         tokens.drain(i + 1..j);
         i += 1;
@@ -995,6 +1059,9 @@ impl Preprocessor {
         let mut cond_incl = vec![];
 
         while self.pos < self.tokens.len() {
+            if let Some(file) = get_input_file(self.cur_tok().location.file_no) {
+                self.tokens[self.pos].line_delta = file.line_delta;
+            }
             // Try to expand macros
             if let Some(expanded) = self.expand_macro()? {
                 self.tokens = expanded;
@@ -1007,7 +1074,11 @@ impl Preprocessor {
             }
 
             if !is_hash(tok) {
-                out.push(tok.clone());
+                let mut tok = tok.clone();
+                if let Some(file) = get_input_file(tok.location.file_no) {
+                    tok.line_delta = file.line_delta;
+                }
+                out.push(tok);
                 self.pos += 1;
                 continue;
             }
@@ -1168,6 +1239,14 @@ impl Preprocessor {
                 cond_incl.pop();
                 self.pos += 1;
                 self.skip_line();
+                continue;
+            }
+
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
+                && name == "line"
+            {
+                self.pos += 1;
+                self.read_line_marker(&start)?;
                 continue;
             }
 
@@ -1578,5 +1657,11 @@ pub fn preprocess(
     let mut tokens = preprocessor.preprocess_tokens()?;
     convert_pp_tokens(&mut tokens)?;
     join_adjacent_string_literals(&mut tokens)?;
+    for tok in &mut tokens {
+        if tok.line_delta != 0 {
+            let line = tok.location.line as i64 + tok.line_delta as i64;
+            tok.location.line = line.max(1) as usize;
+        }
+    }
     Ok(tokens)
 }

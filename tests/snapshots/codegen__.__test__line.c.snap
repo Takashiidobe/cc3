@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "__LINE__ => 501\nstrcmp(__FILE__, \"foo\") => 0\n__LINE__ => 801\nstrcmp(__FILE__, \"bar\") => 0\n__LINE__ => 2\nOK\n"
+status: 0
