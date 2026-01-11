@@ -308,7 +308,7 @@ impl Type {
             Type::Double => 8,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
-            Type::Func { .. } => 8,
+            Type::Func { .. } => 1,
             Type::Struct {
                 members,
                 is_incomplete,
@@ -371,7 +371,7 @@ impl Type {
             Type::Double => 8,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
-            Type::Func { .. } => 8,
+            Type::Func { .. } => 1,
             Type::Struct {
                 members,
                 is_incomplete,
