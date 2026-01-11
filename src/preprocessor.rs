@@ -83,6 +83,7 @@ struct Preprocessor {
 
 static INCLUDE_PATHS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
 static INCLUDE_CACHE: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
+static INCLUDE_GUARDS: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
 
 fn include_paths_storage() -> &'static Mutex<Vec<PathBuf>> {
     INCLUDE_PATHS.get_or_init(|| Mutex::new(Vec::new()))
@@ -90,6 +91,10 @@ fn include_paths_storage() -> &'static Mutex<Vec<PathBuf>> {
 
 fn include_cache() -> &'static Mutex<HashMap<String, PathBuf>> {
     INCLUDE_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn include_guard_cache() -> &'static Mutex<HashMap<PathBuf, String>> {
+    INCLUDE_GUARDS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub fn set_include_paths(paths: Vec<PathBuf>) {
@@ -827,6 +832,100 @@ fn is_hash(tok: &Token) -> bool {
     tok.at_bol && matches!(tok.kind, TokenKind::Punct(Punct::Hash))
 }
 
+fn detect_include_guard(tokens: &[Token]) -> Option<String> {
+    let mut idx = 0;
+    if tokens.len() < 4 {
+        return None;
+    }
+    if !is_hash(&tokens[idx]) {
+        return None;
+    }
+    let TokenKind::Ident(ifndef_name) = &tokens[idx + 1].kind else {
+        return None;
+    };
+    if ifndef_name != "ifndef" {
+        return None;
+    }
+    let TokenKind::Ident(macro_name) = &tokens[idx + 2].kind else {
+        return None;
+    };
+    let macro_name = macro_name.clone();
+    idx += 3;
+
+    if idx + 2 >= tokens.len() {
+        return None;
+    }
+    if !is_hash(&tokens[idx]) {
+        return None;
+    }
+    let TokenKind::Ident(define_name) = &tokens[idx + 1].kind else {
+        return None;
+    };
+    if define_name != "define" {
+        return None;
+    }
+    let TokenKind::Ident(define_macro) = &tokens[idx + 2].kind else {
+        return None;
+    };
+    if define_macro != &macro_name {
+        return None;
+    }
+
+    while idx < tokens.len() {
+        let tok = &tokens[idx];
+        if !is_hash(tok) {
+            idx += 1;
+            continue;
+        }
+        if idx + 2 < tokens.len() {
+            let kind = &tokens[idx + 1].kind;
+            if is_if_directive(kind)
+                || matches!(kind, TokenKind::Ident(name) if name == "ifdef" || name == "ifndef")
+            {
+                idx = skip_cond_incl_tokens(tokens, idx + 1);
+                continue;
+            }
+            if matches!(kind, TokenKind::Ident(name) if name == "endif")
+                && matches!(tokens[idx + 2].kind, TokenKind::Eof)
+            {
+                return Some(macro_name);
+            }
+        }
+        idx += 1;
+    }
+    None
+}
+
+fn skip_cond_incl_tokens(tokens: &[Token], mut idx: usize) -> usize {
+    let mut depth = 0usize;
+    while idx < tokens.len() {
+        let tok = &tokens[idx];
+        if matches!(tok.kind, TokenKind::Eof) {
+            return idx;
+        }
+        if is_hash(tok) && idx + 1 < tokens.len() {
+            let kind = &tokens[idx + 1].kind;
+            if is_if_directive(kind)
+                || matches!(kind, TokenKind::Ident(name) if name == "ifdef" || name == "ifndef")
+            {
+                depth += 1;
+                idx += 2;
+                continue;
+            }
+            if matches!(kind, TokenKind::Ident(name) if name == "endif") {
+                if depth == 0 {
+                    return idx + 2;
+                }
+                depth = depth.saturating_sub(1);
+                idx += 2;
+                continue;
+            }
+        }
+        idx += 1;
+    }
+    idx
+}
+
 fn new_eof(tok: &Token) -> Token {
     let mut eof = tok.clone();
     eof.kind = TokenKind::Eof;
@@ -1413,8 +1512,22 @@ impl Preprocessor {
         include_path: &Path,
         filename_tok: &Token,
     ) -> CompileResult<()> {
+        if let Ok(cache) = include_guard_cache().lock()
+            && let Some(guard_name) = cache.get(include_path)
+            && self.macros.contains_key(guard_name)
+        {
+            return Ok(());
+        }
+
         let included = tokenize_file(include_path)
             .map_err(|err| CompileError::at(err.message().to_string(), filename_tok.location))?;
+
+        if let Some(guard_name) = detect_include_guard(&included)
+            && let Ok(mut cache) = include_guard_cache().lock()
+        {
+            cache.insert(include_path.to_path_buf(), guard_name);
+        }
+
         let mut included_pp = Preprocessor::new(
             included,
             self.cmdline_defines.clone(),
