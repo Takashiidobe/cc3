@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "({ struct { char a; int b; } __attribute__((packed)) x; sizeof(x); }) => 5\noffsetof(struct __attribute__((packed)) { char a; int b; }, a) => 0\noffsetof(struct __attribute__((packed)) { char a; int b; }, b) => 1\n({ struct __attribute__((packed)) { char a; int b; } x; sizeof(x); }) => 5\noffsetof(struct { char a; int b; } __attribute__((packed)), a) => 0\noffsetof(struct { char a; int b; } __attribute__((packed)), b) => 1\n({ typedef struct { char a; int b[2]; } __attribute__((packed)) T; sizeof(T); }) => 9\n({ typedef struct __attribute__((packed)) { char a; int b[2]; } T; sizeof(T); }) => 9\noffsetof(struct __attribute__((packed)) T { char a; int b[2]; }, b) => 1\n_Alignof(struct __attribute__((packed)) { char a; int b[2]; }) => 1\nOK\n"
+status: 0

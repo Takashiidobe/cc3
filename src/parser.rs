@@ -1350,7 +1350,26 @@ impl<'a> Parser<'a> {
         Ok(ty)
     }
 
+    /// Parse __attribute__((packed)) if present
+    fn parse_attribute_packed(&mut self) -> CompileResult<bool> {
+        if !self.consume_keyword(Keyword::Attribute) {
+            return Ok(false);
+        }
+        self.expect_punct(Punct::LParen)?;
+        self.expect_punct(Punct::LParen)?;
+        // For now we only support "packed", but could be extended
+        if matches!(self.peek().kind, TokenKind::Ident(ref name) if name == "packed") {
+            self.pos += 1;
+        }
+        self.expect_punct(Punct::RParen)?;
+        self.expect_punct(Punct::RParen)?;
+        Ok(true)
+    }
+
     fn parse_struct_union_decl(&mut self, kind: RecordKind) -> CompileResult<Type> {
+        // Parse leading __attribute__((packed)) if present
+        let is_packed_before = self.parse_attribute_packed()?;
+
         // Read a tag (optional identifier)
         let tag = if matches!(self.peek().kind, TokenKind::Ident(_)) {
             let tag_token = self.peek().clone();
@@ -1398,10 +1417,25 @@ impl<'a> Parser<'a> {
         self.expect_punct(Punct::LBrace)?;
         let (members, is_flexible) = self.parse_struct_members()?;
 
-        let ty = match kind {
+        let mut ty = match kind {
             RecordKind::Struct => Type::complete_struct(members, tag_name.clone(), is_flexible),
             RecordKind::Union => Type::complete_union(members, tag_name.clone(), is_flexible),
         };
+
+        // Parse trailing __attribute__((packed)) after closing brace
+        let is_packed_after = self.parse_attribute_packed()?;
+
+        // Set is_packed if found before or after
+        let is_packed = is_packed_before || is_packed_after;
+        match &mut ty {
+            Type::Struct {
+                is_packed: field, ..
+            } => *field = is_packed,
+            Type::Union {
+                is_packed: field, ..
+            } => *field = is_packed,
+            _ => {}
+        }
 
         // Register the struct/union type if a tag was given.
         if let Some(name) = tag_name {
@@ -1420,12 +1454,15 @@ impl<'a> Parser<'a> {
         if let Type::Struct {
             members,
             is_incomplete,
+            is_packed,
             ..
         } = &mut ty
         {
             if *is_incomplete {
                 return Ok(ty);
             }
+
+            let is_packed = *is_packed;
 
             // Assign offsets within the struct to members
             let mut bits = 0i32;
@@ -1446,7 +1483,9 @@ impl<'a> Parser<'a> {
                     bits += member.bit_width;
                 } else {
                     // Regular member
-                    bits = align_bits_to(bits, member.align);
+                    if !is_packed {
+                        bits = align_bits_to(bits, member.align);
+                    }
                     member.offset = bits_to_bytes(bits);
                     bits += bytes_to_bits(member.ty.size() as i32);
                 }
@@ -3290,12 +3329,14 @@ impl<'a> Parser<'a> {
                 tag: Some(tag),
                 is_incomplete: true,
                 is_flexible,
+                is_packed,
                 id,
             } => self.find_tag(&tag).unwrap_or(Type::Struct {
                 members,
                 tag: Some(tag),
                 is_incomplete: true,
                 is_flexible,
+                is_packed,
                 id,
             }),
             Type::Union {
@@ -3303,12 +3344,14 @@ impl<'a> Parser<'a> {
                 tag: Some(tag),
                 is_incomplete: true,
                 is_flexible,
+                is_packed,
                 id,
             } => self.find_tag(&tag).unwrap_or(Type::Union {
                 members,
                 tag: Some(tag),
                 is_incomplete: true,
                 is_flexible,
+                is_packed,
                 id,
             }),
             other => other,
@@ -4498,12 +4541,14 @@ impl<'a> Parser<'a> {
                 tag,
                 is_incomplete,
                 is_flexible,
+                is_packed,
                 id,
             } => Type::Struct {
                 members: members.to_vec(),
                 tag,
                 is_incomplete,
                 is_flexible,
+                is_packed,
                 id,
             },
             Type::Union {
@@ -4511,12 +4556,14 @@ impl<'a> Parser<'a> {
                 tag,
                 is_incomplete,
                 is_flexible,
+                is_packed,
                 id,
             } => Type::Union {
                 members: members.to_vec(),
                 tag,
                 is_incomplete,
                 is_flexible,
+                is_packed,
                 id,
             },
             other => other,

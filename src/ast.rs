@@ -291,6 +291,7 @@ pub enum Type {
         tag: Option<String>,
         is_incomplete: bool,
         is_flexible: bool,
+        is_packed: bool,
         id: usize,
     },
     Union {
@@ -298,6 +299,7 @@ pub enum Type {
         tag: Option<String>,
         is_incomplete: bool,
         is_flexible: bool,
+        is_packed: bool,
         id: usize,
     },
     Array {
@@ -436,14 +438,19 @@ impl Type {
             Type::Struct {
                 members,
                 is_incomplete,
+                is_packed,
                 ..
             }
             | Type::Union {
                 members,
                 is_incomplete,
+                is_packed,
                 ..
             } => {
                 if *is_incomplete || members.is_empty() {
+                    return 1;
+                }
+                if *is_packed {
                     return 1;
                 }
                 members
@@ -500,6 +507,7 @@ impl Type {
             tag,
             is_incomplete: true,
             is_flexible: false,
+            is_packed: false,
             id: next_type_id(),
         }
     }
@@ -510,6 +518,7 @@ impl Type {
             tag,
             is_incomplete: false,
             is_flexible,
+            is_packed: false,
             id: next_type_id(),
         }
     }
@@ -520,6 +529,7 @@ impl Type {
             tag,
             is_incomplete: true,
             is_flexible: false,
+            is_packed: false,
             id: next_type_id(),
         }
     }
@@ -530,6 +540,7 @@ impl Type {
             tag,
             is_incomplete: false,
             is_flexible,
+            is_packed: false,
             id: next_type_id(),
         }
     }
