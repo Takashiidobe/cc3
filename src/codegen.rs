@@ -1006,6 +1006,18 @@ impl Codegen {
                 self.gen_addr(*idx, *is_local, function, globals);
                 self.load(expr.ty.as_ref());
             }
+            ExprKind::VlaPtr { idx, is_local } => {
+                // VlaPtr loads the address of the pointer variable
+                if *is_local {
+                    let offset = function.locals[*idx].offset;
+                    self.emit_line(&format!("  lea {}(%rbp), %rax", offset));
+                } else {
+                    let obj = &globals[*idx];
+                    let symbol = self.asm_symbol(&obj.name);
+                    self.emit_line(&format!("  lea {}(%rip), %rax", symbol));
+                }
+                self.load(expr.ty.as_ref());
+            }
             ExprKind::Member { member, .. } => {
                 self.gen_lvalue(expr, function, globals);
                 self.load(expr.ty.as_ref());
@@ -1506,7 +1518,14 @@ impl Codegen {
 
     fn gen_addr(&mut self, idx: usize, is_local: bool, function: &Obj, globals: &[Obj]) {
         if is_local {
-            let offset = function.locals[idx].offset;
+            let var = &function.locals[idx];
+            // Variable-length array, which is always local
+            if matches!(var.ty, Type::Vla { .. }) {
+                // For VLA, the variable holds a pointer, so we load it
+                self.emit_line(&format!("  mov {}(%rbp), %rax", var.offset));
+                return;
+            }
+            let offset = var.offset;
             self.emit_line(&format!("  lea {}(%rbp), %rax", offset));
             return;
         }
@@ -1534,6 +1553,17 @@ impl Codegen {
     fn gen_lvalue(&mut self, expr: &Expr, function: &Obj, globals: &[Obj]) {
         match &expr.kind {
             ExprKind::Var { idx, is_local } => self.gen_addr(*idx, *is_local, function, globals),
+            ExprKind::VlaPtr { idx, is_local } => {
+                // VlaPtr: for VLA designator in assignment, emit lea to get address of the pointer variable
+                if *is_local {
+                    let offset = function.locals[*idx].offset;
+                    self.emit_line(&format!("  lea {}(%rbp), %rax", offset));
+                } else {
+                    let obj = &globals[*idx];
+                    let symbol = self.asm_symbol(&obj.name);
+                    self.emit_line(&format!("  lea {}(%rip), %rax", symbol));
+                }
+            }
             ExprKind::Deref(expr) => self.gen_expr(expr, function, globals),
             ExprKind::Comma { lhs, rhs } => {
                 self.gen_expr(lhs, function, globals);

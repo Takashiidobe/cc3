@@ -123,6 +123,10 @@ pub enum ExprKind {
         idx: usize,
         is_local: bool,
     },
+    VlaPtr {
+        idx: usize,
+        is_local: bool,
+    },
     StmtExpr(Vec<Stmt>),
     Assign {
         lhs: Box<Expr>,

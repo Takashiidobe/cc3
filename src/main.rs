@@ -248,6 +248,7 @@ fn run_subprocess(argv: &[String], show_cmd: bool) -> io::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_cc1_subprocess(
     input: &Path,
     output: Option<&Path>,

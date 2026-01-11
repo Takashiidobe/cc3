@@ -1065,13 +1065,7 @@ impl<'a> Parser<'a> {
 
                 let assign_expr = self.expr_at(
                     ExprKind::Assign {
-                        lhs: Box::new(self.expr_at(
-                            ExprKind::Var {
-                                idx,
-                                is_local: true,
-                            },
-                            name_token.location,
-                        )),
+                        lhs: Box::new(self.new_vla_ptr(idx, true, name_token.location)),
                         rhs: Box::new(alloca_call),
                     },
                     name_token.location,
@@ -2830,6 +2824,11 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Create a VlaPtr expression (used for VLA designators in assignments)
+    fn new_vla_ptr(&self, idx: usize, is_local: bool, location: SourceLocation) -> Expr {
+        self.expr_at(ExprKind::VlaPtr { idx, is_local }, location)
+    }
+
     fn new_ulong_expr(&self, value: i64, location: SourceLocation) -> Expr {
         let mut expr = self.expr_at(ExprKind::Num { value, fval: 0.0 }, location);
         expr.ty = Some(Type::ULong);
@@ -3376,6 +3375,39 @@ impl<'a> Parser<'a> {
             mem::swap(&mut lhs_ty, &mut rhs_ty);
         }
 
+        // Check if the base is a VLA
+        if let Some(base) = lhs_ty.base()
+            && let Type::Vla {
+                size_var: Some(size_idx),
+                ..
+            } = base
+        {
+            // VLA + num: multiply by the runtime size variable
+            let scale = self.expr_at(
+                ExprKind::Var {
+                    idx: *size_idx,
+                    is_local: true,
+                },
+                location,
+            );
+            let rhs = self.expr_at(
+                ExprKind::Binary {
+                    op: BinaryOp::Mul,
+                    lhs: Box::new(rhs),
+                    rhs: Box::new(scale),
+                },
+                location,
+            );
+            return Ok(self.expr_at(
+                ExprKind::Binary {
+                    op: BinaryOp::Add,
+                    lhs: Box::new(lhs),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            ));
+        }
+
         let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
         let mut scale = self.expr_at(
             ExprKind::Num {
@@ -3429,6 +3461,41 @@ impl<'a> Parser<'a> {
         }
 
         if lhs_ty.base().is_some() && rhs_ty.is_integer() {
+            // Check if the base is a VLA
+            if let Some(base) = lhs_ty.base()
+                && let Type::Vla {
+                    size_var: Some(size_idx),
+                    ..
+                } = base
+            {
+                // VLA - num: multiply by the runtime size variable
+                let scale = self.expr_at(
+                    ExprKind::Var {
+                        idx: *size_idx,
+                        is_local: true,
+                    },
+                    location,
+                );
+                let rhs = self.expr_at(
+                    ExprKind::Binary {
+                        op: BinaryOp::Mul,
+                        lhs: Box::new(rhs),
+                        rhs: Box::new(scale),
+                    },
+                    location,
+                );
+                let mut expr = self.expr_at(
+                    ExprKind::Binary {
+                        op: BinaryOp::Sub,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    },
+                    location,
+                );
+                self.add_type_expr(&mut expr)?;
+                return Ok(expr);
+            }
+
             let base_size = lhs_ty.base().map(|base| base.size()).unwrap_or(8);
             let mut scale = self.expr_at(
                 ExprKind::Num {
@@ -4553,7 +4620,7 @@ impl<'a> Parser<'a> {
             ExprKind::Null => Type::Void,
             ExprKind::Memzero { .. } => Type::Void,
             ExprKind::Num { .. } => Type::Int,
-            ExprKind::Var { idx, is_local } => {
+            ExprKind::Var { idx, is_local } | ExprKind::VlaPtr { idx, is_local } => {
                 let map = if *is_local {
                     &self.locals
                 } else {
@@ -5077,7 +5144,14 @@ fn assign_lvar_offsets(locals: &mut [Obj], param_indices: &[usize]) -> i32 {
             var.align
         };
 
-        bottom += var.ty.size() as i32;
+        // VLA variables are pointers, so they take 8 bytes on the stack
+        let size = if matches!(var.ty, Type::Vla { .. }) {
+            8
+        } else {
+            var.ty.size() as i32
+        };
+
+        bottom += size;
         bottom = align_to(bottom, align);
         var.offset = -bottom;
     }
