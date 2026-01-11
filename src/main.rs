@@ -18,6 +18,8 @@ enum FileType {
     C,
     Asm,
     Obj,
+    Ar,
+    Dso,
 }
 
 #[derive(Parser, Debug)]
@@ -102,13 +104,6 @@ fn parse_language(s: &str) -> io::Result<FileType> {
 }
 
 fn get_file_type(path: &Path, opt_x: FileType) -> io::Result<FileType> {
-    // .o files are always object files
-    if let Some(ext) = path.extension()
-        && ext == "o"
-    {
-        return Ok(FileType::Obj);
-    }
-
     // If -x is specified and not "none", use it
     if opt_x != FileType::None {
         return Ok(opt_x);
@@ -117,6 +112,9 @@ fn get_file_type(path: &Path, opt_x: FileType) -> io::Result<FileType> {
     // Determine from extension
     if let Some(ext) = path.extension() {
         match ext.to_str() {
+            Some("a") => return Ok(FileType::Ar),
+            Some("so") => return Ok(FileType::Dso),
+            Some("o") => return Ok(FileType::Obj),
             Some("c") => return Ok(FileType::C),
             Some("s") | Some("S") => return Ok(FileType::Asm),
             _ => {}
@@ -458,8 +456,8 @@ fn run_driver(args: &Args) -> io::Result<()> {
             Some(replace_ext(input, if args.emit_asm { ".s" } else { ".o" }))
         };
 
-        // Handle object files
-        if file_type == FileType::Obj {
+        // Handle object files, archives, and shared objects
+        if file_type == FileType::Obj || file_type == FileType::Ar || file_type == FileType::Dso {
             if !args.compile_only && !args.emit_asm {
                 link_inputs.push(input.clone());
             }
