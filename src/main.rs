@@ -74,6 +74,9 @@ struct Args {
     /// Specify language for input files (can be specified multiple times, last one wins).
     #[arg(short = 'x', value_name = "LANG")]
     languages: Vec<String>,
+    /// Strip symbols from executable.
+    #[arg(short = 's', action = clap::ArgAction::SetTrue)]
+    strip_symbols: bool,
 }
 
 fn parse_define(s: &str) -> (String, String) {
@@ -555,7 +558,13 @@ fn run_driver(args: &Args) -> io::Result<()> {
             .output
             .clone()
             .unwrap_or_else(|| PathBuf::from("a.out"));
-        run_linker(&link_inputs, &linker_args, &output, args.hash_hash_hash)?;
+        run_linker(
+            &link_inputs,
+            &linker_args,
+            &output,
+            args.strip_symbols,
+            args.hash_hash_hash,
+        )?;
     }
 
     for path in temp_objects {
@@ -606,11 +615,15 @@ fn run_linker(
     inputs: &[PathBuf],
     linker_args: &[String],
     output: &Path,
+    strip_symbols: bool,
     show_cmd: bool,
 ) -> io::Result<()> {
     let mut argv = link_command();
     argv.push("-o".to_string());
     argv.push(output.display().to_string());
+    if strip_symbols {
+        argv.push("-s".to_string());
+    }
     for input in inputs {
         argv.push(input.display().to_string());
     }
