@@ -260,8 +260,11 @@ fn decode_utf8(input: &[u8], pos: &mut usize, location: SourceLocation) -> Compi
 }
 
 pub fn tokenize_file(path: &Path) -> CompileResult<Vec<Token>> {
-    let contents = fs::read_to_string(path)
+    let mut contents = fs::read_to_string(path)
         .map_err(|err| CompileError::new(format!("failed to read {}: {err}", path.display())))?;
+    if contents.as_bytes().starts_with(b"\xEF\xBB\xBF") {
+        contents = contents[3..].to_string();
+    }
     let contents = canonicalize_newline(&contents);
     let contents = remove_backslash_newline(&contents);
     let contents = convert_universal_chars(&contents);

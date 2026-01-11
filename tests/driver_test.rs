@@ -41,6 +41,29 @@ fn preprocess_dash_e_outputs_includes() {
 }
 
 #[test]
+fn preprocess_skips_utf8_bom() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("bom.c");
+    fs::write(&input_path, b"\xEF\xBB\xBFxyz\n").expect("write input");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd.arg("-E").arg(&input_path).output().expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = output.stdout;
+    assert!(
+        !stdout.starts_with(b"\xEF\xBB\xBF"),
+        "stdout has BOM: {}",
+        String::from_utf8_lossy(&stdout)
+    );
+    let stdout_text = String::from_utf8_lossy(&stdout);
+    assert!(stdout_text.contains(" xyz"), "stdout: {stdout_text}");
+}
+
+#[test]
 fn default_include_paths() {
     let dir = tempfile::tempdir().expect("tempdir");
     let bin = assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME"));
