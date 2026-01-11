@@ -73,8 +73,8 @@ fn preprocess_dash_m_outputs_dependencies() {
     let dir = tempfile::tempdir().expect("tempdir");
     let header1 = dir.path().join("out2.h");
     let header2 = dir.path().join("out3.h");
-    fs::write(&header1, "foo\n").expect("write header1");
-    fs::write(&header2, "bar\n").expect("write header2");
+    fs::write(&header1, "int foo;\n").expect("write header1");
+    fs::write(&header2, "int bar;\n").expect("write header2");
 
     let input_path = dir.path().join("input.c");
     let input = "#include \"out2.h\"\n#include \"out3.h\"\n";
@@ -113,7 +113,7 @@ fn preprocess_dash_mf_writes_dependencies_to_file() {
     let dir = tempfile::tempdir().expect("tempdir");
     let header1 = dir.path().join("out2.h");
     let header2 = dir.path().join("out3.h");
-    fs::write(&header1, "foo\n").expect("write header1");
+    fs::write(&header1, "int foo;\n").expect("write header1");
     fs::write(&header2, "bar\n").expect("write header2");
 
     let input_path = dir.path().join("input.c");
@@ -157,7 +157,7 @@ fn preprocess_dash_mp_adds_phony_targets() {
     let dir = tempfile::tempdir().expect("tempdir");
     let header1 = dir.path().join("out2.h");
     let header2 = dir.path().join("out3.h");
-    fs::write(&header1, "foo\n").expect("write header1");
+    fs::write(&header1, "int foo;\n").expect("write header1");
     fs::write(&header2, "bar\n").expect("write header2");
 
     let input_path = dir.path().join("input.c");
@@ -197,7 +197,7 @@ fn preprocess_dash_mt_sets_dependency_target() {
     let dir = tempfile::tempdir().expect("tempdir");
     let header1 = dir.path().join("out2.h");
     let header2 = dir.path().join("out3.h");
-    fs::write(&header1, "foo\n").expect("write header1");
+    fs::write(&header1, "int foo;\n").expect("write header1");
     fs::write(&header2, "bar\n").expect("write header2");
 
     let input_path = dir.path().join("input.c");
@@ -239,6 +239,79 @@ fn preprocess_dash_mt_sets_dependency_target() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.starts_with("foo bar:"), "stdout: {stdout}");
+}
+
+#[test]
+fn preprocess_dash_md_writes_dependency_files() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let header1 = dir.path().join("out2.h");
+    let header2 = dir.path().join("out3.h");
+    fs::write(&header1, "int foo;\n").expect("write header1");
+    fs::write(&header2, "int bar;\n").expect("write header2");
+
+    let input1 = dir.path().join("md2.c");
+    let input2 = dir.path().join("md3.c");
+    fs::write(&input1, "#include \"out2.h\"\n").expect("write input1");
+    fs::write(&input2, "#include \"out3.h\"\n").expect("write input2");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .current_dir(dir.path())
+        .arg("-c")
+        .arg("-MD")
+        .arg("-I.")
+        .arg("md2.c")
+        .arg("md3.c")
+        .output()
+        .expect("run cc3 -MD");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let deps1 = fs::read_to_string(dir.path().join("md2.d")).expect("read md2 deps");
+    assert!(deps1.starts_with("md2.o:"), "deps: {deps1}");
+    assert!(deps1.contains("md2.c"), "deps: {deps1}");
+    assert!(deps1.contains("out2.h"), "deps: {deps1}");
+
+    let deps2 = fs::read_to_string(dir.path().join("md3.d")).expect("read md3 deps");
+    assert!(deps2.starts_with("md3.o:"), "deps: {deps2}");
+    assert!(deps2.contains("md3.c"), "deps: {deps2}");
+    assert!(deps2.contains("out3.h"), "deps: {deps2}");
+}
+
+#[test]
+fn preprocess_dash_md_mf_writes_dependencies_to_file() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let header1 = dir.path().join("out2.h");
+    fs::write(&header1, "int foo;\n").expect("write header1");
+
+    let input1 = dir.path().join("md2.c");
+    fs::write(&input1, "#include \"out2.h\"\n").expect("write input1");
+
+    let dep_path = dir.path().join("md-mf.d");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .current_dir(dir.path())
+        .arg("-c")
+        .arg("-MD")
+        .arg("--MF")
+        .arg(&dep_path)
+        .arg("-I.")
+        .arg("md2.c")
+        .output()
+        .expect("run cc3 -MD -MF");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let deps = fs::read_to_string(&dep_path).expect("read deps");
+    assert!(deps.starts_with("md2.o:"), "deps: {deps}");
+    assert!(deps.contains("md2.c"), "deps: {deps}");
+    assert!(deps.contains("out2.h"), "deps: {deps}");
 }
 
 #[test]

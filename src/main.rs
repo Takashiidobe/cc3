@@ -50,6 +50,9 @@ struct Args {
     /// Print dependency list for make.
     #[arg(short = 'M', action = clap::ArgAction::SetTrue)]
     dep_only: bool,
+    /// Write dependency output to a .d file while compiling.
+    #[arg(long = "MD", action = clap::ArgAction::SetTrue)]
+    dep_generate: bool,
     /// Add phony targets for dependencies.
     #[arg(long = "MP", action = clap::ArgAction::SetTrue)]
     dep_phony: bool,
@@ -188,6 +191,7 @@ fn main() {
             output,
             args.preprocess_only,
             args.dep_only,
+            args.dep_generate,
             args.dep_phony,
             &args.dep_targets,
             args.dep_output.as_deref(),
@@ -237,6 +241,7 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
                 "-fcommon" => "--fcommon".to_string(),
                 "-fno-common" => "--fno-common".to_string(),
                 "-MF" => "--MF".to_string(),
+                "-MD" => "--MD".to_string(),
                 "-MP" => "--MP".to_string(),
                 "-MT" => "--MT".to_string(),
                 _ => arg.clone(),
@@ -274,6 +279,7 @@ fn run_cc1_subprocess(
     output: Option<&Path>,
     preprocess_only: bool,
     dep_only: bool,
+    dep_generate: bool,
     dep_output: Option<&Path>,
     dep_phony: bool,
     dep_targets: &[String],
@@ -295,6 +301,9 @@ fn run_cc1_subprocess(
     }
     if dep_only {
         argv.push("-M".to_string());
+    }
+    if dep_generate {
+        argv.push("--MD".to_string());
     }
     if let Some(path) = dep_output {
         argv.push("--MF".to_string());
@@ -342,6 +351,7 @@ fn run_cc1(
     output: Option<&Path>,
     preprocess_only: bool,
     dep_only: bool,
+    dep_generate: bool,
     dep_phony: bool,
     dep_targets: &[String],
     dep_output: Option<&Path>,
@@ -378,9 +388,16 @@ fn run_cc1(
     tokens.append(&mut main_tokens);
 
     let tokens = preprocessor::preprocess(tokens, cmdline_defines, cmdline_undefs)?;
-    if dep_only {
-        print_dependencies(input, dep_targets, dep_output, output, dep_phony)?;
-        return Ok(());
+    let mut dep_output = dep_output.map(PathBuf::from);
+    if dep_output.is_none() && dep_generate {
+        let base = output.unwrap_or(input);
+        dep_output = Some(replace_ext(base, ".d"));
+    }
+    if dep_only || dep_generate {
+        print_dependencies(input, dep_targets, dep_output.as_deref(), output, dep_phony)?;
+        if dep_only {
+            return Ok(());
+        }
     }
     if preprocess_only {
         print_tokens(&tokens, output)?;
@@ -543,6 +560,18 @@ fn run_driver(args: &Args) -> io::Result<()> {
         } else {
             Some(replace_ext(input, if args.emit_asm { ".s" } else { ".o" }))
         };
+        let dep_output = if args.dep_generate && args.dep_output.is_none() {
+            let base = if args.inputs.len() == 1
+                && (args.compile_only || args.emit_asm || args.preprocess_only || args.dep_only)
+            {
+                args.output.clone().unwrap_or_else(|| input.clone())
+            } else {
+                input.clone()
+            };
+            Some(replace_ext(&base, ".d"))
+        } else {
+            args.dep_output.clone()
+        };
 
         // Handle object files, archives, and shared objects
         if file_type == FileType::Obj || file_type == FileType::Ar || file_type == FileType::Dso {
@@ -569,7 +598,8 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 output.as_deref(),
                 args.preprocess_only,
                 args.dep_only,
-                args.dep_output.as_deref(),
+                args.dep_generate,
+                dep_output.as_deref(),
                 args.dep_phony,
                 &args.dep_targets,
                 &args.include_dirs,
@@ -590,9 +620,10 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 output.as_deref(),
                 false,
                 false,
-                None,
-                false,
-                &[],
+                args.dep_generate,
+                dep_output.as_deref(),
+                args.dep_phony,
+                &args.dep_targets,
                 &args.include_dirs,
                 &args.idirafter_dirs,
                 &args.include_files,
@@ -612,9 +643,10 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 Some(&tmp_asm),
                 false,
                 false,
-                None,
-                false,
-                &[],
+                args.dep_generate,
+                dep_output.as_deref(),
+                args.dep_phony,
+                &args.dep_targets,
                 &args.include_dirs,
                 &args.idirafter_dirs,
                 &args.include_files,
@@ -636,9 +668,10 @@ fn run_driver(args: &Args) -> io::Result<()> {
             Some(&tmp_asm),
             false,
             false,
-            None,
-            false,
-            &[],
+            args.dep_generate,
+            dep_output.as_deref(),
+            args.dep_phony,
+            &args.dep_targets,
             &args.include_dirs,
             &args.idirafter_dirs,
             &args.include_files,
