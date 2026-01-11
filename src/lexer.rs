@@ -923,7 +923,9 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
             continue;
         }
 
-        if is_ident_start(b) {
+        if b == b'"'
+            || (b == b'u' && i + 2 < bytes.len() && bytes[i + 1] == b'8' && bytes[i + 2] == b'"')
+        {
             let start = i;
             let location = SourceLocation {
                 line,
@@ -931,38 +933,10 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 byte: start,
                 file_no,
             };
-            i += 1;
-            while i < bytes.len() && is_ident_continue(bytes[i]) {
-                i += 1;
-            }
-            let word = &input[start..i];
-            let kind = TokenKind::Ident(word.to_string());
-            tokens.push(Token {
-                kind,
-                location,
-                at_bol,
-                has_space,
-                len: i - start,
-                hideset: HideSet::default(),
-                origin: None,
-            });
-            at_bol = false;
-            has_space = false;
-            column += i - start;
-            continue;
-        }
-
-        if b == b'"' {
-            let start = i;
-            let location = SourceLocation {
-                line,
-                column,
-                byte: start,
-                file_no,
-            };
-            let end = string_literal_end(bytes, start + 1, location)?;
-            let mut str_bytes = Vec::with_capacity(end - (start + 1) + 1);
-            let mut p = start + 1;
+            let quote = if b == b'"' { start } else { start + 2 };
+            let end = string_literal_end(bytes, quote + 1, location)?;
+            let mut str_bytes = Vec::with_capacity(end - (quote + 1) + 1);
+            let mut p = quote + 1;
             while p < end {
                 if bytes[p] == b'\\' {
                     let mut escaped_pos = p + 1;
@@ -994,6 +968,35 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
             at_bol = false;
             has_space = false;
             i = end + 1;
+            column += i - start;
+            continue;
+        }
+
+        if is_ident_start(b) {
+            let start = i;
+            let location = SourceLocation {
+                line,
+                column,
+                byte: start,
+                file_no,
+            };
+            i += 1;
+            while i < bytes.len() && is_ident_continue(bytes[i]) {
+                i += 1;
+            }
+            let word = &input[start..i];
+            let kind = TokenKind::Ident(word.to_string());
+            tokens.push(Token {
+                kind,
+                location,
+                at_bol,
+                has_space,
+                len: i - start,
+                hideset: HideSet::default(),
+                origin: None,
+            });
+            at_bol = false;
+            has_space = false;
             column += i - start;
             continue;
         }
