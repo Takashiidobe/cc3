@@ -79,6 +79,9 @@ struct Args {
     /// Link with library.
     #[arg(short = 'l', value_name = "LIB", action = clap::ArgAction::Append)]
     libraries: Vec<String>,
+    /// Pass options to the linker.
+    #[arg(long = "Wl", value_name = "OPTS", action = clap::ArgAction::Append)]
+    linker_opts: Vec<String>,
     /// Add include search path (searched after -I paths).
     #[arg(long = "idirafter", value_name = "DIR")]
     idirafter_dirs: Vec<PathBuf>,
@@ -263,6 +266,13 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
             continue;
         }
 
+        if let Some(value) = arg_str.strip_prefix("-Wl,") {
+            out.push("--Wl".to_string());
+            out.push(value.to_string());
+            i += 1;
+            continue;
+        }
+
         if arg_str.starts_with("-l") && arg_str.len() > 2 {
             out.push("-l".to_string());
             out.push(arg_str[2..].to_string());
@@ -283,6 +293,7 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
             "-shared" => out.push("--shared".to_string()),
             "-L" => out.push("-L".to_string()),
             "-l" => out.push("-l".to_string()),
+            "-Wl" => out.push("--Wl".to_string()),
             "-MF" => out.push("--MF".to_string()),
             "-MD" => out.push("--MD".to_string()),
             "-MMD" => out.push("--MMD".to_string()),
@@ -697,6 +708,11 @@ fn run_driver(args: &Args) -> io::Result<()> {
     let mut linker_args: Vec<String> = Vec::new();
     for lib in &args.libraries {
         linker_args.push(format!("-l{lib}"));
+    }
+    for opt in &args.linker_opts {
+        if !opt.is_empty() {
+            linker_args.push(format!("-Wl,{opt}"));
+        }
     }
 
     for input in &args.inputs {

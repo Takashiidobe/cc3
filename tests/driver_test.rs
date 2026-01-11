@@ -451,6 +451,80 @@ fn library_search_path_links_shared_object() {
 }
 
 #[test]
+fn linker_option_passed_through() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let foo_path = dir.path().join("foo.c");
+    let bar_path = dir.path().join("bar.c");
+    let baz_path = dir.path().join("baz.c");
+    fs::write(&foo_path, "int foo() { return 1; }\n").expect("write foo");
+    fs::write(&bar_path, "int bar() { return 2; }\n").expect("write bar");
+    fs::write(
+        &baz_path,
+        "int foo(); int bar(); int main() { return foo() + bar(); }\n",
+    )
+    .expect("write baz");
+
+    let foo_obj = dir.path().join("foo.o");
+    let bar_obj = dir.path().join("bar.o");
+    let baz_obj = dir.path().join("baz.o");
+    let bin = assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME"));
+    let output = Command::new(bin)
+        .arg("-c")
+        .arg("-o")
+        .arg(&foo_obj)
+        .arg(&foo_path)
+        .output()
+        .expect("compile foo");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(bin)
+        .arg("-c")
+        .arg("-o")
+        .arg(&bar_obj)
+        .arg(&bar_path)
+        .output()
+        .expect("compile bar");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(bin)
+        .arg("-c")
+        .arg("-o")
+        .arg(&baz_obj)
+        .arg(&baz_path)
+        .output()
+        .expect("compile baz");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let out_path = dir.path().join("foo");
+    let output = Command::new(bin)
+        .arg("-Wl,--gc-sections")
+        .arg("-o")
+        .arg(&out_path)
+        .arg(&foo_obj)
+        .arg(&bar_obj)
+        .arg(&baz_obj)
+        .output()
+        .expect("link");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn preprocess_dash_md_writes_dependency_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     let header1 = dir.path().join("out2.h");
