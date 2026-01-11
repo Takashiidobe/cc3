@@ -100,6 +100,9 @@ struct Args {
     /// Strip symbols from executable.
     #[arg(short = 's', action = clap::ArgAction::SetTrue)]
     strip_symbols: bool,
+    /// Link statically.
+    #[arg(long = "static", action = clap::ArgAction::SetTrue)]
+    static_link: bool,
 }
 
 fn parse_define(s: &str) -> (String, String) {
@@ -260,6 +263,7 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
             "-fno-common" => out.push("--fno-common".to_string()),
             "-fpic" => out.push("--fpic".to_string()),
             "-fPIC" => out.push("--fpic".to_string()),
+            "-static" => out.push("--static".to_string()),
             "-MF" => out.push("--MF".to_string()),
             "-MD" => out.push("--MD".to_string()),
             "-MMD" => out.push("--MMD".to_string()),
@@ -807,6 +811,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             &linker_args,
             &output,
             args.strip_symbols,
+            args.static_link,
             args.hash_hash_hash,
         )?;
     }
@@ -860,9 +865,13 @@ fn run_linker(
     linker_args: &[String],
     output: &Path,
     strip_symbols: bool,
+    static_link: bool,
     show_cmd: bool,
 ) -> io::Result<()> {
     let mut argv = link_command();
+    if static_link {
+        argv.push("-static".to_string());
+    }
     argv.push("-o".to_string());
     argv.push(output.display().to_string());
     if strip_symbols {
