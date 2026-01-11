@@ -662,6 +662,16 @@ fn find_arg<'a>(args: &'a [MacroArg], tok: &Token) -> Option<&'a MacroArg> {
     args.iter().find(|arg| &arg.name == name)
 }
 
+fn has_varargs(args: &[MacroArg]) -> bool {
+    args.iter().any(|arg| {
+        arg.name == "__VA_ARGS__"
+            && arg
+                .tokens
+                .first()
+                .is_some_and(|tok| !matches!(tok.kind, TokenKind::Eof))
+    })
+}
+
 fn macro_name(tok: &Token) -> Option<String> {
     match &tok.kind {
         TokenKind::Ident(name) => Some(name.clone()),
@@ -1432,6 +1442,49 @@ impl Preprocessor {
             let tok = &body[i];
             if matches!(tok.kind, TokenKind::Eof) {
                 break;
+            }
+
+            if let TokenKind::Ident(name) = &tok.kind
+                && name == "__VA_OPT__"
+                && matches!(
+                    body.get(i + 1).map(|tok| &tok.kind),
+                    Some(TokenKind::Punct(Punct::LParen))
+                )
+            {
+                let mut tokens = Vec::new();
+                let mut idx = i + 2;
+                let mut level = 0i32;
+                while idx < body.len() {
+                    let cur = &body[idx];
+                    match cur.kind {
+                        TokenKind::Punct(Punct::LParen) => {
+                            level += 1;
+                            tokens.push(cur.clone());
+                        }
+                        TokenKind::Punct(Punct::RParen) => {
+                            if level == 0 {
+                                break;
+                            }
+                            level -= 1;
+                            tokens.push(cur.clone());
+                        }
+                        TokenKind::Eof => {
+                            return self.error("unterminated __VA_OPT__", cur.location);
+                        }
+                        _ => tokens.push(cur.clone()),
+                    }
+                    idx += 1;
+                }
+
+                if idx >= body.len() || !matches!(body[idx].kind, TokenKind::Punct(Punct::RParen)) {
+                    return self.error("unterminated __VA_OPT__", tok.location);
+                }
+
+                if has_varargs(args) {
+                    result.extend(tokens);
+                }
+                i = idx + 1;
+                continue;
             }
 
             if matches!(tok.kind, TokenKind::Punct(Punct::Hash)) {
