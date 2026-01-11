@@ -801,6 +801,15 @@ fn line_macro(tok: &Token) -> CompileResult<Token> {
     Ok(out)
 }
 
+/// __COUNTER__ is expanded to serial values starting from 0.
+fn counter_macro(tok: &Token) -> CompileResult<Token> {
+    static COUNTER: Mutex<i64> = Mutex::new(0);
+    let mut counter = COUNTER.lock().unwrap();
+    let value = *counter;
+    *counter += 1;
+    Ok(new_num_token(value, tok))
+}
+
 fn warn_tok(tok: &Token, message: &str) {
     let header = format!("warning: {message}");
     eprintln!("{header}");
@@ -1436,6 +1445,7 @@ impl Preprocessor {
         self.define_macro("unix", "1")?;
         self.add_builtin("__FILE__", file_macro);
         self.add_builtin("__LINE__", line_macro);
+        self.add_builtin("__COUNTER__", counter_macro);
         self.define_macro("__DATE__", &Self::format_date())?;
         self.define_macro("__TIME__", &Self::format_time())?;
 
