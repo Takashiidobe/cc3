@@ -1325,6 +1325,49 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
+    fn parse_generic_selection(&mut self) -> CompileResult<Expr> {
+        let start = self.peek().clone();
+        self.expect_punct(Punct::LParen)?;
+
+        let mut ctrl = self.parse_assign()?;
+        self.add_type_expr(&mut ctrl)?;
+        let mut ctrl_ty = ctrl.ty.clone().unwrap_or(Type::Int);
+        ctrl_ty = match ctrl_ty {
+            Type::Func { .. } => Type::Ptr(Box::new(ctrl_ty)),
+            Type::Array { base, .. } => Type::Ptr(base),
+            other => other,
+        };
+
+        let mut ret = None::<Expr>;
+        while !self.check_punct(Punct::RParen) {
+            self.expect_punct(Punct::Comma)?;
+
+            if self.consume_keyword(Keyword::Default) {
+                self.expect_punct(Punct::Colon)?;
+                let expr = self.parse_assign()?;
+                if ret.is_none() {
+                    ret = Some(expr);
+                }
+                continue;
+            }
+
+            let assoc_ty = self.parse_typename()?;
+            self.expect_punct(Punct::Colon)?;
+            let expr = self.parse_assign()?;
+            if is_compatible(&ctrl_ty, &assoc_ty) {
+                ret = Some(expr);
+            }
+        }
+
+        self.expect_punct(Punct::RParen)?;
+        ret.ok_or_else(|| {
+            self.err_at(
+                start.location,
+                "controlling expression type not compatible with any generic association type",
+            )
+        })
+    }
+
     fn parse_assign(&mut self) -> CompileResult<Expr> {
         let expr = self.parse_conditional()?;
 
@@ -2109,6 +2152,10 @@ impl<'a> Parser<'a> {
                 self.add_type_expr(&mut expr)?;
                 let align = expr.ty.as_ref().map(|ty| ty.align()).unwrap_or(1);
                 Ok(self.new_ulong_expr(align, location))
+            }
+            TokenKind::Keyword(Keyword::Generic) => {
+                self.pos += 1;
+                self.parse_generic_selection()
             }
             TokenKind::Ident(ref name) if name == "__builtin_reg_class" => {
                 let location = token.location;
