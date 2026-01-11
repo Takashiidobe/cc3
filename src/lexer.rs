@@ -1,6 +1,6 @@
 use crate::ast::Type;
 use crate::error::{CompileError, CompileResult, SourceLocation};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -1810,55 +1810,66 @@ fn read_punct(input: &str) -> Option<(Punct, usize)> {
     Some((punct, 1))
 }
 
+fn keyword_map() -> &'static HashMap<&'static str, ()> {
+    static KEYWORDS: OnceLock<HashMap<&'static str, ()>> = OnceLock::new();
+    KEYWORDS.get_or_init(|| {
+        let keywords = [
+            "void",
+            "_Bool",
+            "char",
+            "short",
+            "int",
+            "long",
+            "float",
+            "double",
+            "enum",
+            "struct",
+            "union",
+            "typedef",
+            "static",
+            "extern",
+            "return",
+            "if",
+            "else",
+            "for",
+            "while",
+            "do",
+            "sizeof",
+            "_Alignof",
+            "_Alignas",
+            "goto",
+            "break",
+            "continue",
+            "switch",
+            "case",
+            "default",
+            "signed",
+            "unsigned",
+            "const",
+            "volatile",
+            "auto",
+            "register",
+            "restrict",
+            "__restrict",
+            "__restrict__",
+            "_Noreturn",
+            "_Generic",
+            "typeof",
+            "inline",
+            "asm",
+            "_Thread_local",
+            "__thread",
+        ];
+        let mut map = HashMap::with_capacity(keywords.len());
+        for keyword in keywords {
+            map.insert(keyword, ());
+        }
+        map
+    })
+}
+
 fn is_keyword(name: &str) -> bool {
-    matches!(
-        name,
-        "void"
-            | "_Bool"
-            | "char"
-            | "short"
-            | "int"
-            | "long"
-            | "float"
-            | "double"
-            | "enum"
-            | "struct"
-            | "union"
-            | "typedef"
-            | "static"
-            | "extern"
-            | "return"
-            | "if"
-            | "else"
-            | "for"
-            | "while"
-            | "do"
-            | "sizeof"
-            | "_Alignof"
-            | "_Alignas"
-            | "goto"
-            | "break"
-            | "continue"
-            | "switch"
-            | "case"
-            | "default"
-            | "signed"
-            | "unsigned"
-            | "const"
-            | "volatile"
-            | "auto"
-            | "register"
-            | "restrict"
-            | "__restrict"
-            | "__restrict__"
-            | "_Noreturn"
-            | "_Generic"
-            | "typeof"
-            | "inline"
-            | "asm"
-            | "_Thread_local"
-            | "__thread"
-    )
+    keyword_map().contains_key(name)
 }
 
 fn convert_keyword(tok: &mut Token, name: &str) {
