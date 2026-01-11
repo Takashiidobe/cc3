@@ -3178,7 +3178,38 @@ impl<'a> Parser<'a> {
         Ok(idx as usize)
     }
 
-    /// Parse a designation: ("[" const-expr "]")* "="? initializer
+    /// Parse a struct designator: "." ident
+    fn struct_designator(&mut self, ty: &Type) -> CompileResult<Member> {
+        let location = self.peek().location;
+        self.expect_punct(Punct::Dot)?;
+        let ident = match &self.peek().kind {
+            TokenKind::Ident(name) => name.clone(),
+            _ => {
+                self.bail_at(location, "expected a field designator")?;
+                unreachable!()
+            }
+        };
+        self.pos += 1;
+
+        let members = match ty {
+            Type::Struct { members, .. } | Type::Union { members, .. } => members,
+            _ => {
+                self.bail_at(location, "field name not in struct or union initializer")?;
+                unreachable!()
+            }
+        };
+
+        for member in members {
+            if member.name == ident {
+                return Ok(member.clone());
+            }
+        }
+
+        self.bail_at(location, "struct has no such member")?;
+        unreachable!()
+    }
+
+    /// Parse a designation: ("[" const-expr "]" | "." ident)* "="? initializer
     fn designation(&mut self, init: &mut Initializer) -> CompileResult<()> {
         if self.check_punct(Punct::LBracket) {
             if !matches!(init.ty, Type::Array { .. }) {
@@ -3189,6 +3220,21 @@ impl<'a> Parser<'a> {
             self.designation(&mut init.children[idx])?;
             self.array_initializer2(init, idx + 1)?;
             return Ok(());
+        }
+
+        if self.check_punct(Punct::Dot) && matches!(init.ty, Type::Struct { .. }) {
+            let member = self.struct_designator(&init.ty)?;
+            self.designation(&mut init.children[member.idx])?;
+            init.expr = None;
+            self.struct_initializer2(init, Some(member.idx + 1))?;
+            return Ok(());
+        }
+
+        if self.check_punct(Punct::Dot) {
+            self.bail_at(
+                self.peek().location,
+                "field name not in struct or union initializer",
+            )?;
         }
 
         self.consume_punct(Punct::Assign);
@@ -3284,7 +3330,7 @@ impl<'a> Parser<'a> {
                 self.expect_punct(Punct::Comma)?;
             }
 
-            if self.check_punct(Punct::LBracket) {
+            if self.check_punct(Punct::LBracket) || self.check_punct(Punct::Dot) {
                 self.pos = start_pos;
                 return Ok(());
             }
@@ -3306,9 +3352,18 @@ impl<'a> Parser<'a> {
         };
 
         let mut member_idx = 0;
+        let mut first = true;
         while !self.consume_end() {
-            if member_idx > 0 {
+            if !first {
                 self.expect_punct(Punct::Comma)?;
+            }
+            first = false;
+
+            if self.check_punct(Punct::Dot) {
+                let member = self.struct_designator(&init.ty)?;
+                self.designation(&mut init.children[member.idx])?;
+                member_idx = member.idx + 1;
+                continue;
             }
 
             if member_idx < members.len() {
@@ -3328,23 +3383,35 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse struct initializer without braces: initializer ("," initializer)*
-    fn struct_initializer2(&mut self, init: &mut Initializer) -> CompileResult<()> {
+    fn struct_initializer2(
+        &mut self,
+        init: &mut Initializer,
+        start_idx: Option<usize>,
+    ) -> CompileResult<()> {
         let members = if let Type::Struct { members, .. } = &init.ty {
             members.clone()
         } else {
             return Ok(());
         };
 
+        let start_idx = start_idx.unwrap_or(0);
         let mut first = true;
-        for member in &members {
+        for member in members.into_iter().skip(start_idx) {
             if self.is_end() {
                 break;
             }
+
+            let start_pos = self.pos;
 
             if !first {
                 self.expect_punct(Punct::Comma)?;
             }
             first = false;
+
+            if self.check_punct(Punct::LBracket) || self.check_punct(Punct::Dot) {
+                self.pos = start_pos;
+                return Ok(());
+            }
 
             self.parse_initializer2(&mut init.children[member.idx])?;
         }
@@ -3409,7 +3476,7 @@ impl<'a> Parser<'a> {
 
             // Not a struct expression, restore position and parse as struct initializer without braces
             self.pos = saved_pos;
-            return self.struct_initializer2(init);
+            return self.struct_initializer2(init, None);
         }
 
         // Check for union initializer
