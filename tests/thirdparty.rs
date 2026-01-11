@@ -6,7 +6,7 @@ use std::{
 
 /// Get the path to the cc3 compiler binary
 fn cc3_binary() -> PathBuf {
-    cargo_bin!(env!("CARGO_PKG_NAME"))
+    assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")).to_path_buf()
 }
 
 /// Get the thirdparty directory path

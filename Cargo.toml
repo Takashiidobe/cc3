@@ -26,4 +26,3 @@ harness = false
 
 [[test]]
 name = "thirdparty"
-harness = false
