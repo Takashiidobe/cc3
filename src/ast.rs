@@ -219,6 +219,7 @@ pub struct Obj {
     pub body: Vec<Stmt>,
     pub locals: Vec<Obj>,
     pub va_area: Option<usize>,
+    pub alloca_bottom: Option<usize>,
     pub stack_size: i32,
 }
 

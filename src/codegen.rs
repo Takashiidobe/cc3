@@ -240,6 +240,12 @@ impl Codegen {
         self.emit_line("  mov %rsp, %rbp");
         self.emit_line(&format!("  sub ${}, %rsp", function.stack_size));
 
+        // Initialize alloca_bottom to current stack pointer
+        if let Some(alloca_bottom_idx) = function.alloca_bottom {
+            let alloca_bottom = &function.locals[alloca_bottom_idx];
+            self.emit_line(&format!("  mov %rsp, {}(%rbp)", alloca_bottom.offset));
+        }
+
         // Save arg registers if function is variadic
         if let Some(va_area_idx) = function.va_area {
             let mut gp = 0;
@@ -787,6 +793,36 @@ impl Codegen {
         }
     }
 
+    fn builtin_alloca(&mut self, function: &Obj) {
+        // Align size to 16 bytes
+        self.emit_line("  add $15, %rdi");
+        self.emit_line("  and $0xfffffff0, %edi");
+
+        // Shift the temporary area by %rdi
+        let alloca_bottom_idx = function.alloca_bottom.expect("alloca_bottom should exist");
+        let alloca_bottom = &function.locals[alloca_bottom_idx];
+        self.emit_line(&format!("  mov {}(%rbp), %rcx", alloca_bottom.offset));
+        self.emit_line("  sub %rsp, %rcx");
+        self.emit_line("  mov %rsp, %rax");
+        self.emit_line("  sub %rdi, %rsp");
+        self.emit_line("  mov %rsp, %rdx");
+        self.emit_line("1:");
+        self.emit_line("  cmp $0, %rcx");
+        self.emit_line("  je 2f");
+        self.emit_line("  mov (%rax), %r8b");
+        self.emit_line("  mov %r8b, (%rdx)");
+        self.emit_line("  inc %rdx");
+        self.emit_line("  inc %rax");
+        self.emit_line("  dec %rcx");
+        self.emit_line("  jmp 1b");
+        self.emit_line("2:");
+
+        // Move alloca_bottom pointer
+        self.emit_line(&format!("  mov {}(%rbp), %rax", alloca_bottom.offset));
+        self.emit_line("  sub %rdi, %rax");
+        self.emit_line(&format!("  mov %rax, {}(%rbp)", alloca_bottom.offset));
+    }
+
     fn gen_expr(&mut self, expr: &Expr, function: &Obj, globals: &[Obj]) {
         self.emit_loc(expr.location);
         match &expr.kind {
@@ -873,6 +909,20 @@ impl Codegen {
                 args,
                 ret_buffer,
             } => {
+                // Check if this is a call to alloca
+                if let ExprKind::Var { idx, is_local } = &callee.kind
+                    && !is_local
+                {
+                    let var = &globals[*idx];
+                    if var.name == "alloca" && args.len() == 1 {
+                        // Generate the argument and put it in %rdi
+                        self.gen_expr(&args[0], function, globals);
+                        self.emit_line("  mov %rax, %rdi");
+                        self.builtin_alloca(function);
+                        return;
+                    }
+                }
+
                 let sret =
                     ret_buffer.is_some() && expr.ty.as_ref().is_some_and(|ty| ty.size() > 16);
                 let arg_info = self.classify_args(args, sret);

@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "p1 - p2 => 16\np2 - p3 => 16\np3 - p4 => 16\nmemcmp(p1, \"0123456789abcdef\", 16) => 0\nmemcmp(p2, \"ghijklmnopqrstuv\", 16) => 0\nmemcmp(p3, \"wxy\", 3) => 0\nOK\n"
+status: 0

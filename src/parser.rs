@@ -125,7 +125,25 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn declare_builtin_functions(&mut self) {
+        // Declare alloca as a builtin function: void *alloca(int)
+        let alloca_ty = Type::Func {
+            return_ty: Box::new(Type::Ptr(Box::new(Type::Void))),
+            params: vec![("size".to_string(), Type::Int)],
+            is_variadic: false,
+        };
+        self.globals.push(Obj {
+            name: "alloca".to_string(),
+            ty: alloca_ty,
+            is_function: true,
+            is_definition: false, // Declaration only
+            ..Default::default()
+        });
+    }
+
     fn parse_program(&mut self) -> CompileResult<Program> {
+        self.declare_builtin_functions();
+
         while !self.check_eof() {
             let mut attr = VarAttr::default();
             let basety = self.parse_declspec(Some(&mut attr))?;
@@ -457,6 +475,12 @@ impl<'a> Parser<'a> {
             None
         };
 
+        // Create __alloca_bottom__ for tracking alloca allocations
+        let alloca_bottom_idx = Some(self.new_lvar(
+            "__alloca_size__".to_string(),
+            Type::Ptr(Box::new(Type::Char)),
+        ));
+
         self.expect_punct(Punct::LBrace)?;
 
         let mut func_bytes = name.as_bytes().to_vec();
@@ -496,6 +520,7 @@ impl<'a> Parser<'a> {
             body,
             locals,
             va_area_idx,
+            alloca_bottom_idx,
             stack_size,
             is_static,
             attr.is_inline,
@@ -2864,6 +2889,7 @@ impl<'a> Parser<'a> {
         body: Vec<Stmt>,
         locals: Vec<Obj>,
         va_area: Option<usize>,
+        alloca_bottom: Option<usize>,
         stack_size: i32,
         is_static: bool,
         is_inline: bool,
@@ -2879,6 +2905,7 @@ impl<'a> Parser<'a> {
             body,
             locals,
             va_area,
+            alloca_bottom,
             stack_size,
             ..Default::default()
         });
