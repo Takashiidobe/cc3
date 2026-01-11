@@ -410,6 +410,47 @@ fn shared_link_outputs_shared_object() {
 }
 
 #[test]
+fn library_search_path_links_shared_object() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let foo_path = dir.path().join("foo.c");
+    fs::write(&foo_path, "extern int bar; int foo() { return bar; }\n").expect("write foo");
+
+    let lib_path = dir.path().join("libfoobar.so");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-fPIC")
+        .arg("-shared")
+        .arg("-o")
+        .arg(&lib_path)
+        .arg(&foo_path)
+        .output()
+        .expect("run cc3 -shared");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bar_path = dir.path().join("bar.c");
+    fs::write(&bar_path, "int foo(); int bar=3; int main() { foo(); }\n").expect("write bar");
+    let out_path = dir.path().join("foo");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-o")
+        .arg(&out_path)
+        .arg(&bar_path)
+        .arg(format!("-L{}", dir.path().display()))
+        .arg("-lfoobar")
+        .output()
+        .expect("run cc3 -L");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn preprocess_dash_md_writes_dependency_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     let header1 = dir.path().join("out2.h");

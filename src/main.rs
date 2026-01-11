@@ -73,6 +73,12 @@ struct Args {
     /// Add include search path.
     #[arg(short = 'I', value_name = "DIR")]
     include_dirs: Vec<PathBuf>,
+    /// Add library search path.
+    #[arg(short = 'L', value_name = "DIR")]
+    library_dirs: Vec<PathBuf>,
+    /// Link with library.
+    #[arg(short = 'l', value_name = "LIB", action = clap::ArgAction::Append)]
+    libraries: Vec<String>,
     /// Add include search path (searched after -I paths).
     #[arg(long = "idirafter", value_name = "DIR")]
     idirafter_dirs: Vec<PathBuf>,
@@ -257,6 +263,13 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
             continue;
         }
 
+        if arg_str.starts_with("-l") && arg_str.len() > 2 {
+            out.push("-l".to_string());
+            out.push(arg_str[2..].to_string());
+            i += 1;
+            continue;
+        }
+
         match arg_str {
             "-cc1" => out.push("--cc1".to_string()),
             "-cc1-input" => out.push("--cc1-input".to_string()),
@@ -268,6 +281,8 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
             "-fPIC" => out.push("--fpic".to_string()),
             "-static" => out.push("--static".to_string()),
             "-shared" => out.push("--shared".to_string()),
+            "-L" => out.push("-L".to_string()),
+            "-l" => out.push("-l".to_string()),
             "-MF" => out.push("--MF".to_string()),
             "-MD" => out.push("--MD".to_string()),
             "-MMD" => out.push("--MMD".to_string()),
@@ -680,9 +695,19 @@ fn run_driver(args: &Args) -> io::Result<()> {
     let mut link_inputs: Vec<PathBuf> = Vec::new();
     let mut temp_objects: Vec<PathBuf> = Vec::new();
     let mut linker_args: Vec<String> = Vec::new();
+    for lib in &args.libraries {
+        linker_args.push(format!("-l{lib}"));
+    }
 
     for input in &args.inputs {
         // Handle -l library flags
+        if let Some(input_str) = input.to_str()
+            && input_str.starts_with("-L")
+        {
+            linker_args.push(input_str.to_string());
+            continue;
+        }
+
         if let Some(input_str) = input.to_str()
             && input_str.starts_with("-l")
         {
@@ -847,6 +872,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             args.strip_symbols,
             args.static_link,
             args.shared,
+            &args.library_dirs,
             args.hash_hash_hash,
         )?;
     }
@@ -895,6 +921,7 @@ fn assemble(input: &Path, output: &Path, show_cmd: bool) -> io::Result<()> {
     run_subprocess(&argv, show_cmd)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_linker(
     inputs: &[PathBuf],
     linker_args: &[String],
@@ -902,6 +929,7 @@ fn run_linker(
     strip_symbols: bool,
     static_link: bool,
     shared: bool,
+    library_dirs: &[PathBuf],
     show_cmd: bool,
 ) -> io::Result<()> {
     let mut argv = link_command();
@@ -918,6 +946,9 @@ fn run_linker(
     }
     for input in inputs {
         argv.push(input.display().to_string());
+    }
+    for dir in library_dirs {
+        argv.push(format!("-L{}", dir.display()));
     }
     for arg in linker_args {
         argv.push(arg.clone());
