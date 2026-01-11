@@ -81,6 +81,12 @@ enum RecordKind {
     Union,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct RecordAttr {
+    is_packed: bool,
+    align: Option<i64>,
+}
+
 /// Represents a variable initializer. Since initializers can be nested
 /// (e.g. `int x[2][2] = {{1, 2}, {3, 4}}`), this is a tree structure.
 #[derive(Debug, Clone, PartialEq)]
@@ -1350,25 +1356,68 @@ impl<'a> Parser<'a> {
         Ok(ty)
     }
 
-    /// Parse __attribute__((packed)) if present
-    fn parse_attribute_packed(&mut self) -> CompileResult<bool> {
-        if !self.consume_keyword(Keyword::Attribute) {
-            return Ok(false);
+    /// Parse __attribute__((...)) list for struct/union declarations.
+    fn parse_record_attributes(&mut self) -> CompileResult<RecordAttr> {
+        let mut attr = RecordAttr::default();
+        while self.consume_keyword(Keyword::Attribute) {
+            self.expect_punct(Punct::LParen)?;
+            self.expect_punct(Punct::LParen)?;
+
+            let mut first = true;
+            while !self.consume_punct(Punct::RParen) {
+                if !first {
+                    self.expect_punct(Punct::Comma)?;
+                }
+                first = false;
+
+                if matches!(self.peek().kind, TokenKind::Ident(ref name) if name == "packed") {
+                    self.pos += 1;
+                    attr.is_packed = true;
+                    continue;
+                }
+
+                if matches!(self.peek().kind, TokenKind::Ident(ref name) if name == "aligned") {
+                    self.pos += 1;
+                    self.expect_punct(Punct::LParen)?;
+                    let align = self.const_expr()?;
+                    self.expect_punct(Punct::RParen)?;
+                    attr.align = Some(align);
+                    continue;
+                }
+
+                return self.bail_here("unknown attribute");
+            }
+
+            self.expect_punct(Punct::RParen)?;
         }
-        self.expect_punct(Punct::LParen)?;
-        self.expect_punct(Punct::LParen)?;
-        // For now we only support "packed", but could be extended
-        if matches!(self.peek().kind, TokenKind::Ident(ref name) if name == "packed") {
-            self.pos += 1;
+
+        Ok(attr)
+    }
+
+    fn apply_record_attr(&self, ty: &mut Type, attr: RecordAttr) {
+        match ty {
+            Type::Struct {
+                is_packed,
+                align_override,
+                ..
+            }
+            | Type::Union {
+                is_packed,
+                align_override,
+                ..
+            } => {
+                *is_packed |= attr.is_packed;
+                if let Some(align) = attr.align {
+                    *align_override = (*align_override).max(align);
+                }
+            }
+            _ => {}
         }
-        self.expect_punct(Punct::RParen)?;
-        self.expect_punct(Punct::RParen)?;
-        Ok(true)
     }
 
     fn parse_struct_union_decl(&mut self, kind: RecordKind) -> CompileResult<Type> {
-        // Parse leading __attribute__((packed)) if present
-        let is_packed_before = self.parse_attribute_packed()?;
+        // Parse leading __attribute__((...)) if present
+        let attr_before = self.parse_record_attributes()?;
 
         // Read a tag (optional identifier)
         let tag = if matches!(self.peek().kind, TokenKind::Ident(_)) {
@@ -1389,14 +1438,16 @@ impl<'a> Parser<'a> {
         if let Some(name) = tag_name.clone()
             && !self.check_punct(Punct::LBrace)
         {
-            if let Some(ty) = self.find_tag(&name) {
+            if let Some(mut ty) = self.find_tag(&name) {
+                self.apply_record_attr(&mut ty, attr_before);
                 return Ok(ty);
             }
 
-            let ty = match kind {
+            let mut ty = match kind {
                 RecordKind::Struct => Type::incomplete_struct(Some(name.clone())),
                 RecordKind::Union => Type::incomplete_union(Some(name.clone())),
             };
+            self.apply_record_attr(&mut ty, attr_before);
             self.push_tag_scope(name, ty.clone());
             return Ok(ty);
         }
@@ -1406,10 +1457,11 @@ impl<'a> Parser<'a> {
         if let Some(name) = tag_name.as_ref()
             && self.find_tag_in_current_scope(name).is_none()
         {
-            let ty = match kind {
+            let mut ty = match kind {
                 RecordKind::Struct => Type::incomplete_struct(Some(name.clone())),
                 RecordKind::Union => Type::incomplete_union(Some(name.clone())),
             };
+            self.apply_record_attr(&mut ty, attr_before);
             self.push_tag_scope(name.clone(), ty);
         }
 
@@ -1422,20 +1474,14 @@ impl<'a> Parser<'a> {
             RecordKind::Union => Type::complete_union(members, tag_name.clone(), is_flexible),
         };
 
-        // Parse trailing __attribute__((packed)) after closing brace
-        let is_packed_after = self.parse_attribute_packed()?;
-
-        // Set is_packed if found before or after
-        let is_packed = is_packed_before || is_packed_after;
-        match &mut ty {
-            Type::Struct {
-                is_packed: field, ..
-            } => *field = is_packed,
-            Type::Union {
-                is_packed: field, ..
-            } => *field = is_packed,
-            _ => {}
+        // Parse trailing __attribute__((...)) after closing brace
+        let attr_after = self.parse_record_attributes()?;
+        let mut attr = attr_before;
+        attr.is_packed |= attr_after.is_packed;
+        if let Some(align) = attr_after.align {
+            attr.align = Some(align);
         }
+        self.apply_record_attr(&mut ty, attr);
 
         // Register the struct/union type if a tag was given.
         if let Some(name) = tag_name {
@@ -3330,6 +3376,7 @@ impl<'a> Parser<'a> {
                 is_incomplete: true,
                 is_flexible,
                 is_packed,
+                align_override,
                 id,
             } => self.find_tag(&tag).unwrap_or(Type::Struct {
                 members,
@@ -3337,6 +3384,7 @@ impl<'a> Parser<'a> {
                 is_incomplete: true,
                 is_flexible,
                 is_packed,
+                align_override,
                 id,
             }),
             Type::Union {
@@ -3345,6 +3393,7 @@ impl<'a> Parser<'a> {
                 is_incomplete: true,
                 is_flexible,
                 is_packed,
+                align_override,
                 id,
             } => self.find_tag(&tag).unwrap_or(Type::Union {
                 members,
@@ -3352,6 +3401,7 @@ impl<'a> Parser<'a> {
                 is_incomplete: true,
                 is_flexible,
                 is_packed,
+                align_override,
                 id,
             }),
             other => other,
@@ -4542,6 +4592,7 @@ impl<'a> Parser<'a> {
                 is_incomplete,
                 is_flexible,
                 is_packed,
+                align_override,
                 id,
             } => Type::Struct {
                 members: members.to_vec(),
@@ -4549,6 +4600,7 @@ impl<'a> Parser<'a> {
                 is_incomplete,
                 is_flexible,
                 is_packed,
+                align_override,
                 id,
             },
             Type::Union {
@@ -4557,6 +4609,7 @@ impl<'a> Parser<'a> {
                 is_incomplete,
                 is_flexible,
                 is_packed,
+                align_override,
                 id,
             } => Type::Union {
                 members: members.to_vec(),
@@ -4564,6 +4617,7 @@ impl<'a> Parser<'a> {
                 is_incomplete,
                 is_flexible,
                 is_packed,
+                align_override,
                 id,
             },
             other => other,

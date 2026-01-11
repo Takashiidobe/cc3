@@ -43,6 +43,7 @@ pub struct Stmt {
     pub location: SourceLocation,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum StmtKind {
     Return(Option<Expr>),
@@ -292,6 +293,7 @@ pub enum Type {
         is_incomplete: bool,
         is_flexible: bool,
         is_packed: bool,
+        align_override: i64,
         id: usize,
     },
     Union {
@@ -300,6 +302,7 @@ pub enum Type {
         is_incomplete: bool,
         is_flexible: bool,
         is_packed: bool,
+        align_override: i64,
         id: usize,
     },
     Array {
@@ -439,25 +442,32 @@ impl Type {
                 members,
                 is_incomplete,
                 is_packed,
+                align_override,
                 ..
             }
             | Type::Union {
                 members,
                 is_incomplete,
                 is_packed,
+                align_override,
                 ..
             } => {
                 if *is_incomplete || members.is_empty() {
                     return 1;
                 }
-                if *is_packed {
-                    return 1;
+                let mut align = if *is_packed {
+                    1
+                } else {
+                    members
+                        .iter()
+                        .map(|member| member.align as i64)
+                        .max()
+                        .unwrap_or(1)
+                };
+                if *align_override > 0 {
+                    align = align.max(*align_override);
                 }
-                members
-                    .iter()
-                    .map(|member| member.align as i64)
-                    .max()
-                    .unwrap_or(1)
+                align
             }
             Type::Array { base, .. } => base.align(),
             Type::Vla { base, .. } => base.align(),
@@ -508,6 +518,7 @@ impl Type {
             is_incomplete: true,
             is_flexible: false,
             is_packed: false,
+            align_override: 0,
             id: next_type_id(),
         }
     }
@@ -519,6 +530,7 @@ impl Type {
             is_incomplete: false,
             is_flexible,
             is_packed: false,
+            align_override: 0,
             id: next_type_id(),
         }
     }
@@ -530,6 +542,7 @@ impl Type {
             is_incomplete: true,
             is_flexible: false,
             is_packed: false,
+            align_override: 0,
             id: next_type_id(),
         }
     }
@@ -541,6 +554,7 @@ impl Type {
             is_incomplete: false,
             is_flexible,
             is_packed: false,
+            align_override: 0,
             id: next_type_id(),
         }
     }
