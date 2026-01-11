@@ -222,6 +222,43 @@ fn convert_universal_chars(input: &str) -> String {
     String::from_utf8(out).expect("universal character conversion")
 }
 
+fn decode_utf8(input: &[u8], pos: &mut usize, location: SourceLocation) -> CompileResult<u32> {
+    if *pos >= input.len() {
+        return Ok(0);
+    }
+
+    let b = input[*pos];
+    if b < 0x80 {
+        *pos += 1;
+        return Ok(b as u32);
+    }
+
+    let (len, mut c) = if b >= 0b1111_0000 {
+        (4, (b & 0b0000_0111) as u32)
+    } else if b >= 0b1110_0000 {
+        (3, (b & 0b0000_1111) as u32)
+    } else if b >= 0b1100_0000 {
+        (2, (b & 0b0001_1111) as u32)
+    } else {
+        return Err(CompileError::at("invalid UTF-8 sequence", location));
+    };
+
+    if *pos + len > input.len() {
+        return Err(CompileError::at("invalid UTF-8 sequence", location));
+    }
+
+    for i in 1..len {
+        let byte = input[*pos + i];
+        if byte >> 6 != 0b10 {
+            return Err(CompileError::at("invalid UTF-8 sequence", location));
+        }
+        c = (c << 6) | (byte & 0b0011_1111) as u32;
+    }
+
+    *pos += len;
+    Ok(c)
+}
+
 pub fn tokenize_file(path: &Path) -> CompileResult<Vec<Token>> {
     let contents = fs::read_to_string(path)
         .map_err(|err| CompileError::new(format!("failed to read {}: {err}", path.display())))?;
@@ -871,7 +908,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 if bytes[p] == b'\\' {
                     let mut escaped_pos = p + 1;
                     let escaped = read_escaped_char(bytes, &mut escaped_pos, location)?;
-                    str_bytes.push(escaped);
+                    str_bytes.push(escaped as u8);
                     p = escaped_pos;
                 } else {
                     str_bytes.push(bytes[p]);
@@ -911,6 +948,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 file_no,
             };
             let (value, end) = read_char_literal(bytes, start, start, location)?;
+            let value = value as i8 as i64;
             tokens.push(Token {
                 kind: TokenKind::Num {
                     value,
@@ -982,20 +1020,24 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
     Ok(tokens)
 }
 
-fn read_escaped_char(input: &[u8], pos: &mut usize, location: SourceLocation) -> CompileResult<u8> {
+fn read_escaped_char(
+    input: &[u8],
+    pos: &mut usize,
+    location: SourceLocation,
+) -> CompileResult<u32> {
     if *pos >= input.len() {
         return Ok(0);
     }
 
     let b = input[*pos];
     if b.is_ascii_digit() && b <= b'7' {
-        let mut value = b - b'0';
+        let mut value = (b - b'0') as u32;
         *pos += 1;
         if *pos < input.len() && input[*pos].is_ascii_digit() && input[*pos] <= b'7' {
-            value = (value << 3) + (input[*pos] - b'0');
+            value = (value << 3) + (input[*pos] - b'0') as u32;
             *pos += 1;
             if *pos < input.len() && input[*pos].is_ascii_digit() && input[*pos] <= b'7' {
-                value = (value << 3) + (input[*pos] - b'0');
+                value = (value << 3) + (input[*pos] - b'0') as u32;
                 *pos += 1;
             }
         }
@@ -1012,7 +1054,7 @@ fn read_escaped_char(input: &[u8], pos: &mut usize, location: SourceLocation) ->
             value = (value << 4) + from_hex(input[*pos]);
             *pos += 1;
         }
-        return Ok(value as u8);
+        return Ok(value);
     }
 
     *pos += 1;
@@ -1026,7 +1068,7 @@ fn read_escaped_char(input: &[u8], pos: &mut usize, location: SourceLocation) ->
         b'r' => b'\r',
         b'e' => 27,
         _ => b,
-    })
+    } as u32)
 }
 
 fn read_char_literal(
@@ -1044,11 +1086,12 @@ fn read_char_literal(
         let mut escaped_pos = i + 1;
         let escaped = read_escaped_char(input, &mut escaped_pos, location)?;
         i = escaped_pos;
-        escaped as i8 as i64
+        escaped as i64
     } else {
-        let escaped = input[i];
-        i += 1;
-        escaped as i8 as i64
+        let mut utf8_pos = i;
+        let decoded = decode_utf8(input, &mut utf8_pos, location)?;
+        i = utf8_pos;
+        decoded as i64
     };
 
     if i >= input.len() || input[i] != b'\'' {
