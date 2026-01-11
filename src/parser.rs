@@ -346,6 +346,11 @@ impl<'a> Parser<'a> {
                 }
                 FLOAT => Type::Float,
                 DOUBLE => Type::Double,
+                // NOTE: long double is recognized as a 16-byte type but is NOT
+                // properly implemented in codegen. It currently uses the same f64
+                // representation as double and does not emit x87 FPU instructions.
+                // Full support would require implementing fldt/fstpt and x87 stack
+                // operations (~200-300 lines of codegen changes).
                 LONG_DOUBLE => Type::LDouble,
                 _ => self.bail_at(location, "invalid type")?,
             };

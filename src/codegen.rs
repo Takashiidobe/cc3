@@ -1,3 +1,9 @@
+// NOTE: This codegen does NOT properly support long double (Type::LDouble).
+// While the type system recognizes it as a 16-byte type, all flonum operations
+// in this module only handle Float and Double using XMM registers. Long double
+// would require x87 FPU stack operations (fldt, fstpt, faddp, fsubrp, etc.) which
+// are not implemented. Currently, long double values are treated like doubles.
+
 use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
 use crate::error::SourceLocation;
 use crate::lexer::get_input_files;

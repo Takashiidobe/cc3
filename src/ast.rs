@@ -248,6 +248,11 @@ pub enum Type {
     ULong,
     Float,
     Double,
+    /// 80-bit extended precision float (stored as 16 bytes on x86-64).
+    /// NOTE: This is only partially implemented. The type system recognizes it
+    /// as 16 bytes, but codegen does NOT emit proper x87 FPU instructions and
+    /// internally treats values as f64. Full implementation would require x87
+    /// FPU stack operations (fldt, fstpt, faddp, etc.).
     LDouble,
     Enum,
     Ptr(Box<Type>),
