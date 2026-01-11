@@ -2014,7 +2014,6 @@ impl Preprocessor {
         self.define_macro("__UINT_LEAST32_TYPE__", "unsigned int")?;
         self.define_macro("__UINT_LEAST64_TYPE__", "unsigned long")?;
         self.define_macro("__STDC_HOSTED__", "1")?;
-        self.define_macro("__STDC_NO_ATOMICS__", "1")?;
         self.define_macro("__STDC_NO_COMPLEX__", "1")?;
         self.define_macro("__STDC_UTF_16__", "1")?;
         self.define_macro("__STDC_UTF_32__", "1")?;
