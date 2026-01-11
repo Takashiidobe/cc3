@@ -678,6 +678,7 @@ impl Preprocessor {
         let mut expr_tokens = self.expand_macros_only(expr_tokens)?;
         expr_tokens = self.replace_has_include(expr_tokens)?;
         expr_tokens = self.replace_has_feature(expr_tokens)?;
+        expr_tokens = self.replace_building_module(expr_tokens)?;
 
         // Convert pp-numbers to regular numbers
         convert_pp_tokens(&mut expr_tokens)?;
@@ -764,6 +765,51 @@ impl Preprocessor {
             };
 
             if name != "__has_feature" {
+                out.push(tok.clone());
+                i += 1;
+                continue;
+            }
+
+            if i + 1 >= tokens.len()
+                || !matches!(tokens[i + 1].kind, TokenKind::Punct(Punct::LParen))
+            {
+                return self.error("expected '('", tok.location);
+            }
+            i += 2;
+
+            let mut depth = 1usize;
+            while i < tokens.len() && depth > 0 {
+                match tokens[i].kind {
+                    TokenKind::Punct(Punct::LParen) => depth += 1,
+                    TokenKind::Punct(Punct::RParen) => depth -= 1,
+                    _ => {}
+                }
+                i += 1;
+            }
+
+            if depth != 0 {
+                return self.error("expected ')'", tok.location);
+            }
+
+            out.push(new_num_token(0, tok));
+        }
+
+        Ok(out)
+    }
+
+    fn replace_building_module(&mut self, tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
+        let mut out = Vec::with_capacity(tokens.len());
+        let mut i = 0;
+
+        while i < tokens.len() {
+            let tok = &tokens[i];
+            let TokenKind::Ident(name) = &tok.kind else {
+                out.push(tok.clone());
+                i += 1;
+                continue;
+            };
+
+            if name != "__building_module" {
                 out.push(tok.clone());
                 i += 1;
                 continue;
