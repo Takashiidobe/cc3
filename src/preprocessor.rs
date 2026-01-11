@@ -676,6 +676,7 @@ impl Preprocessor {
 
         // Expand macros in the expression
         let mut expr_tokens = self.expand_macros_only(expr_tokens)?;
+        expr_tokens = self.replace_has_include(expr_tokens)?;
 
         // Convert pp-numbers to regular numbers
         convert_pp_tokens(&mut expr_tokens)?;
@@ -695,6 +696,58 @@ impl Preprocessor {
 
         let value = const_expr(&expr_tokens)?;
         Ok(value)
+    }
+
+    fn replace_has_include(&mut self, tokens: Vec<Token>) -> CompileResult<Vec<Token>> {
+        let mut out = Vec::with_capacity(tokens.len());
+        let mut i = 0;
+
+        while i < tokens.len() {
+            let tok = &tokens[i];
+            let TokenKind::Ident(name) = &tok.kind else {
+                out.push(tok.clone());
+                i += 1;
+                continue;
+            };
+
+            let is_include = name == "__has_include" || name == "__has_include_next";
+            if !is_include {
+                out.push(tok.clone());
+                i += 1;
+                continue;
+            }
+
+            if i + 1 >= tokens.len()
+                || !matches!(tokens[i + 1].kind, TokenKind::Punct(Punct::LParen))
+            {
+                return self.error("expected '('", tok.location);
+            }
+            i += 2;
+
+            let (filename, _is_dquote, consumed, _name_tok) =
+                self.parse_include_filename(&tokens[i..])?;
+            i += consumed;
+
+            if i >= tokens.len() || !matches!(tokens[i].kind, TokenKind::Punct(Punct::RParen)) {
+                return self.error("expected ')'", tok.location);
+            }
+            i += 1;
+
+            let has_include = if name == "__has_include_next" {
+                let saved = include_next_idx().lock().map(|idx| *idx).unwrap_or(0);
+                let found = search_include_next(&filename).is_some();
+                if let Ok(mut idx) = include_next_idx().lock() {
+                    *idx = saved;
+                }
+                found
+            } else {
+                search_include_paths(&filename).is_some()
+            };
+
+            out.push(new_num_token(if has_include { 1 } else { 0 }, tok));
+        }
+
+        Ok(out)
     }
 }
 
