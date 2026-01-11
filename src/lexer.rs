@@ -963,6 +963,26 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
             continue;
         }
 
+        if b == b'U' && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+            let start = i;
+            let location = SourceLocation {
+                line,
+                column,
+                byte: start,
+                file_no,
+            };
+            let mut token = read_utf32_string_literal(bytes, start, start + 1, location)?;
+            token.at_bol = at_bol;
+            token.has_space = has_space;
+            let len = token.len;
+            tokens.push(token);
+            at_bol = false;
+            has_space = false;
+            i += len;
+            column += len;
+            continue;
+        }
+
         if b == b'u' && i + 2 < bytes.len() && bytes[i + 1] == b'8' && bytes[i + 2] == b'"' {
             let start = i;
             let location = SourceLocation {
@@ -1253,6 +1273,44 @@ fn read_utf16_string_literal(
     let ty = Type::Array {
         base: Box::new(Type::UShort),
         len: (buf.len() / 2) as i32,
+    };
+    Ok(Token {
+        kind: TokenKind::Str { bytes: buf, ty },
+        location,
+        at_bol: false,
+        has_space: false,
+        len: end + 1 - start,
+        hideset: HideSet::default(),
+        origin: None,
+    })
+}
+
+fn read_utf32_string_literal(
+    input: &[u8],
+    start: usize,
+    quote: usize,
+    location: SourceLocation,
+) -> CompileResult<Token> {
+    let end = string_literal_end(input, quote + 1, location)?;
+    let mut buf = Vec::with_capacity((end - quote + 1) * 4);
+    let mut p = quote + 1;
+    while p < end {
+        if input[p] == b'\\' {
+            let mut escaped_pos = p + 1;
+            let escaped = read_escaped_char(input, &mut escaped_pos, location)?;
+            p = escaped_pos;
+            buf.extend_from_slice(&escaped.to_le_bytes());
+        } else {
+            let mut utf8_pos = p;
+            let decoded = decode_utf8(input, &mut utf8_pos, location)?;
+            p = utf8_pos;
+            buf.extend_from_slice(&decoded.to_le_bytes());
+        }
+    }
+    buf.extend_from_slice(&0u32.to_le_bytes());
+    let ty = Type::Array {
+        base: Box::new(Type::UInt),
+        len: (buf.len() / 4) as i32,
     };
     Ok(Token {
         kind: TokenKind::Str { bytes: buf, ty },
