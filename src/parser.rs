@@ -4871,6 +4871,18 @@ impl<'a> Parser<'a> {
 
         match &mut expr.kind {
             ExprKind::Num { value: val, .. } => Ok(*val),
+            ExprKind::LabelVal { label: label_name } => {
+                let label_ref = match label {
+                    Some(label_ref) => label_ref,
+                    None => self.bail_at(expr.location, "not a compile-time constant")?,
+                };
+                let func_name = self
+                    .current_fn
+                    .as_ref()
+                    .ok_or_else(|| self.err_at(expr.location, "not a compile-time constant"))?;
+                *label_ref = Some(label_symbol(func_name, label_name));
+                Ok(0)
+            }
             ExprKind::Unary { op, expr } => {
                 let val = self.eval2(expr, label)?;
                 match op {
@@ -5132,6 +5144,27 @@ impl<'a> Parser<'a> {
         let mut expr = self.parse_conditional()?;
         self.eval(&mut expr)
     }
+}
+
+fn label_symbol(function: &str, label: &str) -> String {
+    format!(".L.{}.{}", asm_symbol(function), label)
+}
+
+fn asm_symbol(name: &str) -> String {
+    if name
+        .as_bytes()
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'$'))
+    {
+        return name.to_string();
+    }
+
+    let mut out = String::from("__cc3_u8_");
+    for b in name.as_bytes() {
+        use std::fmt::Write;
+        write!(&mut out, "{:02x}", b).expect("utf-8 symbol encode");
+    }
+    out
 }
 
 fn align_to(n: i32, align: i32) -> i32 {
