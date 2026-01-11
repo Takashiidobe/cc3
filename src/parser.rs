@@ -1,6 +1,6 @@
 use crate::ast::{
     BinaryOp, Expr, ExprKind, Member, Obj, Program, Relocation, Stmt, StmtKind, SwitchCase, Type,
-    UnaryOp,
+    UnaryOp, is_compatible,
 };
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
@@ -2127,6 +2127,19 @@ impl<'a> Parser<'a> {
                 expr.ty = Some(Type::Int);
                 Ok(expr)
             }
+            TokenKind::Ident(ref name) if name == "__builtin_types_compatible_p" => {
+                let location = token.location;
+                self.pos += 1;
+                self.expect_punct(Punct::LParen)?;
+                let ty1 = self.parse_typename()?;
+                self.expect_punct(Punct::Comma)?;
+                let ty2 = self.parse_typename()?;
+                self.expect_punct(Punct::RParen)?;
+                let value = if is_compatible(&ty1, &ty2) { 1 } else { 0 };
+                let mut expr = self.expr_at(ExprKind::Num { value, fval: 0.0 }, location);
+                expr.ty = Some(Type::Int);
+                Ok(expr)
+            }
             TokenKind::Ident(ref name) => {
                 let name = name.clone();
                 let expr = if let Some(scope) = self.find_var_scope(&name) {
@@ -2482,22 +2495,26 @@ impl<'a> Parser<'a> {
                 tag: Some(tag),
                 is_incomplete: true,
                 is_flexible,
+                id,
             } => self.find_tag(&tag).unwrap_or(Type::Struct {
                 members,
                 tag: Some(tag),
                 is_incomplete: true,
                 is_flexible,
+                id,
             }),
             Type::Union {
                 members,
                 tag: Some(tag),
                 is_incomplete: true,
                 is_flexible,
+                id,
             } => self.find_tag(&tag).unwrap_or(Type::Union {
                 members,
                 tag: Some(tag),
                 is_incomplete: true,
                 is_flexible,
+                id,
             }),
             other => other,
         }
@@ -3559,22 +3576,26 @@ impl<'a> Parser<'a> {
                 tag,
                 is_incomplete,
                 is_flexible,
+                id,
             } => Type::Struct {
                 members: members.to_vec(),
                 tag,
                 is_incomplete,
                 is_flexible,
+                id,
             },
             Type::Union {
                 members,
                 tag,
                 is_incomplete,
                 is_flexible,
+                id,
             } => Type::Union {
                 members: members.to_vec(),
                 tag,
                 is_incomplete,
                 is_flexible,
+                id,
             },
             other => other,
         }

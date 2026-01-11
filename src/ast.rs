@@ -1,4 +1,11 @@
 use crate::error::SourceLocation;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static TYPE_ID: AtomicUsize = AtomicUsize::new(1);
+
+fn next_type_id() -> usize {
+    TYPE_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Program {
@@ -241,12 +248,14 @@ pub enum Type {
         tag: Option<String>,
         is_incomplete: bool,
         is_flexible: bool,
+        id: usize,
     },
     Union {
         members: Vec<Member>,
         tag: Option<String>,
         is_incomplete: bool,
         is_flexible: bool,
+        id: usize,
     },
     Array {
         base: Box<Type>,
@@ -420,6 +429,7 @@ impl Type {
             tag,
             is_incomplete: true,
             is_flexible: false,
+            id: next_type_id(),
         }
     }
 
@@ -429,6 +439,7 @@ impl Type {
             tag,
             is_incomplete: false,
             is_flexible,
+            id: next_type_id(),
         }
     }
 
@@ -438,6 +449,7 @@ impl Type {
             tag,
             is_incomplete: true,
             is_flexible: false,
+            id: next_type_id(),
         }
     }
 
@@ -447,6 +459,70 @@ impl Type {
             tag,
             is_incomplete: false,
             is_flexible,
+            id: next_type_id(),
         }
+    }
+}
+
+pub fn is_compatible(t1: &Type, t2: &Type) -> bool {
+    use Type::*;
+    match (t1, t2) {
+        (Void, Void)
+        | (Bool, Bool)
+        | (Char, Char)
+        | (UChar, UChar)
+        | (Short, Short)
+        | (UShort, UShort)
+        | (Int, Int)
+        | (UInt, UInt)
+        | (Long, Long)
+        | (ULong, ULong)
+        | (Float, Float)
+        | (Double, Double)
+        | (Enum, Enum) => true,
+        (Ptr(base1), Ptr(base2)) => is_compatible(base1, base2),
+        (
+            Func {
+                return_ty: ret1,
+                params: params1,
+                is_variadic: var1,
+            },
+            Func {
+                return_ty: ret2,
+                params: params2,
+                is_variadic: var2,
+            },
+        ) => {
+            if var1 != var2 || !is_compatible(ret1, ret2) || params1.len() != params2.len() {
+                return false;
+            }
+            for ((_, ty1), (_, ty2)) in params1.iter().zip(params2.iter()) {
+                if !is_compatible(ty1, ty2) {
+                    return false;
+                }
+            }
+            true
+        }
+        (
+            Array {
+                base: base1,
+                len: len1,
+            },
+            Array {
+                base: base2,
+                len: len2,
+            },
+        ) => {
+            if !is_compatible(base1, base2) {
+                return false;
+            }
+            if *len1 < 0 || *len2 < 0 {
+                return len1 == len2;
+            }
+            len1 == len2
+        }
+        (Struct { id: id1, .. }, Struct { id: id2, .. }) => id1 == id2,
+        (Union { id: id1, .. }, Union { id: id2, .. }) => id1 == id2,
+        _ => false,
     }
 }
