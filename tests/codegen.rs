@@ -107,10 +107,19 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
     ensure_success("cc(common)", Path::new("test/common"), &common_out);
 
     // 1) Your compiler: codegen -> .S, then cc -> exe_mine
-    let mut bin = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
-    let codegen_out = bin
-        .arg("-Iinclude")
-        .arg("-Itest")
+    let bin = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let mut codegen_cmd = bin;
+    codegen_cmd.arg("-Iinclude").arg("-Itest");
+    if path
+        .file_name()
+        .is_some_and(|name| name == "include-next.c")
+    {
+        codegen_cmd
+            .arg("-Itest/include-next1")
+            .arg("-Itest/include-next2")
+            .arg("-Itest/include-next3");
+    }
+    let codegen_out = codegen_cmd
         .arg(path)
         .arg("-S")
         .arg("-o")

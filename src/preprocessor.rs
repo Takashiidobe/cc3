@@ -85,6 +85,7 @@ static INCLUDE_PATHS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
 static INCLUDE_CACHE: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
 static INCLUDE_GUARDS: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
 static PRAGMA_ONCE: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+static INCLUDE_NEXT_IDX: OnceLock<Mutex<usize>> = OnceLock::new();
 
 fn include_paths_storage() -> &'static Mutex<Vec<PathBuf>> {
     INCLUDE_PATHS.get_or_init(|| Mutex::new(Vec::new()))
@@ -100,6 +101,10 @@ fn include_guard_cache() -> &'static Mutex<HashMap<PathBuf, String>> {
 
 fn pragma_once_cache() -> &'static Mutex<HashSet<PathBuf>> {
     PRAGMA_ONCE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn include_next_idx() -> &'static Mutex<usize> {
+    INCLUDE_NEXT_IDX.get_or_init(|| Mutex::new(0))
 }
 
 fn normalize_path(path: &Path) -> PathBuf {
@@ -796,16 +801,40 @@ pub fn search_include_paths(filename: &str) -> Option<PathBuf> {
         return Some(cached.clone());
     }
 
-    for path in get_include_paths() {
+    let include_paths = get_include_paths();
+    for (idx, path) in include_paths.iter().enumerate() {
         let candidate = path.join(filename);
         if candidate.exists() {
             if let Ok(mut cache) = include_cache().lock() {
                 cache.insert(filename.to_string(), candidate.clone());
             }
+            if let Ok(mut idx_cache) = include_next_idx().lock() {
+                *idx_cache = idx + 1;
+            }
             return Some(candidate);
         }
     }
 
+    None
+}
+
+fn search_include_next(filename: &str) -> Option<PathBuf> {
+    let include_paths = get_include_paths();
+    let start_idx = include_next_idx().lock().map(|idx| *idx).unwrap_or(0);
+
+    for (idx, path) in include_paths.iter().enumerate().skip(start_idx) {
+        let candidate = path.join(filename);
+        if candidate.exists() {
+            if let Ok(mut idx_cache) = include_next_idx().lock() {
+                *idx_cache = idx + 1;
+            }
+            return Some(candidate);
+        }
+    }
+
+    if let Ok(mut idx_cache) = include_next_idx().lock() {
+        *idx_cache = include_paths.len();
+    }
     None
 }
 
@@ -1291,6 +1320,23 @@ impl Preprocessor {
 
                 let include_path =
                     search_include_paths(&filename).unwrap_or_else(|| filename_path.to_path_buf());
+                self.include_file(&mut out, &include_path, &filename_tok)?;
+                continue;
+            }
+
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
+                && name == "include_next"
+            {
+                self.pos += 1;
+                if self.pos >= self.tokens.len() {
+                    let loc = self.tokens[self.pos - 1].location;
+                    self.error("expected a filename", loc)?;
+                    unreachable!("expected error to return");
+                }
+                let (filename, _is_dquote, filename_tok) = self.read_include_filename()?;
+                let filename_path = Path::new(&filename);
+                let include_path =
+                    search_include_next(&filename).unwrap_or_else(|| filename_path.to_path_buf());
                 self.include_file(&mut out, &include_path, &filename_tok)?;
                 continue;
             }
