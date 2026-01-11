@@ -209,6 +209,7 @@ pub struct Obj {
     pub refs: Vec<String>,
 
     // Global variable
+    pub is_tentative: bool,
     pub init_data: Option<Vec<u8>>,
     pub relocations: Vec<Relocation>,
 

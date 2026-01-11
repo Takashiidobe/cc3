@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "x => 5\ny => 7\ncommon_ext1 => 0\ncommon_ext2 => 3\nOK\n"
+status: 0

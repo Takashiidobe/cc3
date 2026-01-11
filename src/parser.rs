@@ -143,6 +143,7 @@ impl<'a> Parser<'a> {
             self.parse_global_variable(basety, &attr)?;
         }
         self.apply_inline_liveness();
+        self.scan_globals();
         Ok(Program {
             globals: mem::take(&mut self.globals),
         })
@@ -535,6 +536,8 @@ impl<'a> Parser<'a> {
             // Check for initializer
             if self.consume_punct(Punct::Assign) {
                 self.parse_gvar_initializer(var_idx)?;
+            } else if !attr.is_extern {
+                self.globals[var_idx].is_tentative = true;
             }
         }
 
@@ -2658,6 +2661,33 @@ impl<'a> Parser<'a> {
         for name in refs {
             if let Some(next_idx) = self.find_function_idx(&name) {
                 self.mark_live(next_idx);
+            }
+        }
+    }
+
+    /// Remove redundant tentative definitions.
+    fn scan_globals(&mut self) {
+        for i in 0..self.globals.len() {
+            if !self.globals[i].is_tentative {
+                continue;
+            }
+
+            // Find another definition of the same identifier.
+            let mut found_real_def = false;
+            for j in 0..self.globals.len() {
+                if i != j
+                    && self.globals[j].is_definition
+                    && self.globals[i].name == self.globals[j].name
+                {
+                    found_real_def = true;
+                    break;
+                }
+            }
+
+            // If there's another definition, the tentative definition is redundant
+            // Mark it as not a definition so it won't be emitted
+            if found_real_def {
+                self.globals[i].is_definition = false;
             }
         }
     }

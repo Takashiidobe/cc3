@@ -118,6 +118,11 @@ impl Codegen {
                     obj.align
                 };
                 self.emit_line(&format!("  .align {}", align));
+
+                if obj.is_tentative {
+                    self.emit_line(&format!("  .comm {}, {}, {}", symbol, obj.ty.size(), align));
+                    continue;
+                }
             }
 
             if let Some(init_data) = &obj.init_data {
