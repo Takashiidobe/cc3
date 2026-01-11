@@ -91,6 +91,9 @@ struct Args {
     /// Do not emit common symbols.
     #[arg(long = "fno-common", action = clap::ArgAction::SetTrue, hide = true)]
     fno_common: bool,
+    /// Generate position independent code.
+    #[arg(long = "fpic", action = clap::ArgAction::SetTrue, aliases = ["fPIC"])]
+    fpic: bool,
     /// Specify language for input files (can be specified multiple times, last one wins).
     #[arg(short = 'x', value_name = "LANG")]
     languages: Vec<String>,
@@ -170,6 +173,9 @@ fn main() {
         codegen::set_opt_fcommon(false);
     } else if args.fcommon {
         codegen::set_opt_fcommon(true);
+    }
+    if args.fpic {
+        codegen::set_opt_fpic(true);
     }
 
     if args.cc1 {
@@ -252,6 +258,8 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
             "-###" => out.push("--hash-hash-hash".to_string()),
             "-fcommon" => out.push("--fcommon".to_string()),
             "-fno-common" => out.push("--fno-common".to_string()),
+            "-fpic" => out.push("--fpic".to_string()),
+            "-fPIC" => out.push("--fpic".to_string()),
             "-MF" => out.push("--MF".to_string()),
             "-MD" => out.push("--MD".to_string()),
             "-MMD" => out.push("--MMD".to_string()),
@@ -318,6 +326,7 @@ fn run_cc1_subprocess(
     undefs: &[String],
     fcommon: bool,
     fno_common: bool,
+    fpic: bool,
     show_cmd: bool,
 ) -> io::Result<()> {
     let exe = std::env::args()
@@ -371,6 +380,9 @@ fn run_cc1_subprocess(
         argv.push("-fno-common".to_string());
     } else if fcommon {
         argv.push("-fcommon".to_string());
+    }
+    if fpic {
+        argv.push("-fpic".to_string());
     }
     run_subprocess(&argv, show_cmd)
 }
@@ -699,6 +711,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 &args.undefs,
                 args.fcommon,
                 args.fno_common,
+                args.fpic,
                 args.hash_hash_hash,
             )?;
             continue;
@@ -722,6 +735,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 &args.undefs,
                 args.fcommon,
                 args.fno_common,
+                args.fpic,
                 args.hash_hash_hash,
             )?;
             continue;
@@ -746,6 +760,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 &args.undefs,
                 args.fcommon,
                 args.fno_common,
+                args.fpic,
                 args.hash_hash_hash,
             )?;
             assemble(&tmp_asm, output.as_ref().unwrap(), args.hash_hash_hash)?;
@@ -772,6 +787,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             &args.undefs,
             args.fcommon,
             args.fno_common,
+            args.fpic,
             args.hash_hash_hash,
         )?;
         assemble(&tmp_asm, &tmp_obj, args.hash_hash_hash)?;

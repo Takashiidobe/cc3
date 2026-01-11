@@ -10,6 +10,7 @@ use crate::lexer::get_input_files;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static OPT_FCOMMON: AtomicBool = AtomicBool::new(true);
+static OPT_FPIC: AtomicBool = AtomicBool::new(false);
 
 pub fn set_opt_fcommon(value: bool) {
     OPT_FCOMMON.store(value, Ordering::Relaxed);
@@ -19,6 +20,13 @@ fn get_opt_fcommon() -> bool {
     OPT_FCOMMON.load(Ordering::Relaxed)
 }
 
+pub fn set_opt_fpic(value: bool) {
+    OPT_FPIC.store(value, Ordering::Relaxed);
+}
+
+fn get_opt_fpic() -> bool {
+    OPT_FPIC.load(Ordering::Relaxed)
+}
 const ARG_REGS_8: [&str; 6] = ["%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"];
 const ARG_REGS_16: [&str; 6] = ["%di", "%si", "%dx", "%cx", "%r8w", "%r9w"];
 const ARG_REGS_32: [&str; 6] = ["%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"];
@@ -1570,6 +1578,21 @@ impl Codegen {
         }
         let obj = &globals[idx];
         let symbol = self.asm_symbol(&obj.name);
+
+        if get_opt_fpic() {
+            // Thread-local variable
+            if obj.is_tls {
+                self.emit_line(&format!("  data16 lea {}@tlsgd(%rip), %rdi", symbol));
+                self.emit_line("  .value 0x6666");
+                self.emit_line("  rex64");
+                self.emit_line("  call __tls_get_addr@PLT");
+                return;
+            }
+
+            // Function or global variable
+            self.emit_line(&format!("  mov {}@GOTPCREL(%rip), %rax", symbol));
+            return;
+        }
 
         // Thread-local variable
         if obj.is_tls {

@@ -309,6 +309,32 @@ fn preprocess_dash_mmd_skips_system_headers() {
 }
 
 #[test]
+fn fpic_emits_gotpcrel_access() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("input.c");
+    let output_path = dir.path().join("out.s");
+    fs::write(&input_path, "extern int bar; int foo() { return bar; }\n").expect("write input");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-S")
+        .arg("-fPIC")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&input_path)
+        .output()
+        .expect("run cc3 -fPIC");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(&output_path).expect("read asm");
+    assert!(asm.contains("@GOTPCREL"), "asm: {asm}");
+}
+
+#[test]
 fn preprocess_dash_md_writes_dependency_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     let header1 = dir.path().join("out2.h");
