@@ -923,9 +923,7 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
             continue;
         }
 
-        if b == b'"'
-            || (b == b'u' && i + 2 < bytes.len() && bytes[i + 1] == b'8' && bytes[i + 2] == b'"')
-        {
+        if b == b'"' {
             let start = i;
             let location = SourceLocation {
                 line,
@@ -933,42 +931,55 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
                 byte: start,
                 file_no,
             };
-            let quote = if b == b'"' { start } else { start + 2 };
-            let end = string_literal_end(bytes, quote + 1, location)?;
-            let mut str_bytes = Vec::with_capacity(end - (quote + 1) + 1);
-            let mut p = quote + 1;
-            while p < end {
-                if bytes[p] == b'\\' {
-                    let mut escaped_pos = p + 1;
-                    let escaped = read_escaped_char(bytes, &mut escaped_pos, location)?;
-                    str_bytes.push(escaped as u8);
-                    p = escaped_pos;
-                } else {
-                    str_bytes.push(bytes[p]);
-                    p += 1;
-                }
-            }
-            str_bytes.push(0);
-            let ty = Type::Array {
-                base: Box::new(Type::Char),
-                len: str_bytes.len() as i32,
-            };
-            tokens.push(Token {
-                kind: TokenKind::Str {
-                    bytes: str_bytes,
-                    ty,
-                },
-                location,
-                at_bol,
-                has_space,
-                len: end + 1 - start,
-                hideset: HideSet::default(),
-                origin: None,
-            });
+            let mut token = read_string_literal(bytes, start, start, location)?;
+            token.at_bol = at_bol;
+            token.has_space = has_space;
+            let len = token.len;
+            tokens.push(token);
             at_bol = false;
             has_space = false;
-            i = end + 1;
-            column += i - start;
+            i += len;
+            column += len;
+            continue;
+        }
+
+        if b == b'u' && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
+            let start = i;
+            let location = SourceLocation {
+                line,
+                column,
+                byte: start,
+                file_no,
+            };
+            let mut token = read_utf16_string_literal(bytes, start, start + 1, location)?;
+            token.at_bol = at_bol;
+            token.has_space = has_space;
+            let len = token.len;
+            tokens.push(token);
+            at_bol = false;
+            has_space = false;
+            i += len;
+            column += len;
+            continue;
+        }
+
+        if b == b'u' && i + 2 < bytes.len() && bytes[i + 1] == b'8' && bytes[i + 2] == b'"' {
+            let start = i;
+            let location = SourceLocation {
+                line,
+                column,
+                byte: start,
+                file_no,
+            };
+            let mut token = read_string_literal(bytes, start, start + 2, location)?;
+            token.at_bol = at_bol;
+            token.has_space = has_space;
+            let len = token.len;
+            tokens.push(token);
+            at_bol = false;
+            has_space = false;
+            i += len;
+            column += len;
             continue;
         }
 
@@ -1162,6 +1173,96 @@ fn read_char_literal(
     i += 1;
 
     Ok((value, i))
+}
+
+fn read_string_literal(
+    input: &[u8],
+    start: usize,
+    quote: usize,
+    location: SourceLocation,
+) -> CompileResult<Token> {
+    let end = string_literal_end(input, quote + 1, location)?;
+    let mut str_bytes = Vec::with_capacity(end - (quote + 1) + 1);
+    let mut p = quote + 1;
+    while p < end {
+        if input[p] == b'\\' {
+            let mut escaped_pos = p + 1;
+            let escaped = read_escaped_char(input, &mut escaped_pos, location)?;
+            str_bytes.push(escaped as u8);
+            p = escaped_pos;
+        } else {
+            str_bytes.push(input[p]);
+            p += 1;
+        }
+    }
+    str_bytes.push(0);
+    let ty = Type::Array {
+        base: Box::new(Type::Char),
+        len: str_bytes.len() as i32,
+    };
+    Ok(Token {
+        kind: TokenKind::Str {
+            bytes: str_bytes,
+            ty,
+        },
+        location,
+        at_bol: false,
+        has_space: false,
+        len: end + 1 - start,
+        hideset: HideSet::default(),
+        origin: None,
+    })
+}
+
+fn encode_utf16(buf: &mut Vec<u8>, c: u32) {
+    if c < 0x10000 {
+        buf.extend_from_slice(&(c as u16).to_le_bytes());
+    } else {
+        let c = c - 0x10000;
+        let high = 0xd800 + ((c >> 10) & 0x3ff);
+        let low = 0xdc00 + (c & 0x3ff);
+        buf.extend_from_slice(&(high as u16).to_le_bytes());
+        buf.extend_from_slice(&(low as u16).to_le_bytes());
+    }
+}
+
+fn read_utf16_string_literal(
+    input: &[u8],
+    start: usize,
+    quote: usize,
+    location: SourceLocation,
+) -> CompileResult<Token> {
+    let end = string_literal_end(input, quote + 1, location)?;
+    let mut buf = Vec::with_capacity((end - quote + 1) * 2);
+    let mut p = quote + 1;
+    while p < end {
+        if input[p] == b'\\' {
+            let mut escaped_pos = p + 1;
+            let escaped = read_escaped_char(input, &mut escaped_pos, location)?;
+            p = escaped_pos;
+            encode_utf16(&mut buf, escaped);
+            continue;
+        }
+
+        let mut utf8_pos = p;
+        let decoded = decode_utf8(input, &mut utf8_pos, location)?;
+        p = utf8_pos;
+        encode_utf16(&mut buf, decoded);
+    }
+    buf.extend_from_slice(&0u16.to_le_bytes());
+    let ty = Type::Array {
+        base: Box::new(Type::UShort),
+        len: (buf.len() / 2) as i32,
+    };
+    Ok(Token {
+        kind: TokenKind::Str { bytes: buf, ty },
+        location,
+        at_bol: false,
+        has_space: false,
+        len: end + 1 - start,
+        hideset: HideSet::default(),
+        origin: None,
+    })
 }
 
 fn string_literal_end(
