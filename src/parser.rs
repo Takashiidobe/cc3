@@ -3814,11 +3814,23 @@ impl<'a> Parser<'a> {
         if max < 0 { Ok(0) } else { Ok(max as usize) }
     }
 
-    /// Parse an array designator: "[" const-expr "]"
-    fn array_designator(&mut self, ty: &Type) -> CompileResult<usize> {
+    /// Parse an array designator: "[" const-expr ("..." const-expr)? "]"
+    fn array_designator(&mut self, ty: &Type) -> CompileResult<(usize, usize)> {
         let location = self.peek().location;
         self.expect_punct(Punct::LBracket)?;
-        let idx = self.const_expr()?;
+        let begin = self.const_expr()?;
+        let end = if self.consume_punct(Punct::Ellipsis) {
+            let end = self.const_expr()?;
+            if end < begin {
+                self.bail_at(
+                    location,
+                    format!("array designator range [{begin}, {end}] is empty"),
+                )?;
+            }
+            end
+        } else {
+            begin
+        };
         self.expect_punct(Punct::RBracket)?;
 
         let len = match ty {
@@ -3826,11 +3838,14 @@ impl<'a> Parser<'a> {
             _ => 0,
         };
 
-        if idx < 0 || idx >= len as i64 {
+        if begin < 0 || begin >= len as i64 {
+            self.bail_at(location, "array designator index exceeds array bounds")?;
+        }
+        if end < 0 || end >= len as i64 {
             self.bail_at(location, "array designator index exceeds array bounds")?;
         }
 
-        Ok(idx as usize)
+        Ok((begin as usize, end as usize))
     }
 
     /// Parse a struct designator: "." ident
@@ -3881,9 +3896,16 @@ impl<'a> Parser<'a> {
                 self.bail_at(self.peek().location, "array index in non-array initializer")?;
             }
 
-            let idx = self.array_designator(&init.ty)?;
-            self.designation(&mut init.children[idx])?;
-            self.array_initializer2(init, idx + 1)?;
+            let (begin, end) = self.array_designator(&init.ty)?;
+            let start_pos = self.pos;
+            let mut end_pos = start_pos;
+            for idx in begin..=end {
+                self.pos = start_pos;
+                self.designation(&mut init.children[idx])?;
+                end_pos = self.pos;
+            }
+            self.pos = end_pos;
+            self.array_initializer2(init, begin + 1)?;
             return Ok(());
         }
 
@@ -3951,9 +3973,16 @@ impl<'a> Parser<'a> {
             first = false;
 
             if self.check_punct(Punct::LBracket) {
-                i = self.array_designator(&init.ty)?;
-                self.designation(&mut init.children[i])?;
-                i += 1;
+                let (begin, end) = self.array_designator(&init.ty)?;
+                let start_pos = self.pos;
+                let mut end_pos = start_pos;
+                for idx in begin..=end {
+                    self.pos = start_pos;
+                    self.designation(&mut init.children[idx])?;
+                    end_pos = self.pos;
+                }
+                self.pos = end_pos;
+                i = end + 1;
                 continue;
             }
 
