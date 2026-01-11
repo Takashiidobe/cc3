@@ -3139,11 +3139,49 @@ impl<'a> Parser<'a> {
         Ok(count)
     }
 
+    /// Parse an array designator: "[" const-expr "]"
+    fn array_designator(&mut self, ty: &Type) -> CompileResult<usize> {
+        let location = self.peek().location;
+        self.expect_punct(Punct::LBracket)?;
+        let idx = self.const_expr()?;
+        self.expect_punct(Punct::RBracket)?;
+
+        let len = match ty {
+            Type::Array { len, .. } => *len,
+            _ => 0,
+        };
+
+        if idx < 0 || idx >= len as i64 {
+            self.bail_at(location, "array designator index exceeds array bounds")?;
+        }
+
+        Ok(idx as usize)
+    }
+
+    /// Parse a designation: ("[" const-expr "]")* "=" initializer
+    fn designation(&mut self, init: &mut Initializer) -> CompileResult<()> {
+        if self.check_punct(Punct::LBracket) {
+            if !matches!(init.ty, Type::Array { .. }) {
+                self.bail_at(self.peek().location, "array index in non-array initializer")?;
+            }
+
+            let idx = self.array_designator(&init.ty)?;
+            self.designation(&mut init.children[idx])?;
+            self.array_initializer2(init, idx + 1)?;
+            return Ok(());
+        }
+
+        self.expect_punct(Punct::Assign)?;
+        self.parse_initializer2(init)?;
+        Ok(())
+    }
+
     /// Parse an array initializer with braces.
     /// array-initializer = "{" initializer ("," initializer)* "}"
     /// Parse array initializer with braces: "{" initializer ("," initializer)* "}"
     fn array_initializer1(&mut self, init: &mut Initializer) -> CompileResult<()> {
         self.expect_punct(Punct::LBrace)?;
+        let mut first = true;
 
         // If this is a flexible array (e.g., int x[] = {1,2,3}), count elements to determine length
         if init.is_flexible
@@ -3169,8 +3207,16 @@ impl<'a> Parser<'a> {
         let mut i = 0;
         // Parse all initializers until closing brace
         while !self.consume_end() {
-            if i > 0 {
+            if !first {
                 self.expect_punct(Punct::Comma)?;
+            }
+            first = false;
+
+            if self.check_punct(Punct::LBracket) {
+                i = self.array_designator(&init.ty)?;
+                self.designation(&mut init.children[i])?;
+                i += 1;
+                continue;
             }
 
             if i < (len as usize) {
@@ -3187,7 +3233,7 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse array initializer without braces: initializer ("," initializer)*
-    fn array_initializer2(&mut self, init: &mut Initializer) -> CompileResult<()> {
+    fn array_initializer2(&mut self, init: &mut Initializer, start: usize) -> CompileResult<()> {
         // If this is a flexible array, count elements to determine length
         if init.is_flexible
             && let Type::Array { base, .. } = &init.ty
@@ -3207,13 +3253,20 @@ impl<'a> Parser<'a> {
         };
 
         // Parse initializers without braces, stopping at '}' or after all elements
-        for i in 0..(len as usize) {
+        for i in start..(len as usize) {
             if self.is_end() {
                 break;
             }
 
+            let start_pos = self.pos;
+
             if i > 0 {
                 self.expect_punct(Punct::Comma)?;
+            }
+
+            if self.check_punct(Punct::LBracket) {
+                self.pos = start_pos;
+                return Ok(());
             }
 
             self.parse_initializer2(&mut init.children[i])?;
@@ -3313,7 +3366,7 @@ impl<'a> Parser<'a> {
             if self.check_punct(Punct::LBrace) {
                 return self.array_initializer1(init);
             } else {
-                return self.array_initializer2(init);
+                return self.array_initializer2(init, 0);
             }
         }
 
