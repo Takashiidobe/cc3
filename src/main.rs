@@ -50,6 +50,9 @@ struct Args {
     /// Print dependency list for make.
     #[arg(short = 'M', action = clap::ArgAction::SetTrue)]
     dep_only: bool,
+    /// Write dependency output to file.
+    #[arg(long = "MF", value_name = "FILE")]
+    dep_output: Option<PathBuf>,
     /// Input C source file(s).
     inputs: Vec<PathBuf>,
     /// Output file. Writes to stdout if omitted in cc1 mode.
@@ -179,6 +182,7 @@ fn main() {
             output,
             args.preprocess_only,
             args.dep_only,
+            args.dep_output.as_deref(),
             cmdline_defines,
             cmdline_undefs,
             args.include_files.clone(),
@@ -224,6 +228,7 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
                 "-###" => "--hash-hash-hash".to_string(),
                 "-fcommon" => "--fcommon".to_string(),
                 "-fno-common" => "--fno-common".to_string(),
+                "-MF" => "--MF".to_string(),
                 _ => arg.clone(),
             })
         })
@@ -259,6 +264,7 @@ fn run_cc1_subprocess(
     output: Option<&Path>,
     preprocess_only: bool,
     dep_only: bool,
+    dep_output: Option<&Path>,
     include_dirs: &[PathBuf],
     idirafter_dirs: &[PathBuf],
     include_files: &[PathBuf],
@@ -277,6 +283,10 @@ fn run_cc1_subprocess(
     }
     if dep_only {
         argv.push("-M".to_string());
+    }
+    if let Some(path) = dep_output {
+        argv.push("--MF".to_string());
+        argv.push(path.display().to_string());
     }
     argv.push("-cc1-input".to_string());
     argv.push(input.display().to_string());
@@ -307,11 +317,13 @@ fn run_cc1_subprocess(
     run_subprocess(&argv, show_cmd)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_cc1(
     input: &Path,
     output: Option<&Path>,
     preprocess_only: bool,
     dep_only: bool,
+    dep_output: Option<&Path>,
     cmdline_defines: Vec<(String, String)>,
     cmdline_undefs: Vec<String>,
     include_files: Vec<PathBuf>,
@@ -346,7 +358,7 @@ fn run_cc1(
 
     let tokens = preprocessor::preprocess(tokens, cmdline_defines, cmdline_undefs)?;
     if dep_only {
-        print_dependencies(input, output)?;
+        print_dependencies(input, dep_output, output)?;
         return Ok(());
     }
     if preprocess_only {
@@ -400,10 +412,14 @@ fn print_tokens(tokens: &[Token], output: Option<&Path>) -> CompileResult<()> {
     Ok(())
 }
 
-fn print_dependencies(input: &Path, output: Option<&Path>) -> CompileResult<()> {
+fn print_dependencies(
+    input: &Path,
+    dep_output: Option<&Path>,
+    output: Option<&Path>,
+) -> CompileResult<()> {
     use std::io::Write;
 
-    let mut writer: Box<dyn Write> = if let Some(path) = output {
+    let mut writer: Box<dyn Write> = if let Some(path) = dep_output.or(output) {
         Box::new(fs::File::create(path).map_err(|err| {
             CompileError::new(format!("failed to write {}: {err}", path.display()))
         })?)
@@ -519,6 +535,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 output.as_deref(),
                 args.preprocess_only,
                 args.dep_only,
+                args.dep_output.as_deref(),
                 &args.include_dirs,
                 &args.idirafter_dirs,
                 &args.include_files,
@@ -537,6 +554,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 output.as_deref(),
                 false,
                 false,
+                None,
                 &args.include_dirs,
                 &args.idirafter_dirs,
                 &args.include_files,
@@ -556,6 +574,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 Some(&tmp_asm),
                 false,
                 false,
+                None,
                 &args.include_dirs,
                 &args.idirafter_dirs,
                 &args.include_files,
@@ -577,6 +596,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             Some(&tmp_asm),
             false,
             false,
+            None,
             &args.include_dirs,
             &args.idirafter_dirs,
             &args.include_files,
