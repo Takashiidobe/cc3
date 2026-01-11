@@ -53,6 +53,9 @@ struct Args {
     /// Write dependency output to a .d file while compiling.
     #[arg(long = "MD", action = clap::ArgAction::SetTrue)]
     dep_generate: bool,
+    /// Write dependency output to a .d file without system headers.
+    #[arg(long = "MMD", action = clap::ArgAction::SetTrue)]
+    dep_generate_no_std: bool,
     /// Add phony targets for dependencies.
     #[arg(long = "MP", action = clap::ArgAction::SetTrue)]
     dep_phony: bool,
@@ -170,10 +173,13 @@ fn main() {
     }
 
     if args.cc1 {
+        let std_include_paths = default_include_paths(&argv0);
         let mut include_paths = args.include_dirs.clone();
-        include_paths.extend(default_include_paths(&argv0));
+        include_paths.extend(std_include_paths.clone());
         include_paths.extend(args.idirafter_dirs.clone());
         preprocessor::set_include_paths(include_paths);
+        let dep_generate = args.dep_generate || args.dep_generate_no_std;
+        let dep_exclude_std = args.dep_generate_no_std;
         let input = match args.cc1_input.as_ref().or_else(|| args.inputs.first()) {
             Some(path) => path,
             None => {
@@ -191,10 +197,12 @@ fn main() {
             output,
             args.preprocess_only,
             args.dep_only,
-            args.dep_generate,
+            dep_generate,
             args.dep_phony,
             &args.dep_targets,
             args.dep_output.as_deref(),
+            dep_exclude_std,
+            &std_include_paths,
             cmdline_defines,
             cmdline_undefs,
             args.include_files.clone(),
@@ -246,6 +254,7 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
             "-fno-common" => out.push("--fno-common".to_string()),
             "-MF" => out.push("--MF".to_string()),
             "-MD" => out.push("--MD".to_string()),
+            "-MMD" => out.push("--MMD".to_string()),
             "-MP" => out.push("--MP".to_string()),
             "-MT" => out.push("--MT".to_string()),
             "-MQ" | "--MQ" => {
@@ -298,6 +307,7 @@ fn run_cc1_subprocess(
     preprocess_only: bool,
     dep_only: bool,
     dep_generate: bool,
+    dep_exclude_std: bool,
     dep_output: Option<&Path>,
     dep_phony: bool,
     dep_targets: &[String],
@@ -320,7 +330,9 @@ fn run_cc1_subprocess(
     if dep_only {
         argv.push("-M".to_string());
     }
-    if dep_generate {
+    if dep_exclude_std {
+        argv.push("--MMD".to_string());
+    } else if dep_generate {
         argv.push("--MD".to_string());
     }
     if let Some(path) = dep_output {
@@ -373,6 +385,8 @@ fn run_cc1(
     dep_phony: bool,
     dep_targets: &[String],
     dep_output: Option<&Path>,
+    dep_exclude_std: bool,
+    std_include_paths: &[PathBuf],
     cmdline_defines: Vec<(String, String)>,
     cmdline_undefs: Vec<String>,
     include_files: Vec<PathBuf>,
@@ -412,7 +426,15 @@ fn run_cc1(
         dep_output = Some(replace_ext(base, ".d"));
     }
     if dep_only || dep_generate {
-        print_dependencies(input, dep_targets, dep_output.as_deref(), output, dep_phony)?;
+        print_dependencies(
+            input,
+            dep_targets,
+            dep_output.as_deref(),
+            output,
+            dep_phony,
+            dep_exclude_std,
+            std_include_paths,
+        )?;
         if dep_only {
             return Ok(());
         }
@@ -474,6 +496,8 @@ fn print_dependencies(
     dep_output: Option<&Path>,
     output: Option<&Path>,
     dep_phony: bool,
+    dep_exclude_std: bool,
+    std_include_paths: &[PathBuf],
 ) -> CompileResult<()> {
     use std::io::Write;
 
@@ -494,6 +518,9 @@ fn print_dependencies(
         .map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
 
     for file in lexer::get_input_files() {
+        if dep_exclude_std && in_std_include_path(&file.name, std_include_paths) {
+            continue;
+        }
         write!(writer, " \\\n  {}", file.name.display())
             .map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
     }
@@ -503,6 +530,9 @@ fn print_dependencies(
 
     if dep_phony {
         for file in lexer::get_input_files().into_iter().skip(1) {
+            if dep_exclude_std && in_std_include_path(&file.name, std_include_paths) {
+                continue;
+            }
             writeln!(
                 writer,
                 "{}:\n",
@@ -561,6 +591,14 @@ fn token_lexeme(token: &Token) -> String {
     }
 }
 
+fn in_std_include_path(path: &Path, std_include_paths: &[PathBuf]) -> bool {
+    std_include_paths.iter().any(|dir| {
+        path.strip_prefix(dir)
+            .map(|rest| !rest.as_os_str().is_empty())
+            .unwrap_or(false)
+    })
+}
+
 fn run_driver(args: &Args) -> io::Result<()> {
     if args.inputs.is_empty() {
         return Err(io::Error::new(
@@ -568,6 +606,8 @@ fn run_driver(args: &Args) -> io::Result<()> {
             "no input files",
         ));
     }
+    let dep_generate = args.dep_generate || args.dep_generate_no_std;
+    let dep_exclude_std = args.dep_generate_no_std;
     if args.inputs.len() > 1
         && args.output.is_some()
         && (args.compile_only || args.emit_asm || args.preprocess_only || args.dep_only)
@@ -609,7 +649,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
         } else {
             Some(replace_ext(input, if args.emit_asm { ".s" } else { ".o" }))
         };
-        let dep_output = if args.dep_generate && args.dep_output.is_none() {
+        let dep_output = if dep_generate && args.dep_output.is_none() {
             let base = if args.inputs.len() == 1
                 && (args.compile_only || args.emit_asm || args.preprocess_only || args.dep_only)
             {
@@ -647,7 +687,8 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 output.as_deref(),
                 args.preprocess_only,
                 args.dep_only,
-                args.dep_generate,
+                dep_generate,
+                dep_exclude_std,
                 dep_output.as_deref(),
                 args.dep_phony,
                 &args.dep_targets,
@@ -669,7 +710,8 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 output.as_deref(),
                 false,
                 false,
-                args.dep_generate,
+                dep_generate,
+                dep_exclude_std,
                 dep_output.as_deref(),
                 args.dep_phony,
                 &args.dep_targets,
@@ -692,7 +734,8 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 Some(&tmp_asm),
                 false,
                 false,
-                args.dep_generate,
+                dep_generate,
+                dep_exclude_std,
                 dep_output.as_deref(),
                 args.dep_phony,
                 &args.dep_targets,
@@ -717,7 +760,8 @@ fn run_driver(args: &Args) -> io::Result<()> {
             Some(&tmp_asm),
             false,
             false,
-            args.dep_generate,
+            dep_generate,
+            dep_exclude_std,
             dep_output.as_deref(),
             args.dep_phony,
             &args.dep_targets,

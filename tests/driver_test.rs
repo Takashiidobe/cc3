@@ -270,6 +270,45 @@ fn preprocess_dash_mq_quotes_dependency_target() {
 }
 
 #[test]
+fn preprocess_dash_mmd_skips_system_headers() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let header1 = dir.path().join("out2.h");
+    fs::write(&header1, "int foo;\n").expect("write header1");
+
+    let cc3_bin = assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME"));
+    let base_dir = Path::new(&cc3_bin).parent().expect("bin parent");
+    let sys_include_dir = base_dir.join("include");
+    fs::create_dir_all(&sys_include_dir).expect("create include dir");
+    let sys_header = sys_include_dir.join("sysdep.h");
+    fs::write(&sys_header, "int sysdep;\n").expect("write sys header");
+
+    let input_path = dir.path().join("input.c");
+    let input = "#include \"out2.h\"\n#include <sysdep.h>\n";
+    fs::write(&input_path, input).expect("write input");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .current_dir(dir.path())
+        .arg("-c")
+        .arg("-MMD")
+        .arg("-I.")
+        .arg("input.c")
+        .output()
+        .expect("run cc3 -MMD");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let deps = fs::read_to_string(dir.path().join("input.d")).expect("read deps");
+    assert!(deps.starts_with("input.o:"), "deps: {deps}");
+    assert!(deps.contains("input.c"), "deps: {deps}");
+    assert!(deps.contains("out2.h"), "deps: {deps}");
+    assert!(!deps.contains("sysdep.h"), "deps: {deps}");
+}
+
+#[test]
 fn preprocess_dash_md_writes_dependency_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     let header1 = dir.path().join("out2.h");
