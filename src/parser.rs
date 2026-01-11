@@ -3178,7 +3178,7 @@ impl<'a> Parser<'a> {
         Ok(idx as usize)
     }
 
-    /// Parse a designation: ("[" const-expr "]")* "=" initializer
+    /// Parse a designation: ("[" const-expr "]")* "="? initializer
     fn designation(&mut self, init: &mut Initializer) -> CompileResult<()> {
         if self.check_punct(Punct::LBracket) {
             if !matches!(init.ty, Type::Array { .. }) {
@@ -3191,7 +3191,7 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
 
-        self.expect_punct(Punct::Assign)?;
+        self.consume_punct(Punct::Assign);
         self.parse_initializer2(init)?;
         Ok(())
     }
