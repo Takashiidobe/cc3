@@ -45,6 +45,9 @@ struct Args {
     /// Add include search path.
     #[arg(short = 'I', value_name = "DIR")]
     include_dirs: Vec<PathBuf>,
+    /// Add include search path (searched after -I paths).
+    #[arg(long = "idirafter", value_name = "DIR")]
+    idirafter_dirs: Vec<PathBuf>,
     /// Define macro.
     #[arg(short = 'D', value_name = "MACRO[=VAL]")]
     defines: Vec<String>,
@@ -78,6 +81,7 @@ fn main() {
     if args.cc1 {
         let mut include_paths = args.include_dirs.clone();
         include_paths.extend(default_include_paths(&argv0));
+        include_paths.extend(args.idirafter_dirs.clone());
         preprocessor::set_include_paths(include_paths);
         let input = match args.cc1_input.as_ref().or_else(|| args.inputs.first()) {
             Some(path) => path,
@@ -171,6 +175,7 @@ fn run_cc1_subprocess(
     output: Option<&Path>,
     preprocess_only: bool,
     include_dirs: &[PathBuf],
+    idirafter_dirs: &[PathBuf],
     defines: &[String],
     undefs: &[String],
     show_cmd: bool,
@@ -190,6 +195,9 @@ fn run_cc1_subprocess(
     }
     for dir in include_dirs {
         argv.push(format!("-I{}", dir.display()));
+    }
+    for dir in idirafter_dirs {
+        argv.push(format!("--idirafter={}", dir.display()));
     }
     for def in defines {
         argv.push(format!("-D{}", def));
@@ -321,6 +329,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 output.as_deref(),
                 true,
                 &args.include_dirs,
+                &args.idirafter_dirs,
                 &args.defines,
                 &args.undefs,
                 args.hash_hash_hash,
@@ -355,6 +364,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 output.as_deref(),
                 false,
                 &args.include_dirs,
+                &args.idirafter_dirs,
                 &args.defines,
                 &args.undefs,
                 args.hash_hash_hash,
@@ -369,6 +379,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 Some(&tmp_asm),
                 false,
                 &args.include_dirs,
+                &args.idirafter_dirs,
                 &args.defines,
                 &args.undefs,
                 args.hash_hash_hash,
@@ -385,6 +396,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             Some(&tmp_asm),
             false,
             &args.include_dirs,
+            &args.idirafter_dirs,
             &args.defines,
             &args.undefs,
             args.hash_hash_hash,
