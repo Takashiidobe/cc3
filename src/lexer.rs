@@ -784,7 +784,7 @@ impl Token {
             Type::Float
         } else if input.ends_with('l') || input.ends_with('L') {
             parse_str = &input[..input.len() - 1];
-            Type::Double
+            Type::LDouble
         } else {
             Type::Double
         };

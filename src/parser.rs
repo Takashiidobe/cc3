@@ -345,7 +345,8 @@ impl<'a> Parser<'a> {
                     Type::ULong
                 }
                 FLOAT => Type::Float,
-                DOUBLE | LONG_DOUBLE => Type::Double,
+                DOUBLE => Type::Double,
+                LONG_DOUBLE => Type::LDouble,
                 _ => self.bail_at(location, "invalid type")?,
             };
         }

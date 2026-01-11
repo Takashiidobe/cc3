@@ -248,6 +248,7 @@ pub enum Type {
     ULong,
     Float,
     Double,
+    LDouble,
     Enum,
     Ptr(Box<Type>),
     Func {
@@ -324,6 +325,7 @@ impl Type {
             Type::ULong => 8,
             Type::Float => 4,
             Type::Double => 8,
+            Type::LDouble => 16,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func { .. } => 1,
@@ -391,6 +393,7 @@ impl Type {
             Type::ULong => 8,
             Type::Float => 4,
             Type::Double => 8,
+            Type::LDouble => 16,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func { .. } => 1,
@@ -447,7 +450,7 @@ impl Type {
     }
 
     pub fn is_flonum(&self) -> bool {
-        matches!(self, Type::Float | Type::Double)
+        matches!(self, Type::Float | Type::Double | Type::LDouble)
     }
 
     pub fn is_numeric(&self) -> bool {
