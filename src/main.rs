@@ -296,6 +296,36 @@ fn default_include_paths(argv0: &Path) -> Vec<PathBuf> {
     paths.push(PathBuf::from("/usr/local/include"));
     paths.push(PathBuf::from("/usr/include/x86_64-linux-gnu"));
     paths.push(PathBuf::from("/usr/include"));
+    paths.extend(probe_toolchain_includes());
+    paths
+}
+
+fn probe_toolchain_includes() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Ok(out) = Command::new("clang").arg("-print-resource-dir").output()
+        && out.status.success()
+    {
+        let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !dir.is_empty() {
+            paths.push(PathBuf::from(dir).join("include"));
+        }
+    }
+
+    for arg in ["-print-file-name=include", "-print-file-name=include-fixed"] {
+        if let Ok(out) = Command::new("gcc").arg(arg).output()
+            && out.status.success()
+        {
+            let dir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !dir.is_empty() && dir != "include" && dir != "include-fixed" {
+                paths.push(PathBuf::from(dir));
+            }
+        }
+    }
+
+    paths.retain(|path| path.is_dir());
+    paths.sort();
+    paths.dedup();
     paths
 }
 
