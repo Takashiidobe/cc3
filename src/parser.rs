@@ -3184,6 +3184,7 @@ impl<'a> Parser<'a> {
 
     /// Parse a struct designator: "." ident
     fn struct_designator(&mut self, ty: &Type) -> CompileResult<Member> {
+        let start_pos = self.pos;
         let location = self.peek().location;
         self.expect_punct(Punct::Dot)?;
         let ident = match &self.peek().kind {
@@ -3204,6 +3205,15 @@ impl<'a> Parser<'a> {
         };
 
         for member in members {
+            if member.name.is_empty()
+                && matches!(member.ty, Type::Struct { .. })
+                && let Type::Struct { members: inner, .. } = &member.ty
+                && Self::get_struct_member(inner, &ident).is_some()
+            {
+                self.pos = start_pos;
+                return Ok(member.clone());
+            }
+
             if member.name == ident {
                 return Ok(member.clone());
             }
