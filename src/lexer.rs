@@ -48,6 +48,7 @@ impl HideSet {
 }
 
 static INPUT_FILES: OnceLock<Mutex<Vec<File>>> = OnceLock::new();
+static BASE_FILE: OnceLock<String> = OnceLock::new();
 
 fn input_files() -> &'static Mutex<Vec<File>> {
     INPUT_FILES.get_or_init(|| Mutex::new(Vec::new()))
@@ -68,6 +69,15 @@ pub fn get_input_file(file_no: usize) -> Option<File> {
         .lock()
         .ok()
         .and_then(|files| files.get(file_no - 1).cloned())
+}
+
+pub fn get_base_file() -> Option<String> {
+    BASE_FILE.get().cloned()
+}
+
+fn set_base_file(path: &Path) {
+    let normalized = path.strip_prefix(".").unwrap_or(path);
+    BASE_FILE.get_or_init(|| normalized.to_string_lossy().into_owned());
 }
 
 pub fn set_line_marker(file_no: usize, line_delta: i32, display_name: Option<String>) {
@@ -287,6 +297,7 @@ pub fn tokenize_file(path: &Path) -> CompileResult<Vec<Token>> {
     let contents = canonicalize_newline(&contents);
     let contents = remove_backslash_newline(&contents);
     let contents = convert_universal_chars(&contents);
+    set_base_file(path);
     let file = register_file(path.to_path_buf(), contents);
     tokenize(&file.contents, file.file_no)
 }

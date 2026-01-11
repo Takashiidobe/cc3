@@ -25,8 +25,8 @@
 use crate::ast::Type;
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{
-    HideSet, Keyword, Punct, Token, TokenKind, convert_pp_tokens, get_input_file, tokenize,
-    tokenize_builtin, tokenize_file, tokenize_string_literal,
+    HideSet, Keyword, Punct, Token, TokenKind, convert_pp_tokens, get_base_file, get_input_file,
+    tokenize, tokenize_builtin, tokenize_file, tokenize_string_literal,
 };
 use crate::parser::const_expr;
 use chrono::{Datelike, Local, Timelike};
@@ -875,6 +875,12 @@ fn timestamp_macro(tok: &Token) -> CompileResult<Token> {
     Ok(new_str_token_value(&formatted, tok, origin))
 }
 
+fn base_file_macro(tok: &Token) -> CompileResult<Token> {
+    let origin = origin_location(tok);
+    let base_file = get_base_file().unwrap_or_default();
+    Ok(new_str_token_value(&base_file, tok, origin))
+}
+
 fn warn_tok(tok: &Token, message: &str) {
     let header = format!("warning: {message}");
     eprintln!("{header}");
@@ -1652,6 +1658,7 @@ impl Preprocessor {
         self.add_builtin("__LINE__", line_macro);
         self.add_builtin("__COUNTER__", counter_macro);
         self.add_builtin("__TIMESTAMP__", timestamp_macro);
+        self.add_builtin("__BASE_FILE__", base_file_macro);
         self.define_macro("__DATE__", &Self::format_date())?;
         self.define_macro("__TIME__", &Self::format_time())?;
 
