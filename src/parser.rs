@@ -52,16 +52,10 @@ struct VarScope {
     enum_val: Option<i64>,
 }
 
-#[derive(Default, Debug, Clone, PartialEq)]
-struct TagScope {
-    name: String,
-    ty: Type,
-}
-
 #[derive(Debug, Default, Clone, PartialEq)]
 struct Scope {
-    vars: Vec<VarScope>,
-    tags: Vec<TagScope>,
+    vars: HashMap<String, VarScope>,
+    tags: HashMap<String, Type>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -2929,10 +2923,8 @@ impl<'a> Parser<'a> {
 
     fn find_var_scope(&self, name: &str) -> Option<&VarScope> {
         for scope in self.scopes.iter().rev() {
-            for var in scope.vars.iter().rev() {
-                if var.name == name {
-                    return Some(var);
-                }
+            if let Some(var) = scope.vars.get(name) {
+                return Some(var);
             }
         }
         None
@@ -3034,13 +3026,11 @@ impl<'a> Parser<'a> {
     fn find_typedef(&self, tok: &Token) -> Option<Type> {
         if let TokenKind::Ident(name) = &tok.kind {
             for scope in self.scopes.iter().rev() {
-                for var in scope.vars.iter().rev() {
-                    if var.name == *name {
-                        if let Some(ty) = var.type_def.clone() {
-                            return Some(self.resolve_typedef_type(ty));
-                        }
-                        return None;
+                if let Some(var) = scope.vars.get(name) {
+                    if let Some(ty) = var.type_def.clone() {
+                        return Some(self.resolve_typedef_type(ty));
                     }
+                    return None;
                 }
             }
         }
@@ -3081,10 +3071,8 @@ impl<'a> Parser<'a> {
 
     fn find_tag(&self, name: &str) -> Option<Type> {
         for scope in self.scopes.iter().rev() {
-            for tag in scope.tags.iter().rev() {
-                if tag.name == name {
-                    return Some(tag.ty.clone());
-                }
+            if let Some(ty) = scope.tags.get(name) {
+                return Some(ty.clone());
             }
         }
         None
@@ -3093,25 +3081,23 @@ impl<'a> Parser<'a> {
     fn find_tag_in_current_scope(&self, name: &str) -> Option<Type> {
         self.scopes
             .last()
-            .and_then(|scope| scope.tags.iter().rfind(|tag| tag.name == name))
-            .map(|tag| tag.ty.clone())
+            .and_then(|scope| scope.tags.get(name))
+            .cloned()
     }
 
     fn update_tag_in_current_scope(&mut self, name: &str, ty: Type) -> bool {
-        if let Some(scope) = self.scopes.last_mut() {
-            for tag in scope.tags.iter_mut().rev() {
-                if tag.name == name {
-                    tag.ty = ty;
-                    return true;
-                }
-            }
+        if let Some(scope) = self.scopes.last_mut()
+            && let Some(existing) = scope.tags.get_mut(name)
+        {
+            *existing = ty;
+            return true;
         }
         false
     }
 
     fn push_tag_scope(&mut self, name: String, ty: Type) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.tags.push(TagScope { name, ty });
+            scope.tags.insert(name, ty);
         }
     }
 
@@ -3255,32 +3241,41 @@ impl<'a> Parser<'a> {
 
     fn push_scope_var_named(&mut self, name: String, idx: usize, is_local: bool) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.vars.push(VarScope {
-                name,
-                idx: Some(idx),
-                is_local,
-                ..Default::default()
-            });
+            scope.vars.insert(
+                name.clone(),
+                VarScope {
+                    name,
+                    idx: Some(idx),
+                    is_local,
+                    ..Default::default()
+                },
+            );
         }
     }
 
     fn push_scope_typedef(&mut self, name: String, ty: Type) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.vars.push(VarScope {
-                name,
-                type_def: Some(ty),
-                ..Default::default()
-            });
+            scope.vars.insert(
+                name.clone(),
+                VarScope {
+                    name,
+                    type_def: Some(ty),
+                    ..Default::default()
+                },
+            );
         }
     }
 
     fn push_scope_enum(&mut self, name: String, val: i64) {
         if let Some(scope) = self.scopes.last_mut() {
-            scope.vars.push(VarScope {
-                name,
-                enum_val: Some(val),
-                ..Default::default()
-            });
+            scope.vars.insert(
+                name.clone(),
+                VarScope {
+                    name,
+                    enum_val: Some(val),
+                    ..Default::default()
+                },
+            );
         }
     }
 
