@@ -1,6 +1,17 @@
 use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
 use crate::error::SourceLocation;
 use crate::lexer::get_input_files;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static OPT_FCOMMON: AtomicBool = AtomicBool::new(true);
+
+pub fn set_opt_fcommon(value: bool) {
+    OPT_FCOMMON.store(value, Ordering::Relaxed);
+}
+
+fn get_opt_fcommon() -> bool {
+    OPT_FCOMMON.load(Ordering::Relaxed)
+}
 
 const ARG_REGS_8: [&str; 6] = ["%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"];
 const ARG_REGS_16: [&str; 6] = ["%di", "%si", "%dx", "%cx", "%r8w", "%r9w"];
@@ -119,7 +130,7 @@ impl Codegen {
                 };
                 self.emit_line(&format!("  .align {}", align));
 
-                if obj.is_tentative {
+                if get_opt_fcommon() && obj.is_tentative {
                     self.emit_line(&format!("  .comm {}, {}, {}", symbol, obj.ty.size(), align));
                     continue;
                 }

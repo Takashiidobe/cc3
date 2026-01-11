@@ -293,3 +293,73 @@ fn idirafter_option() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("bar"), "stdout: {stdout}");
 }
+
+#[test]
+fn fcommon_flag() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("input.c");
+    fs::write(&input_path, "int foo;\n").expect("write input");
+    let output_path = dir.path().join("out.s");
+
+    // Test default behavior (should emit .comm)
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-S")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&input_path)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(&output_path).expect("read output");
+    assert!(asm.contains(".comm foo"), "asm: {asm}");
+
+    // Test -fcommon (should emit .comm)
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-fcommon")
+        .arg("-S")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&input_path)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(&output_path).expect("read output");
+    assert!(asm.contains(".comm foo"), "asm: {asm}");
+}
+
+#[test]
+fn fno_common_flag() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("input.c");
+    fs::write(&input_path, "int foo;\n").expect("write input");
+    let output_path = dir.path().join("out.s");
+
+    // Test -fno-common (should emit foo: label)
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-fno-common")
+        .arg("-S")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&input_path)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let asm = fs::read_to_string(&output_path).expect("read output");
+    assert!(asm.contains("foo:"), "asm: {asm}");
+    assert!(!asm.contains(".comm foo"), "asm: {asm}");
+}

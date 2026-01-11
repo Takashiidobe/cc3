@@ -54,6 +54,12 @@ struct Args {
     /// Undefine macro.
     #[arg(short = 'U', value_name = "MACRO")]
     undefs: Vec<String>,
+    /// Emit common symbols (default).
+    #[arg(long = "fcommon", action = clap::ArgAction::SetTrue, hide = true)]
+    fcommon: bool,
+    /// Do not emit common symbols.
+    #[arg(long = "fno-common", action = clap::ArgAction::SetTrue, hide = true)]
+    fno_common: bool,
 }
 
 fn parse_define(s: &str) -> (String, String) {
@@ -77,6 +83,13 @@ fn main() {
     let cmdline_defines: Vec<(String, String)> =
         args.defines.iter().map(|s| parse_define(s)).collect();
     let cmdline_undefs: Vec<String> = args.undefs.clone();
+
+    // Handle -fcommon/-fno-common flags
+    if args.fno_common {
+        codegen::set_opt_fcommon(false);
+    } else if args.fcommon {
+        codegen::set_opt_fcommon(true);
+    }
 
     if args.cc1 {
         let mut include_paths = args.include_dirs.clone();
@@ -141,6 +154,8 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
                 "-cc1-input" => "--cc1-input".to_string(),
                 "-cc1-output" => "--cc1-output".to_string(),
                 "-###" => "--hash-hash-hash".to_string(),
+                "-fcommon" => "--fcommon".to_string(),
+                "-fno-common" => "--fno-common".to_string(),
                 _ => arg.clone(),
             })
         })
@@ -178,6 +193,8 @@ fn run_cc1_subprocess(
     idirafter_dirs: &[PathBuf],
     defines: &[String],
     undefs: &[String],
+    fcommon: bool,
+    fno_common: bool,
     show_cmd: bool,
 ) -> io::Result<()> {
     let exe = std::env::args()
@@ -204,6 +221,11 @@ fn run_cc1_subprocess(
     }
     for undef in undefs {
         argv.push(format!("-U{}", undef));
+    }
+    if fno_common {
+        argv.push("-fno-common".to_string());
+    } else if fcommon {
+        argv.push("-fcommon".to_string());
     }
     run_subprocess(&argv, show_cmd)
 }
@@ -332,6 +354,8 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 &args.idirafter_dirs,
                 &args.defines,
                 &args.undefs,
+                args.fcommon,
+                args.fno_common,
                 args.hash_hash_hash,
             )?;
             continue;
@@ -367,6 +391,8 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 &args.idirafter_dirs,
                 &args.defines,
                 &args.undefs,
+                args.fcommon,
+                args.fno_common,
                 args.hash_hash_hash,
             )?;
             continue;
@@ -382,6 +408,8 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 &args.idirafter_dirs,
                 &args.defines,
                 &args.undefs,
+                args.fcommon,
+                args.fno_common,
                 args.hash_hash_hash,
             )?;
             assemble(&tmp_asm, output.as_ref().unwrap(), args.hash_hash_hash)?;
@@ -399,6 +427,8 @@ fn run_driver(args: &Args) -> io::Result<()> {
             &args.idirafter_dirs,
             &args.defines,
             &args.undefs,
+            args.fcommon,
+            args.fno_common,
             args.hash_hash_hash,
         )?;
         assemble(&tmp_asm, &tmp_obj, args.hash_hash_hash)?;
