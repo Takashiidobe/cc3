@@ -30,7 +30,7 @@ use crate::lexer::{
 };
 use crate::parser::const_expr;
 use chrono::{Datelike, Local, Timelike};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -84,6 +84,7 @@ struct Preprocessor {
 static INCLUDE_PATHS: OnceLock<Mutex<Vec<PathBuf>>> = OnceLock::new();
 static INCLUDE_CACHE: OnceLock<Mutex<HashMap<String, PathBuf>>> = OnceLock::new();
 static INCLUDE_GUARDS: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+static PRAGMA_ONCE: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
 
 fn include_paths_storage() -> &'static Mutex<Vec<PathBuf>> {
     INCLUDE_PATHS.get_or_init(|| Mutex::new(Vec::new()))
@@ -95,6 +96,14 @@ fn include_cache() -> &'static Mutex<HashMap<String, PathBuf>> {
 
 fn include_guard_cache() -> &'static Mutex<HashMap<PathBuf, String>> {
     INCLUDE_GUARDS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn pragma_once_cache() -> &'static Mutex<HashSet<PathBuf>> {
+    PRAGMA_ONCE.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn normalize_path(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
 pub fn set_include_paths(paths: Vec<PathBuf>) {
@@ -1425,6 +1434,15 @@ impl Preprocessor {
             if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && name == "pragma"
             {
+                if matches!(self.peek(1).kind, TokenKind::Ident(ref ident) if ident == "once")
+                    && let Some(file) = get_input_file(start.location.file_no)
+                    && let Ok(mut cache) = pragma_once_cache().lock()
+                {
+                    cache.insert(normalize_path(&file.name));
+                    self.pos += 2;
+                    self.skip_line();
+                    continue;
+                }
                 self.pos += 1;
                 self.skip_line();
                 continue;
@@ -1512,8 +1530,15 @@ impl Preprocessor {
         include_path: &Path,
         filename_tok: &Token,
     ) -> CompileResult<()> {
+        let cache_key = normalize_path(include_path);
+        if let Ok(cache) = pragma_once_cache().lock()
+            && cache.contains(&cache_key)
+        {
+            return Ok(());
+        }
+
         if let Ok(cache) = include_guard_cache().lock()
-            && let Some(guard_name) = cache.get(include_path)
+            && let Some(guard_name) = cache.get(&cache_key)
             && self.macros.contains_key(guard_name)
         {
             return Ok(());
@@ -1525,7 +1550,7 @@ impl Preprocessor {
         if let Some(guard_name) = detect_include_guard(&included)
             && let Ok(mut cache) = include_guard_cache().lock()
         {
-            cache.insert(include_path.to_path_buf(), guard_name);
+            cache.insert(cache_key, guard_name);
         }
 
         let mut included_pp = Preprocessor::new(
