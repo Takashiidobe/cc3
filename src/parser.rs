@@ -91,6 +91,8 @@ struct Initializer {
     children: Vec<Initializer>,
     /// True if this is a flexible array (length not specified, e.g., `int x[] = {1,2,3}`)
     is_flexible: bool,
+    /// For unions, which member is initialized.
+    mem: Option<Member>,
 }
 
 /// Represents a designator for local variable initialization.
@@ -2958,6 +2960,7 @@ impl<'a> Parser<'a> {
                 expr: None,
                 children: Vec::new(),
                 is_flexible: true,
+                mem: None,
             };
         }
 
@@ -2999,6 +3002,7 @@ impl<'a> Parser<'a> {
             expr: None,
             children,
             is_flexible: false,
+            mem: None,
         }
     }
 
@@ -3230,6 +3234,13 @@ impl<'a> Parser<'a> {
             return Ok(());
         }
 
+        if self.check_punct(Punct::Dot) && matches!(init.ty, Type::Union { .. }) {
+            let member = self.struct_designator(&init.ty)?;
+            init.mem = Some(member.clone());
+            self.designation(&mut init.children[member.idx])?;
+            return Ok(());
+        }
+
         if self.check_punct(Punct::Dot) {
             self.bail_at(
                 self.peek().location,
@@ -3423,6 +3434,19 @@ impl<'a> Parser<'a> {
     /// union-initializer = "{" initializer "}" | initializer
     /// Unlike structs, union initializers only initialize the first member.
     fn union_initializer(&mut self, init: &mut Initializer) -> CompileResult<()> {
+        if self.check_punct(Punct::LBrace)
+            && matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::Dot))
+        {
+            self.expect_punct(Punct::LBrace)?;
+            self.designation(init)?;
+            self.expect_punct(Punct::RBrace)?;
+            return Ok(());
+        }
+
+        if let Type::Union { members, .. } = &init.ty {
+            init.mem = members.first().cloned();
+        }
+
         if self.consume_punct(Punct::LBrace) {
             // With braces: { initializer }
             self.parse_initializer2(&mut init.children[0])?;
@@ -3672,14 +3696,15 @@ impl<'a> Parser<'a> {
 
         if let Type::Union { members, .. } = &init.ty {
             // For unions, only initialize the first member
-            let first_member = &members[0];
+            let first_member = init.mem.as_ref().unwrap_or(&members[0]);
             desg_stack.push(InitDesg {
                 idx: 0,
                 member: Some(first_member.clone()),
                 var_idx: None,
                 var_is_local: false,
             });
-            let result = self.create_lvar_init(&init.children[0], desg_stack, location)?;
+            let result =
+                self.create_lvar_init(&init.children[first_member.idx], desg_stack, location)?;
             desg_stack.pop();
             return Ok(result);
         }
@@ -3806,8 +3831,8 @@ impl<'a> Parser<'a> {
 
         if let Type::Union { members, .. } = &init.ty {
             // For unions, only initialize the first member
-            if !members.is_empty() {
-                return self.write_gvar_data(&init.children[0], buf, offset);
+            if let Some(member) = init.mem.as_ref().or_else(|| members.first()) {
+                return self.write_gvar_data(&init.children[member.idx], buf, offset);
             }
             return Ok(Vec::new());
         }
