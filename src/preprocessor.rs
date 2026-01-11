@@ -30,6 +30,7 @@ use crate::lexer::{
 };
 use crate::parser::const_expr;
 use chrono::{Datelike, Local, Timelike};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -856,6 +857,24 @@ fn counter_macro(tok: &Token) -> CompileResult<Token> {
     Ok(new_num_token(value, tok))
 }
 
+/// __TIMESTAMP__ is expanded to the last modification time of the current file.
+fn timestamp_macro(tok: &Token) -> CompileResult<Token> {
+    let origin = origin_location(tok);
+    let fallback = "??? ??? ?? ??:??:?? ????";
+    let Some(file) = get_input_file(origin.file_no) else {
+        return Ok(new_str_token_value(fallback, tok, origin));
+    };
+    let Ok(metadata) = fs::metadata(&file.name) else {
+        return Ok(new_str_token_value(fallback, tok, origin));
+    };
+    let Ok(modified) = metadata.modified() else {
+        return Ok(new_str_token_value(fallback, tok, origin));
+    };
+    let timestamp: chrono::DateTime<Local> = modified.into();
+    let formatted = timestamp.format("%a %b %e %H:%M:%S %Y").to_string();
+    Ok(new_str_token_value(&formatted, tok, origin))
+}
+
 fn warn_tok(tok: &Token, message: &str) {
     let header = format!("warning: {message}");
     eprintln!("{header}");
@@ -1632,6 +1651,7 @@ impl Preprocessor {
         self.add_builtin("__FILE__", file_macro);
         self.add_builtin("__LINE__", line_macro);
         self.add_builtin("__COUNTER__", counter_macro);
+        self.add_builtin("__TIMESTAMP__", timestamp_macro);
         self.define_macro("__DATE__", &Self::format_date())?;
         self.define_macro("__TIME__", &Self::format_time())?;
 
