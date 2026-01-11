@@ -1397,6 +1397,8 @@ fn is_ident1(c: u32) -> bool {
         b'z' as u32,
         b'A' as u32,
         b'Z' as u32,
+        b'$' as u32,
+        b'$' as u32,
         0x00A8,
         0x00A8,
         0x00AA,
@@ -1503,6 +1505,8 @@ fn is_ident2(c: u32) -> bool {
     const RANGES: &[u32] = &[
         b'0' as u32,
         b'9' as u32,
+        b'$' as u32,
+        b'$' as u32,
         0x0300,
         0x036F,
         0x1DC0,
