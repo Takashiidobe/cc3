@@ -82,6 +82,14 @@ struct Args {
     /// Pass options to the linker.
     #[arg(long = "Wl", value_name = "OPTS", action = clap::ArgAction::Append)]
     linker_opts: Vec<String>,
+    /// Pass a single option to the linker.
+    #[arg(
+        long = "Xlinker",
+        value_name = "OPT",
+        action = clap::ArgAction::Append,
+        allow_hyphen_values = true
+    )]
+    linker_args: Vec<String>,
     /// Add include search path (searched after -I paths).
     #[arg(long = "idirafter", value_name = "DIR")]
     idirafter_dirs: Vec<PathBuf>,
@@ -294,6 +302,7 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
             "-L" => out.push("-L".to_string()),
             "-l" => out.push("-l".to_string()),
             "-Wl" => out.push("--Wl".to_string()),
+            "-Xlinker" => out.push("--Xlinker".to_string()),
             "-MF" => out.push("--MF".to_string()),
             "-MD" => out.push("--MD".to_string()),
             "-MMD" => out.push("--MMD".to_string()),
@@ -708,6 +717,10 @@ fn run_driver(args: &Args) -> io::Result<()> {
     let mut linker_args: Vec<String> = Vec::new();
     for lib in &args.libraries {
         linker_args.push(format!("-l{lib}"));
+    }
+    for arg in &args.linker_args {
+        linker_args.push("-Xlinker".to_string());
+        linker_args.push(arg.clone());
     }
     for opt in &args.linker_opts {
         if !opt.is_empty() {
