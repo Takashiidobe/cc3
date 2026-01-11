@@ -1638,13 +1638,53 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_conditional(&mut self) -> CompileResult<Expr> {
-        let cond = self.parse_logor()?;
+        let mut cond = self.parse_logor()?;
 
         if !self.consume_punct(Punct::Question) {
             return Ok(cond);
         }
 
         let location = self.last_location();
+        if self.check_punct(Punct::Colon) {
+            // GNU extension: a ?: b -> tmp = a, tmp ? tmp : b
+            self.add_type_expr(&mut cond)?;
+            let cond_ty = cond
+                .ty
+                .clone()
+                .ok_or_else(|| self.err_at(location, "conditional has no type"))?;
+            let var_idx = self.new_lvar(String::new(), cond_ty);
+            let tmp_var = self.expr_at(
+                ExprKind::Var {
+                    idx: var_idx,
+                    is_local: true,
+                },
+                location,
+            );
+            let assign = self.expr_at(
+                ExprKind::Assign {
+                    lhs: Box::new(tmp_var.clone()),
+                    rhs: Box::new(cond),
+                },
+                location,
+            );
+            self.expect_punct(Punct::Colon)?;
+            let els = self.parse_conditional()?;
+            let rhs = self.expr_at(
+                ExprKind::Cond {
+                    cond: Box::new(tmp_var.clone()),
+                    then: Box::new(tmp_var),
+                    els: Box::new(els),
+                },
+                location,
+            );
+            return Ok(self.expr_at(
+                ExprKind::Comma {
+                    lhs: Box::new(assign),
+                    rhs: Box::new(rhs),
+                },
+                location,
+            ));
+        }
         let then = self.parse_expr()?;
         self.expect_punct(Punct::Colon)?;
         let els = self.parse_conditional()?;
