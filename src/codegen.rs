@@ -137,7 +137,12 @@ impl Codegen {
             }
 
             if let Some(init_data) = &obj.init_data {
-                self.emit_line("  .data");
+                // .data or .tdata
+                if obj.is_tls {
+                    self.emit_line("  .section .tdata,\"awT\",@progbits");
+                } else {
+                    self.emit_line("  .data");
+                }
                 self.emit_line(&format!("{}:", symbol));
 
                 let mut pos = 0;
@@ -170,7 +175,12 @@ impl Codegen {
                 continue;
             }
 
-            self.emit_line("  .bss");
+            // .bss or .tbss
+            if obj.is_tls {
+                self.emit_line("  .section .tbss,\"awT\",@nobits");
+            } else {
+                self.emit_line("  .bss");
+            }
             self.emit_line(&format!("{}:", symbol));
             self.emit_line(&format!("  .zero {}", obj.ty.size()));
         }
@@ -1445,6 +1455,14 @@ impl Codegen {
         }
         let obj = &globals[idx];
         let symbol = self.asm_symbol(&obj.name);
+
+        // Thread-local variable
+        if obj.is_tls {
+            self.emit_line("  mov %fs:0, %rax");
+            self.emit_line(&format!("  add ${}@tpoff, %rax", symbol));
+            return;
+        }
+
         if obj.is_function {
             if obj.is_definition {
                 self.emit_line(&format!("  lea {}(%rip), %rax", symbol));

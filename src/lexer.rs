@@ -427,6 +427,7 @@ pub enum Keyword {
     Typeof,
     Inline,
     Asm,
+    ThreadLocal,
 }
 
 impl std::fmt::Display for Keyword {
@@ -473,6 +474,7 @@ impl std::fmt::Display for Keyword {
             Keyword::Typeof => "typeof",
             Keyword::Inline => "inline",
             Keyword::Asm => "asm",
+            Keyword::ThreadLocal => "_Thread_local",
         };
         f.write_str(text)
     }
@@ -1854,6 +1856,8 @@ fn is_keyword(name: &str) -> bool {
             | "typeof"
             | "inline"
             | "asm"
+            | "_Thread_local"
+            | "__thread"
     )
 }
 
@@ -1900,6 +1904,7 @@ fn convert_keyword(tok: &mut Token, name: &str) {
         "typeof" => Keyword::Typeof,
         "inline" => Keyword::Inline,
         "asm" => Keyword::Asm,
+        "_Thread_local" | "__thread" => Keyword::ThreadLocal,
         _ => return,
     };
     tok.kind = TokenKind::Keyword(keyword);

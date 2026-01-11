@@ -69,6 +69,7 @@ struct VarAttr {
     is_static: bool,
     is_extern: bool,
     is_inline: bool,
+    is_tls: bool,
     align: i32,
 }
 
@@ -196,8 +197,9 @@ impl<'a> Parser<'a> {
             let is_static_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Static));
             let is_extern_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Extern));
             let is_inline_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Inline));
+            let is_tls_kw = matches!(token.kind, TokenKind::Keyword(Keyword::ThreadLocal));
 
-            if is_typedef_kw || is_static_kw || is_extern_kw || is_inline_kw {
+            if is_typedef_kw || is_static_kw || is_extern_kw || is_inline_kw || is_tls_kw {
                 if let Some(attr) = attr.as_deref_mut() {
                     if is_typedef_kw {
                         self.consume_keyword(Keyword::Typedef);
@@ -208,14 +210,19 @@ impl<'a> Parser<'a> {
                     } else if is_extern_kw {
                         self.consume_keyword(Keyword::Extern);
                         attr.is_extern = true;
-                    } else {
+                    } else if is_inline_kw {
                         self.consume_keyword(Keyword::Inline);
                         attr.is_inline = true;
+                    } else {
+                        self.consume_keyword(Keyword::ThreadLocal);
+                        attr.is_tls = true;
                     }
 
-                    if attr.is_typedef && (attr.is_static || attr.is_extern || attr.is_inline) {
+                    if attr.is_typedef
+                        && (attr.is_static || attr.is_extern || attr.is_inline || attr.is_tls)
+                    {
                         self.bail_here(
-                            "typedef may not be used together with static, extern or inline",
+                            "typedef may not be used together with static, extern, inline, __thread or _Thread_local",
                         )?;
                     }
                 } else {
@@ -360,7 +367,8 @@ impl<'a> Parser<'a> {
                 | Keyword::Restrict
                 | Keyword::Noreturn
                 | Keyword::Typeof
-                | Keyword::Inline,
+                | Keyword::Inline
+                | Keyword::ThreadLocal,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
@@ -529,6 +537,7 @@ impl<'a> Parser<'a> {
             let var_idx = self.new_gvar(name, ty);
             self.globals[var_idx].is_definition = !attr.is_extern;
             self.globals[var_idx].is_static = attr.is_static;
+            self.globals[var_idx].is_tls = attr.is_tls;
             if attr.align != 0 {
                 self.globals[var_idx].align = attr.align;
             }
@@ -536,7 +545,7 @@ impl<'a> Parser<'a> {
             // Check for initializer
             if self.consume_punct(Punct::Assign) {
                 self.parse_gvar_initializer(var_idx)?;
-            } else if !attr.is_extern {
+            } else if !attr.is_extern && !attr.is_tls {
                 self.globals[var_idx].is_tentative = true;
             }
         }

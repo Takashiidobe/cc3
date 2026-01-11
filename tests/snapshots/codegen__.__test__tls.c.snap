@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "v1 => 0\nv2 => 5\nv3 => 7\npthread_create(&thr, NULL, thread_main, NULL) => 0\nv1 => 0\nv2 => 5\nv3 => 7\nv1 => 1\nv2 => 2\nv3 => 3\npthread_join(thr, NULL) => 0\nv1 => 0\nv2 => 5\nv3 => 3\nOK\n"
+status: 0

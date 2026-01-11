@@ -210,6 +210,7 @@ pub struct Obj {
 
     // Global variable
     pub is_tentative: bool,
+    pub is_tls: bool,
     pub init_data: Option<Vec<u8>>,
     pub relocations: Vec<Relocation>,
 

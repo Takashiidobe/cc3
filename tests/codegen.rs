@@ -119,7 +119,12 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
         .output()?;
     ensure_success("codegen", path, &codegen_out);
 
-    let compile_out_mine = compile(&asm_path, &exe_mine, &[common_obj.as_path()], &[])?;
+    let compile_out_mine = compile(
+        &asm_path,
+        &exe_mine,
+        &[common_obj.as_path()],
+        &["-pthread".to_string()],
+    )?;
     ensure_success("cc(asm)", path, &compile_out_mine);
 
     let run_out_mine = run_exe(&exe_mine)?;
