@@ -1025,33 +1025,32 @@ pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
             continue;
         }
 
-        if is_ident_start(b) {
-            let start = i;
+        {
             let location = SourceLocation {
                 line,
                 column,
-                byte: start,
+                byte: i,
                 file_no,
             };
-            i += 1;
-            while i < bytes.len() && is_ident_continue(bytes[i]) {
-                i += 1;
+            let ident_len = read_ident(bytes, i, location)?;
+            if ident_len > 0 {
+                let word = &input[i..i + ident_len];
+                let kind = TokenKind::Ident(word.to_string());
+                tokens.push(Token {
+                    kind,
+                    location,
+                    at_bol,
+                    has_space,
+                    len: ident_len,
+                    hideset: HideSet::default(),
+                    origin: None,
+                });
+                at_bol = false;
+                has_space = false;
+                i += ident_len;
+                column += ident_len;
+                continue;
             }
-            let word = &input[start..i];
-            let kind = TokenKind::Ident(word.to_string());
-            tokens.push(Token {
-                kind,
-                location,
-                at_bol,
-                has_space,
-                len: i - start,
-                hideset: HideSet::default(),
-                origin: None,
-            });
-            at_bol = false;
-            has_space = false;
-            column += i - start;
-            continue;
         }
 
         if b == b'\'' {
@@ -1379,12 +1378,160 @@ fn from_hex(b: u8) -> u32 {
     }
 }
 
-fn is_ident_start(b: u8) -> bool {
-    b.is_ascii_alphabetic() || b == b'_'
+fn in_range(ranges: &[u32], c: u32) -> bool {
+    let mut i = 0;
+    while i + 1 < ranges.len() {
+        if c >= ranges[i] && c <= ranges[i + 1] {
+            return true;
+        }
+        i += 2;
+    }
+    false
 }
 
-fn is_ident_continue(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || b == b'_'
+fn is_ident1(c: u32) -> bool {
+    const RANGES: &[u32] = &[
+        b'_' as u32,
+        b'_' as u32,
+        b'a' as u32,
+        b'z' as u32,
+        b'A' as u32,
+        b'Z' as u32,
+        0x00A8,
+        0x00A8,
+        0x00AA,
+        0x00AA,
+        0x00AD,
+        0x00AD,
+        0x00AF,
+        0x00AF,
+        0x00B2,
+        0x00B5,
+        0x00B7,
+        0x00BA,
+        0x00BC,
+        0x00BE,
+        0x00C0,
+        0x00D6,
+        0x00D8,
+        0x00F6,
+        0x00F8,
+        0x00FF,
+        0x0100,
+        0x02FF,
+        0x0370,
+        0x167F,
+        0x1681,
+        0x180D,
+        0x180F,
+        0x1DBF,
+        0x1E00,
+        0x1FFF,
+        0x200B,
+        0x200D,
+        0x202A,
+        0x202E,
+        0x203F,
+        0x2040,
+        0x2054,
+        0x2054,
+        0x2060,
+        0x206F,
+        0x2070,
+        0x20CF,
+        0x2100,
+        0x218F,
+        0x2460,
+        0x24FF,
+        0x2776,
+        0x2793,
+        0x2C00,
+        0x2DFF,
+        0x2E80,
+        0x2FFF,
+        0x3004,
+        0x3007,
+        0x3021,
+        0x302F,
+        0x3031,
+        0x303F,
+        0x3040,
+        0xD7FF,
+        0xF900,
+        0xFD3D,
+        0xFD40,
+        0xFDCF,
+        0xFDF0,
+        0xFE1F,
+        0xFE30,
+        0xFE44,
+        0xFE47,
+        0xFFFD,
+        0x10000,
+        0x1FFFD,
+        0x20000,
+        0x2FFFD,
+        0x30000,
+        0x3FFFD,
+        0x40000,
+        0x4FFFD,
+        0x50000,
+        0x5FFFD,
+        0x60000,
+        0x6FFFD,
+        0x70000,
+        0x7FFFD,
+        0x80000,
+        0x8FFFD,
+        0x90000,
+        0x9FFFD,
+        0xA0000,
+        0xAFFFD,
+        0xB0000,
+        0xBFFFD,
+        0xC0000,
+        0xCFFFD,
+        0xD0000,
+        0xDFFFD,
+        0xE0000,
+        0xEFFFD,
+    ];
+    in_range(RANGES, c)
+}
+
+fn is_ident2(c: u32) -> bool {
+    const RANGES: &[u32] = &[
+        b'0' as u32,
+        b'9' as u32,
+        0x0300,
+        0x036F,
+        0x1DC0,
+        0x1DFF,
+        0x20D0,
+        0x20FF,
+        0xFE20,
+        0xFE2F,
+    ];
+    is_ident1(c) || in_range(RANGES, c)
+}
+
+fn read_ident(input: &[u8], pos: usize, location: SourceLocation) -> CompileResult<usize> {
+    let mut p = pos;
+    let mut decoded_pos = p;
+    let c = decode_utf8(input, &mut decoded_pos, location)?;
+    if !is_ident1(c) {
+        return Ok(0);
+    }
+    p = decoded_pos;
+
+    loop {
+        let mut next_pos = p;
+        let c = decode_utf8(input, &mut next_pos, location)?;
+        if !is_ident2(c) {
+            return Ok(p - pos);
+        }
+        p = next_pos;
+    }
 }
 
 fn read_punct(input: &str) -> Option<(Punct, usize)> {

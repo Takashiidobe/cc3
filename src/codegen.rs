@@ -67,6 +67,23 @@ impl Codegen {
         self.buffer
     }
 
+    fn asm_symbol(&self, name: &str) -> String {
+        if name
+            .as_bytes()
+            .iter()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b'$'))
+        {
+            return name.to_string();
+        }
+
+        let mut out = String::from("__cc3_u8_");
+        for b in name.as_bytes() {
+            use std::fmt::Write;
+            write!(&mut out, "{:02x}", b).expect("utf-8 symbol encode");
+        }
+        out
+    }
+
     fn emit_files(&mut self) {
         for file in get_input_files() {
             self.emit_line(&format!(
@@ -83,11 +100,12 @@ impl Codegen {
                 continue;
             }
 
+            let symbol = self.asm_symbol(&obj.name);
             if !obj.name.starts_with(".L") {
                 if obj.is_static {
-                    self.emit_line(&format!("  .local {}", obj.name));
+                    self.emit_line(&format!("  .local {}", symbol));
                 } else {
-                    self.emit_line(&format!("  .globl {}", obj.name));
+                    self.emit_line(&format!("  .globl {}", symbol));
                 }
 
                 // AMD64 System V ABI has a special alignment rule for an array of
@@ -104,7 +122,7 @@ impl Codegen {
 
             if let Some(init_data) = &obj.init_data {
                 self.emit_line("  .data");
-                self.emit_line(&format!("{}:", obj.name));
+                self.emit_line(&format!("{}:", symbol));
 
                 let mut pos = 0;
                 let mut rel_iter = obj.relocations.iter().peekable();
@@ -119,7 +137,11 @@ impl Codegen {
                         } else {
                             format!("{}", rel.addend)
                         };
-                        self.emit_line(&format!("  .quad {}{}", rel.label, addend_str));
+                        self.emit_line(&format!(
+                            "  .quad {}{}",
+                            self.asm_symbol(&rel.label),
+                            addend_str
+                        ));
                         pos += 8;
                         rel_iter.next();
                         continue;
@@ -133,7 +155,7 @@ impl Codegen {
             }
 
             self.emit_line("  .bss");
-            self.emit_line(&format!("{}:", obj.name));
+            self.emit_line(&format!("{}:", symbol));
             self.emit_line(&format!("  .zero {}", obj.ty.size()));
         }
     }
@@ -175,14 +197,15 @@ impl Codegen {
 
     fn generate_function(&mut self, function: &Obj, globals: &[Obj]) {
         self.current_fn = Some(function.name.clone());
+        let symbol = self.asm_symbol(&function.name);
 
         if function.is_static {
-            self.emit_line(&format!("  .local {}", function.name));
+            self.emit_line(&format!("  .local {}", symbol));
         } else {
-            self.emit_line(&format!("  .globl {}", function.name));
+            self.emit_line(&format!("  .globl {}", symbol));
         }
         self.emit_line("  .text");
-        self.emit_line(&format!("{}:", function.name));
+        self.emit_line(&format!("{}:", symbol));
         self.emit_line("  push %rbp");
         self.emit_line("  mov %rsp, %rbp");
         self.emit_line(&format!("  sub ${}, %rsp", function.stack_size));
@@ -323,7 +346,7 @@ impl Codegen {
     }
 
     fn label_symbol(&self, function: &Obj, label: &str) -> String {
-        format!(".L.{}.{}", function.name, label)
+        format!(".L.{}.{}", self.asm_symbol(&function.name), label)
     }
 
     fn next_label(&mut self) -> usize {
@@ -1398,15 +1421,16 @@ impl Codegen {
             return;
         }
         let obj = &globals[idx];
+        let symbol = self.asm_symbol(&obj.name);
         if obj.is_function {
             if obj.is_definition {
-                self.emit_line(&format!("  lea {}(%rip), %rax", obj.name));
+                self.emit_line(&format!("  lea {}(%rip), %rax", symbol));
             } else {
-                self.emit_line(&format!("  mov {}@GOTPCREL(%rip), %rax", obj.name));
+                self.emit_line(&format!("  mov {}@GOTPCREL(%rip), %rax", symbol));
             }
             return;
         }
-        self.emit_line(&format!("  lea {}(%rip), %rax", obj.name));
+        self.emit_line(&format!("  lea {}(%rip), %rax", symbol));
     }
 
     fn gen_lvalue(&mut self, expr: &Expr, function: &Obj, globals: &[Obj]) {
