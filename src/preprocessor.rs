@@ -1250,6 +1250,11 @@ impl Preprocessor {
                 continue;
             }
 
+            if matches!(self.cur_tok().kind, TokenKind::PPNum) {
+                self.read_line_marker(&start)?;
+                continue;
+            }
+
             if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && name == "error"
             {
