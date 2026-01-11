@@ -23,3 +23,7 @@ harness = false
 [[test]]
 name = "diagnostics"
 harness = false
+
+[[test]]
+name = "thirdparty"
+harness = false
