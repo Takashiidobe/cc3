@@ -1291,6 +1291,14 @@ impl Preprocessor {
             }
 
             if let TokenKind::Ident(name) = &self.cur_tok().kind
+                && name == "pragma"
+            {
+                self.pos += 1;
+                self.skip_line();
+                continue;
+            }
+
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && name == "error"
             {
                 self.error("error", self.cur_tok().location)?;
