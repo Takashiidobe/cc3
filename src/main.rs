@@ -434,8 +434,17 @@ fn run_driver(args: &Args) -> io::Result<()> {
 
     let mut link_inputs: Vec<PathBuf> = Vec::new();
     let mut temp_objects: Vec<PathBuf> = Vec::new();
+    let mut linker_args: Vec<String> = Vec::new();
 
     for input in &args.inputs {
+        // Handle -l library flags
+        if let Some(input_str) = input.to_str()
+            && input_str.starts_with("-l")
+        {
+            linker_args.push(input_str.to_string());
+            continue;
+        }
+
         let file_type = get_file_type(input, opt_x)?;
 
         let output = if args.preprocess_only {
@@ -540,12 +549,13 @@ fn run_driver(args: &Args) -> io::Result<()> {
         temp_objects.push(tmp_obj);
     }
 
-    if !link_inputs.is_empty() && !args.compile_only && !args.emit_asm {
+    if (!link_inputs.is_empty() || !linker_args.is_empty()) && !args.compile_only && !args.emit_asm
+    {
         let output = args
             .output
             .clone()
             .unwrap_or_else(|| PathBuf::from("a.out"));
-        run_linker(&link_inputs, &output, args.hash_hash_hash)?;
+        run_linker(&link_inputs, &linker_args, &output, args.hash_hash_hash)?;
     }
 
     for path in temp_objects {
@@ -592,12 +602,20 @@ fn assemble(input: &Path, output: &Path, show_cmd: bool) -> io::Result<()> {
     run_subprocess(&argv, show_cmd)
 }
 
-fn run_linker(inputs: &[PathBuf], output: &Path, show_cmd: bool) -> io::Result<()> {
+fn run_linker(
+    inputs: &[PathBuf],
+    linker_args: &[String],
+    output: &Path,
+    show_cmd: bool,
+) -> io::Result<()> {
     let mut argv = link_command();
     argv.push("-o".to_string());
     argv.push(output.display().to_string());
     for input in inputs {
         argv.push(input.display().to_string());
+    }
+    for arg in linker_args {
+        argv.push(arg.clone());
     }
     run_subprocess(&argv, show_cmd)
 }
