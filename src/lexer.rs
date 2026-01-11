@@ -274,6 +274,43 @@ pub fn tokenize_builtin(name: &str, contents: &str) -> CompileResult<Vec<Token>>
     tokenize(&file.contents, file.file_no)
 }
 
+pub fn tokenize_string_literal(token: &Token, base: &Type) -> CompileResult<Token> {
+    let file = get_input_file(token.location.file_no).expect("file for token");
+    let input = file.contents.as_bytes();
+    let start = token.location.byte;
+    if start >= input.len() {
+        return Err(CompileError::at("invalid string literal", token.location));
+    }
+    let location = token.location;
+    let first = input[start];
+    let is_u8 = first == b'u'
+        && start + 2 < input.len()
+        && input[start + 1] == b'8'
+        && input[start + 2] == b'"';
+    let is_u = first == b'u' && start + 1 < input.len() && input[start + 1] == b'"';
+    let is_u32 = first == b'U' && start + 1 < input.len() && input[start + 1] == b'"';
+    let is_wide = first == b'L' && start + 1 < input.len() && input[start + 1] == b'"';
+    let quote = if is_u8 {
+        start + 2
+    } else if is_u || is_u32 || is_wide {
+        start + 1
+    } else {
+        start
+    };
+    let mut new_token = if base.size() == 1 {
+        read_string_literal(input, start, quote, location)?
+    } else if base.size() == 2 {
+        read_utf16_string_literal(input, start, quote, location)?
+    } else {
+        read_utf32_string_literal(input, start, quote, location, base.clone())?
+    };
+    new_token.location = location;
+    new_token.at_bol = token.at_bol;
+    new_token.has_space = token.has_space;
+    new_token.hideset = token.hideset.clone();
+    new_token.origin = token.origin;
+    Ok(new_token)
+}
 /// Parse hexadecimal floating-point literal (e.g., 0x1.2p3)
 /// Format: 0x[hex_digits][.hex_digits]p[+/-][decimal_exponent]
 fn parse_hex_float(s: &str) -> Option<f64> {

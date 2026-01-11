@@ -26,7 +26,7 @@ use crate::ast::Type;
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{
     HideSet, Keyword, Punct, Token, TokenKind, convert_pp_tokens, get_input_file, tokenize,
-    tokenize_builtin, tokenize_file,
+    tokenize_builtin, tokenize_file, tokenize_string_literal,
 };
 use crate::parser::const_expr;
 use chrono::{Datelike, Local, Timelike};
@@ -838,7 +838,92 @@ fn warn_tok(tok: &Token, message: &str) {
     }
 }
 
-fn join_adjacent_string_literals(tokens: &mut Vec<Token>) {
+fn join_adjacent_string_literals(tokens: &mut Vec<Token>) -> CompileResult<()> {
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum StringKind {
+        None,
+        Utf8,
+        Utf16,
+        Utf32,
+        Wide,
+    }
+
+    fn get_string_kind(tok: &Token) -> StringKind {
+        let text = tok.text();
+        if text.starts_with("u8") {
+            return StringKind::Utf8;
+        }
+        match text.as_bytes().first().copied() {
+            Some(b'"') => StringKind::None,
+            Some(b'u') => StringKind::Utf16,
+            Some(b'U') => StringKind::Utf32,
+            Some(b'L') => StringKind::Wide,
+            _ => StringKind::None,
+        }
+    }
+
+    fn base_type(tok: &Token) -> Option<Type> {
+        match &tok.kind {
+            TokenKind::Str {
+                ty: Type::Array { base, .. },
+                ..
+            } => Some((**base).clone()),
+            _ => None,
+        }
+    }
+
+    let mut i = 0;
+    while i < tokens.len() {
+        if !matches!(tokens[i].kind, TokenKind::Str { .. }) {
+            i += 1;
+            continue;
+        }
+
+        let mut j = i + 1;
+        while j < tokens.len() && matches!(tokens[j].kind, TokenKind::Str { .. }) {
+            j += 1;
+        }
+
+        let mut kind = StringKind::None;
+        let mut base = None::<Type>;
+        for tok in &tokens[i..j] {
+            let k = get_string_kind(tok);
+            if kind == StringKind::None && k != StringKind::None {
+                kind = k;
+                base = base_type(tok);
+                continue;
+            }
+            if k != StringKind::None && k != kind {
+                return Err(CompileError::at(
+                    "unsupported non-standard concatenation of string literals",
+                    tok.location,
+                ));
+            }
+        }
+
+        if let Some(base) = base.clone()
+            && base.size() > 1
+        {
+            for tok in tokens.iter_mut().take(j).skip(i) {
+                let needs_convert = base_type(tok).map(|ty| ty.size() == 1).unwrap_or(false);
+                if needs_convert {
+                    let converted = tokenize_string_literal(&*tok, &base)?;
+                    *tok = Token {
+                        kind: converted.kind,
+                        location: tok.location,
+                        at_bol: tok.at_bol,
+                        has_space: tok.has_space,
+                        len: converted.len,
+                        hideset: tok.hideset.clone(),
+                        origin: tok.origin,
+                    };
+                }
+            }
+        }
+
+        i = j;
+    }
+
     let mut i = 0;
     while i + 1 < tokens.len() {
         if !matches!(tokens[i].kind, TokenKind::Str { .. })
@@ -853,18 +938,31 @@ fn join_adjacent_string_literals(tokens: &mut Vec<Token>) {
             j += 1;
         }
 
+        let (base, base_size) = base_type(&tokens[i])
+            .map(|ty| {
+                let size = ty.size() as usize;
+                (ty, size)
+            })
+            .unwrap_or((Type::Char, 1));
+        let base_size = base_size.max(1);
+        let suffix = vec![0u8; base_size];
+
         let mut combined = Vec::new();
         for tok in &tokens[i..j] {
             let TokenKind::Str { bytes, .. } = &tok.kind else {
                 continue;
             };
-            let slice = bytes.strip_suffix(&[0]).unwrap_or(bytes.as_slice());
+            let slice = if bytes.len() >= base_size && bytes[bytes.len() - base_size..] == suffix {
+                &bytes[..bytes.len() - base_size]
+            } else {
+                bytes.as_slice()
+            };
             combined.extend_from_slice(slice);
         }
-        combined.push(0);
+        combined.extend_from_slice(&suffix);
         let ty = Type::Array {
-            base: Box::new(Type::Char),
-            len: combined.len() as i32,
+            base: Box::new(base),
+            len: (combined.len() / base_size) as i32,
         };
         let location = tokens[i].location;
         let at_bol = tokens[i].at_bol;
@@ -886,6 +984,7 @@ fn join_adjacent_string_literals(tokens: &mut Vec<Token>) {
         tokens.drain(i + 1..j);
         i += 1;
     }
+    Ok(())
 }
 
 impl Preprocessor {
@@ -1477,6 +1576,6 @@ pub fn preprocess(
     preprocessor.init_macros()?;
     let mut tokens = preprocessor.preprocess_tokens()?;
     convert_pp_tokens(&mut tokens)?;
-    join_adjacent_string_literals(&mut tokens);
+    join_adjacent_string_literals(&mut tokens)?;
     Ok(tokens)
 }
