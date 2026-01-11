@@ -816,6 +816,13 @@ impl<'a> Parser<'a> {
         }
 
         if self.consume_keyword(Keyword::Goto) {
+            let location = self.last_location();
+            if self.consume_punct(Punct::Star) {
+                let target = self.parse_expr()?;
+                self.expect_punct(Punct::Semicolon)?;
+                return Ok(self.stmt_at(StmtKind::GotoExpr { target }, location));
+            }
+
             let name_token = self.expect_ident_token()?;
             let label = match name_token.kind {
                 TokenKind::Ident(name) => name,
@@ -2214,6 +2221,16 @@ impl<'a> Parser<'a> {
                 location,
             );
             return self.to_assign(expr, one, BinaryOp::Sub, location);
+        }
+
+        if self.consume_punct(Punct::LogAnd) {
+            let label_token = self.expect_ident_token()?;
+            let label = match label_token.kind {
+                TokenKind::Ident(name) => name,
+                _ => unreachable!(),
+            };
+            self.fn_gotos.push((label.clone(), label_token.location));
+            return Ok(self.expr_at(ExprKind::LabelVal { label }, label_token.location));
         }
 
         self.parse_postfix()
@@ -4666,6 +4683,9 @@ impl<'a> Parser<'a> {
             StmtKind::Case { stmt, .. } => {
                 self.add_type_stmt(stmt)?;
             }
+            StmtKind::GotoExpr { target } => {
+                self.add_type_expr(target)?;
+            }
             StmtKind::Goto { .. } => {}
             StmtKind::Break => {}
             StmtKind::Continue => {}
@@ -4770,6 +4790,7 @@ impl<'a> Parser<'a> {
                     )?,
                 }
             }
+            ExprKind::LabelVal { .. } => Type::Ptr(Box::new(Type::Void)),
             ExprKind::Assign { lhs, rhs } => {
                 self.add_type_expr(lhs)?;
                 self.add_type_expr(rhs)?;

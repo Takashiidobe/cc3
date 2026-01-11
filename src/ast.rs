@@ -77,6 +77,9 @@ pub enum StmtKind {
     Goto {
         label: String,
     },
+    GotoExpr {
+        target: Expr,
+    },
     Break,
     Continue,
     Label {
@@ -148,6 +151,9 @@ pub enum ExprKind {
     Cast {
         expr: Box<Expr>,
         ty: Type,
+    },
+    LabelVal {
+        label: String,
     },
     Binary {
         op: BinaryOp,

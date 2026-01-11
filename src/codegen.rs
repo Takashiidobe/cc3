@@ -800,6 +800,10 @@ impl Codegen {
                     self.emit_line("  jmp .L..invalid");
                 }
             }
+            StmtKind::GotoExpr { target } => {
+                self.gen_expr(target, function, globals);
+                self.emit_line("  jmp *%rax");
+            }
             StmtKind::Goto { label } => {
                 let target = self.label_symbol(function, label);
                 self.emit_line(&format!("  jmp {}", target));
@@ -895,6 +899,10 @@ impl Codegen {
                 } else {
                     self.emit_line(&format!("  mov ${}, %rax", value));
                 }
+            }
+            ExprKind::LabelVal { label } => {
+                let symbol = self.label_symbol(function, label);
+                self.emit_line(&format!("  lea {}(%rip), %rax", symbol));
             }
             ExprKind::Unary { op, expr } => {
                 self.gen_expr(expr, function, globals);
