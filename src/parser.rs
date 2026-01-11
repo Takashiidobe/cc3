@@ -1762,6 +1762,130 @@ impl<'a> Parser<'a> {
         self.add_type_expr(&mut lhs)?;
         self.add_type_expr(&mut rhs)?;
 
+        // Handle atomic op= by converting to CAS loop
+        if let Some(ref lhs_ty) = lhs.ty {
+            if lhs_ty.is_atomic() {
+                // Get the base type (unwrap the Atomic wrapper)
+                let base_ty = lhs_ty.base().ok_or_else(|| self.err_at(location, "atomic type has no base"))?;
+                let base_ty = base_ty.clone();
+                let ptr_ty = Type::Ptr(Box::new(lhs_ty.clone()));
+
+                // Create local variables
+                let addr_idx = self.new_lvar(String::new(), ptr_ty.clone());
+                let val_idx = self.new_lvar(String::new(), base_ty.clone());
+                let old_idx = self.new_lvar(String::new(), base_ty.clone());
+                let new_idx = self.new_lvar(String::new(), base_ty.clone());
+
+                let mut stmts = vec![];
+
+                // addr = &lhs
+                let addr_var = self.expr_at(ExprKind::Var { idx: addr_idx, is_local: true }, location);
+                let addr_init = self.expr_at(
+                    ExprKind::Assign {
+                        lhs: Box::new(addr_var.clone()),
+                        rhs: Box::new(self.expr_at(ExprKind::Addr(Box::new(lhs.clone())), location)),
+                    },
+                    location,
+                );
+                stmts.push(Stmt {
+                    kind: StmtKind::Expr(addr_init),
+                    location,
+                });
+
+                // val = rhs
+                let val_var = self.expr_at(ExprKind::Var { idx: val_idx, is_local: true }, location);
+                let val_init = self.expr_at(
+                    ExprKind::Assign {
+                        lhs: Box::new(val_var.clone()),
+                        rhs: Box::new(rhs),
+                    },
+                    location,
+                );
+                stmts.push(Stmt {
+                    kind: StmtKind::Expr(val_init),
+                    location,
+                });
+
+                // old = *addr
+                let old_var = self.expr_at(ExprKind::Var { idx: old_idx, is_local: true }, location);
+                let old_init = self.expr_at(
+                    ExprKind::Assign {
+                        lhs: Box::new(old_var.clone()),
+                        rhs: Box::new(self.expr_at(ExprKind::Deref(Box::new(addr_var.clone())), location)),
+                    },
+                    location,
+                );
+                stmts.push(Stmt {
+                    kind: StmtKind::Expr(old_init),
+                    location,
+                });
+
+                // Create loop body: new = old op val
+                let new_var = self.expr_at(ExprKind::Var { idx: new_idx, is_local: true }, location);
+                let bin_expr = match op {
+                    BinaryOp::Add => self.new_add(old_var.clone(), val_var.clone(), location)?,
+                    BinaryOp::Sub => self.new_sub(old_var.clone(), val_var.clone(), location)?,
+                    _ => self.expr_at(
+                        ExprKind::Binary {
+                            op,
+                            lhs: Box::new(old_var.clone()),
+                            rhs: Box::new(val_var.clone()),
+                        },
+                        location,
+                    ),
+                };
+                let new_assign = self.expr_at(
+                    ExprKind::Assign {
+                        lhs: Box::new(new_var.clone()),
+                        rhs: Box::new(bin_expr),
+                    },
+                    location,
+                );
+
+                // Create CAS: !atomic_compare_exchange_strong(&old, old, new)
+                let old_addr = self.expr_at(ExprKind::Addr(Box::new(old_var.clone())), location);
+                let cas = self.expr_at(
+                    ExprKind::Cas {
+                        addr: Box::new(addr_var),
+                        old: Box::new(old_addr),
+                        new: Box::new(new_var.clone()),
+                    },
+                    location,
+                );
+                let not_cas = self.expr_at(
+                    ExprKind::Unary {
+                        op: UnaryOp::Not,
+                        expr: Box::new(cas),
+                    },
+                    location,
+                );
+
+                // Create do-while loop
+                let loop_stmt = Stmt {
+                    kind: StmtKind::DoWhile {
+                        body: Box::new(Stmt {
+                            kind: StmtKind::Block(vec![Stmt {
+                                kind: StmtKind::Expr(new_assign),
+                                location,
+                            }]),
+                            location,
+                        }),
+                        cond: not_cas,
+                    },
+                    location,
+                };
+                stmts.push(loop_stmt);
+
+                // Final expression is new
+                stmts.push(Stmt {
+                    kind: StmtKind::Expr(new_var),
+                    location,
+                });
+
+                return Ok(self.expr_at(ExprKind::StmtExpr(stmts), location));
+            }
+        }
+
         if let ExprKind::Member {
             lhs: member_lhs,
             member,
