@@ -42,6 +42,7 @@ struct MacroParam {
 #[derive(Clone, Debug)]
 struct MacroArg {
     name: String,
+    is_va_args: bool,
     tokens: Vec<Token>,
 }
 
@@ -52,7 +53,7 @@ struct Macro {
     name: String,
     is_objlike: bool, // Object-like or function-like
     params: Vec<MacroParam>,
-    is_variadic: bool,
+    va_args_name: Option<String>,
     body: Vec<Token>,
     deleted: bool,
     handler: Option<MacroHandler>,
@@ -141,7 +142,7 @@ impl Preprocessor {
         self.find_macro_name(&name)
     }
 
-    fn read_macro_params(&mut self, is_variadic: &mut bool) -> Vec<MacroParam> {
+    fn read_macro_params(&mut self, va_args_name: &mut Option<String>) -> Vec<MacroParam> {
         let mut params = Vec::new();
 
         while self.pos < self.tokens.len()
@@ -157,7 +158,7 @@ impl Preprocessor {
             }
 
             if matches!(self.cur_tok().kind, TokenKind::Punct(Punct::Ellipsis)) {
-                *is_variadic = true;
+                *va_args_name = Some("__VA_ARGS__".to_string());
                 self.pos += 1;
                 if self.pos < self.tokens.len()
                     && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))
@@ -172,6 +173,18 @@ impl Preprocessor {
                 // Error: expected identifier
                 break;
             };
+            if self.pos + 1 < self.tokens.len()
+                && matches!(self.peek(1).kind, TokenKind::Punct(Punct::Ellipsis))
+            {
+                *va_args_name = Some(name.clone());
+                self.pos += 2;
+                if self.pos < self.tokens.len()
+                    && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))
+                {
+                    self.pos += 1;
+                }
+                return params;
+            }
             params.push(MacroParam { name: name.clone() });
             self.pos += 1;
         }
@@ -204,14 +217,14 @@ impl Preprocessor {
         {
             // Function-like macro - read parameters
             self.pos += 1; // skip '('
-            let mut is_variadic = false;
-            let params = self.read_macro_params(&mut is_variadic);
+            let mut va_args_name = None;
+            let params = self.read_macro_params(&mut va_args_name);
             let body = self.copy_line();
             self.macros.push(Macro {
                 name: macro_name,
                 is_objlike: false,
                 params,
-                is_variadic,
+                va_args_name,
                 body,
                 ..Macro::default()
             });
@@ -264,7 +277,11 @@ impl Preprocessor {
         arg_tokens
     }
 
-    fn read_macro_args(&mut self, params: &[MacroParam], is_variadic: bool) -> Vec<MacroArg> {
+    fn read_macro_args(
+        &mut self,
+        params: &[MacroParam],
+        va_args_name: Option<String>,
+    ) -> Vec<MacroArg> {
         // self.pos should be pointing at the macro name, next should be '('
         self.pos += 2; // skip macro name and '('
         let mut args = Vec::new();
@@ -282,11 +299,12 @@ impl Preprocessor {
             let arg_tokens = self.read_macro_arg_one(false);
             args.push(MacroArg {
                 name: param.name.clone(),
+                is_va_args: false,
                 tokens: arg_tokens,
             });
         }
 
-        if is_variadic {
+        if let Some(va_args_name) = va_args_name {
             let arg_tokens = if self.pos < self.tokens.len()
                 && matches!(self.cur_tok().kind, TokenKind::Punct(Punct::RParen))
             {
@@ -306,7 +324,8 @@ impl Preprocessor {
                 self.read_macro_arg_one(true)
             };
             args.push(MacroArg {
-                name: "__VA_ARGS__".to_string(),
+                name: va_args_name,
+                is_va_args: true,
                 tokens: arg_tokens,
             });
         } else if self.pos < self.tokens.len()
@@ -336,7 +355,7 @@ impl Preprocessor {
             return Ok(None);
         }
 
-        let (is_objlike, params, body, macro_name, handler, is_variadic) = {
+        let (is_objlike, params, body, macro_name, handler, va_args_name) = {
             let Some(m) = self.find_macro_name(&macro_name) else {
                 return Ok(None);
             };
@@ -346,7 +365,7 @@ impl Preprocessor {
                 m.body.clone(),
                 m.name.clone(),
                 m.handler,
-                m.is_variadic,
+                m.va_args_name.clone(),
             )
         };
 
@@ -398,7 +417,7 @@ impl Preprocessor {
 
         // Function-like macro application - read arguments and substitute
         let saved_pos = self.pos;
-        let args = self.read_macro_args(&params, is_variadic);
+        let args = self.read_macro_args(&params, va_args_name);
         let rest_pos = self.pos;
         let rparen_pos = rest_pos.saturating_sub(1);
         let mut hs = tok.hideset.intersection(&self.tokens[rparen_pos].hideset);
@@ -664,7 +683,7 @@ fn find_arg<'a>(args: &'a [MacroArg], tok: &Token) -> Option<&'a MacroArg> {
 
 fn has_varargs(args: &[MacroArg]) -> bool {
     args.iter().any(|arg| {
-        arg.name == "__VA_ARGS__"
+        arg.is_va_args
             && arg
                 .tokens
                 .first()
@@ -1560,7 +1579,7 @@ impl Preprocessor {
                 )
                 && let Some(next) = body.get(i + 2)
                 && let Some(arg) = find_arg(args, next)
-                && arg.name == "__VA_ARGS__"
+                && arg.is_va_args
             {
                 let is_empty = arg
                     .tokens

@@ -7,6 +7,10 @@
 
 int ret3(void) { return 3; }
 int dbl(int x) { return x*x; }
+int add2(int x, int y) { return x + y; }
+int add6(int a, int b, int c, int d, int e, int f) {
+  return a + b + c + d + e + f;
+}
 
 int main() {
   ASSERT(5, include1);
@@ -267,6 +271,25 @@ int main() {
   ASSERT(24, strlen(__TIMESTAMP__));
 
   ASSERT(0, strcmp(__BASE_FILE__, "test/macro.c"));
+
+#define M14(args...) 3
+  ASSERT(3, M14());
+
+#define M14(args...) args
+  ASSERT(2, M14() 2);
+  ASSERT(5, M14(5));
+
+#define M14(args...) add2(args)
+  ASSERT(8, M14(2, 6));
+
+#define M14(args...) add6(1,2,args,6)
+  ASSERT(21, M14(3,4,5));
+
+#define M14(x, args...) add6(1,2,x,args,6)
+  ASSERT(21, M14(3,4,5));
+
+#define M14(x, args...) x
+  ASSERT(5, M14(5));
 
 #define M30(buf, fmt, ...) sprintf(buf, fmt __VA_OPT__(,) __VA_ARGS__)
   ASSERT(0, ({ char buf[100]; M30(buf, "foo"); strcmp(buf, "foo"); }));
