@@ -372,6 +372,44 @@ fn static_link_outputs_static_binary() {
 }
 
 #[test]
+fn shared_link_outputs_shared_object() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let foo_path = dir.path().join("foo.c");
+    let bar_path = dir.path().join("bar.c");
+    fs::write(&foo_path, "extern int bar; int foo() { return bar; }\n").expect("write foo");
+    fs::write(&bar_path, "int foo(); int bar=3; int main() { foo(); }\n").expect("write bar");
+
+    let output_path = dir.path().join("foo.so");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-fPIC")
+        .arg("-shared")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&foo_path)
+        .arg(&bar_path)
+        .output()
+        .expect("run cc3 -shared");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let file_out = Command::new("file")
+        .arg(&output_path)
+        .output()
+        .expect("run file");
+    assert!(
+        file_out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&file_out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&file_out.stdout);
+    assert!(stdout.contains("shared object"), "stdout: {stdout}");
+}
+
+#[test]
 fn preprocess_dash_md_writes_dependency_files() {
     let dir = tempfile::tempdir().expect("tempdir");
     let header1 = dir.path().join("out2.h");

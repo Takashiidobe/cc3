@@ -103,6 +103,9 @@ struct Args {
     /// Link statically.
     #[arg(long = "static", action = clap::ArgAction::SetTrue)]
     static_link: bool,
+    /// Produce a shared object.
+    #[arg(long = "shared", action = clap::ArgAction::SetTrue)]
+    shared: bool,
 }
 
 fn parse_define(s: &str) -> (String, String) {
@@ -264,6 +267,7 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
             "-fpic" => out.push("--fpic".to_string()),
             "-fPIC" => out.push("--fpic".to_string()),
             "-static" => out.push("--static".to_string()),
+            "-shared" => out.push("--shared".to_string()),
             "-MF" => out.push("--MF".to_string()),
             "-MD" => out.push("--MD".to_string()),
             "-MMD" => out.push("--MMD".to_string()),
@@ -842,6 +846,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             &output,
             args.strip_symbols,
             args.static_link,
+            args.shared,
             args.hash_hash_hash,
         )?;
     }
@@ -896,9 +901,13 @@ fn run_linker(
     output: &Path,
     strip_symbols: bool,
     static_link: bool,
+    shared: bool,
     show_cmd: bool,
 ) -> io::Result<()> {
     let mut argv = link_command();
+    if shared {
+        argv.push("-shared".to_string());
+    }
     if static_link {
         argv.push("-static".to_string());
     }
