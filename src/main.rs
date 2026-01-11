@@ -12,6 +12,14 @@ use std::{fs, io, path::Path, path::PathBuf, process::Command};
 use crate::error::{CompileError, CompileResult};
 use crate::lexer::{Token, TokenKind};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FileType {
+    None,
+    C,
+    Asm,
+    Obj,
+}
+
 #[derive(Parser, Debug)]
 #[command(name = "cc3")]
 #[command(about = "A tiny C compiler in Rust")]
@@ -63,6 +71,9 @@ struct Args {
     /// Do not emit common symbols.
     #[arg(long = "fno-common", action = clap::ArgAction::SetTrue, hide = true)]
     fno_common: bool,
+    /// Specify language for input files (can be specified multiple times, last one wins).
+    #[arg(short = 'x', value_name = "LANG")]
+    languages: Vec<String>,
 }
 
 fn parse_define(s: &str) -> (String, String) {
@@ -73,6 +84,54 @@ fn parse_define(s: &str) -> (String, String) {
     } else {
         (s.to_string(), "1".to_string())
     }
+}
+
+fn parse_language(s: &str) -> io::Result<FileType> {
+    match s {
+        "c" => Ok(FileType::C),
+        "assembler" => Ok(FileType::Asm),
+        "none" => Ok(FileType::None),
+        _ => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unknown argument for -x: {s}"),
+        )),
+    }
+}
+
+fn get_file_type(path: &Path, opt_x: FileType) -> io::Result<FileType> {
+    // .o files are always object files
+    if let Some(ext) = path.extension()
+        && ext == "o"
+    {
+        return Ok(FileType::Obj);
+    }
+
+    // If -x is specified and not "none", use it
+    if opt_x != FileType::None {
+        return Ok(opt_x);
+    }
+
+    // Determine from extension
+    if let Some(ext) = path.extension() {
+        match ext.to_str() {
+            Some("c") => return Ok(FileType::C),
+            Some("s") | Some("S") => return Ok(FileType::Asm),
+            _ => {}
+        }
+    }
+
+    // Check for stdin
+    if path.as_os_str() == "-" {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unknown file type for stdin (use -x to specify)",
+        ));
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!("unknown file extension: {}", path.display()),
+    ))
 }
 
 fn main() {
@@ -363,10 +422,18 @@ fn run_driver(args: &Args) -> io::Result<()> {
         ));
     }
 
+    let opt_x = if let Some(lang) = args.languages.last() {
+        parse_language(lang)?
+    } else {
+        FileType::None
+    };
+
     let mut link_inputs: Vec<PathBuf> = Vec::new();
     let mut temp_objects: Vec<PathBuf> = Vec::new();
 
     for input in &args.inputs {
+        let file_type = get_file_type(input, opt_x)?;
+
         let output = if args.preprocess_only {
             args.output.clone()
         } else if let Some(path) = &args.output {
@@ -375,13 +442,26 @@ fn run_driver(args: &Args) -> io::Result<()> {
             Some(replace_ext(input, if args.emit_asm { ".s" } else { ".o" }))
         };
 
-        if args.preprocess_only {
-            if !is_c_like_file(input) && !is_stdin(input) {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!("unknown file extension: {}", input.display()),
-                ));
+        // Handle object files
+        if file_type == FileType::Obj {
+            if !args.compile_only && !args.emit_asm {
+                link_inputs.push(input.clone());
             }
+            continue;
+        }
+
+        // Handle assembly files
+        if file_type == FileType::Asm {
+            if !args.emit_asm {
+                assemble(input, output.as_ref().unwrap(), args.hash_hash_hash)?;
+            }
+            continue;
+        }
+
+        // Handle C files
+        assert_eq!(file_type, FileType::C);
+
+        if args.preprocess_only {
             run_cc1_subprocess(
                 input,
                 output.as_deref(),
@@ -396,27 +476,6 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 args.hash_hash_hash,
             )?;
             continue;
-        }
-
-        if is_object_file(input) {
-            if !args.compile_only && !args.emit_asm {
-                link_inputs.push(input.clone());
-            }
-            continue;
-        }
-
-        if is_asm_file(input) {
-            if !args.emit_asm {
-                assemble(input, output.as_ref().unwrap(), args.hash_hash_hash)?;
-            }
-            continue;
-        }
-
-        if !is_c_like_file(input) && !is_stdin(input) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("unknown file extension: {}", input.display()),
-            ));
         }
 
         if args.emit_asm {
@@ -494,25 +553,6 @@ fn run_driver(args: &Args) -> io::Result<()> {
 fn replace_ext(input: &Path, ext: &str) -> PathBuf {
     let stem = input.file_stem().and_then(|s| s.to_str()).unwrap_or("out");
     PathBuf::from(format!("{stem}{ext}"))
-}
-
-fn is_object_file(path: &Path) -> bool {
-    matches!(path.extension().and_then(|s| s.to_str()), Some("o"))
-}
-
-fn is_asm_file(path: &Path) -> bool {
-    matches!(path.extension().and_then(|s| s.to_str()), Some("s"))
-}
-
-fn is_c_like_file(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(|s| s.to_str()),
-        Some("c") | Some("i")
-    )
-}
-
-fn is_stdin(path: &Path) -> bool {
-    path == Path::new("-")
 }
 
 fn create_tmpfile(prefix: &str, ext: &str) -> io::Result<PathBuf> {

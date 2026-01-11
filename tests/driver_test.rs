@@ -414,3 +414,73 @@ fn include_option() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("0"), "stdout: {stdout}");
 }
+
+#[test]
+fn x_option() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output_path = dir.path().join("foo.o");
+
+    // Test 1: -xc for C input from a file without .c extension
+    let input_path = dir.path().join("input.txt");
+    fs::write(&input_path, "int x;\n").expect("write input");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-c")
+        .arg("-xc")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&input_path)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output_path.exists(), "output file should exist");
+
+    // Test 2: -x assembler for assembly input
+    let asm_input = dir.path().join("input.txt");
+    fs::write(&asm_input, "x:\n").expect("write asm");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-c")
+        .arg("-x")
+        .arg("assembler")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&asm_input)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output_path.exists(), "output file should exist");
+
+    // Test 3: -x none resets to extension-based detection
+    let c_input = dir.path().join("input.c");
+    fs::write(&c_input, "int x;\n").expect("write c");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-c")
+        .arg("-x")
+        .arg("assembler")
+        .arg("-x")
+        .arg("none")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&c_input)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output_path.exists(), "output file should exist");
+}
