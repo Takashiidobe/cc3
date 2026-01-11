@@ -524,7 +524,8 @@ fn format_diagnostic(err: &CompileError, path: &std::path::Path) -> String {
             text,
             width = width
         ));
-        let caret_pad = " ".repeat(location.column.saturating_sub(1));
+        let caret_width = lexer::display_width(text, location.column.saturating_sub(1));
+        let caret_pad = " ".repeat(caret_width);
         out.push_str(&format!(
             "{:>width$} | {}{}\n",
             "",

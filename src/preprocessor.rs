@@ -833,7 +833,8 @@ fn warn_tok(tok: &Token, message: &str) {
     eprintln!("{:>width$} |", "", width = width);
     if let Some(text) = line_text {
         eprintln!("{:>width$} | {}", tok.location.line, text, width = width);
-        let caret_pad = " ".repeat(tok.location.column.saturating_sub(1));
+        let caret_width = crate::lexer::display_width(text, tok.location.column.saturating_sub(1));
+        let caret_pad = " ".repeat(caret_width);
         eprintln!("{:>width$} | {}^", "", caret_pad, width = width);
     }
 }
