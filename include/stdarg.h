@@ -15,6 +15,11 @@ typedef __va_elem va_list[1];
 
 #define va_end(ap)
 
+typedef va_list __builtin_va_list;
+#define __builtin_va_start(ap, last) va_start(ap, last)
+#define __builtin_va_end(ap) va_end(ap)
+#define __builtin_va_copy(dest, src) va_copy(dest, src)
+
 static void *__va_arg_mem(__va_elem *ap, int sz, int align) {
   unsigned long p = (unsigned long)ap->overflow_arg_area;
   if (align > 8)
