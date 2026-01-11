@@ -1,6 +1,6 @@
 use crate::ast::{
-    BinaryOp, Expr, ExprKind, Member, Obj, Program, Relocation, Stmt, StmtKind, SwitchCase, Type,
-    UnaryOp, is_compatible,
+    BinaryOp, CaseRange, Expr, ExprKind, Member, Obj, Program, Relocation, Stmt, StmtKind,
+    SwitchCase, Type, UnaryOp, is_compatible,
 };
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
@@ -661,13 +661,23 @@ impl<'a> Parser<'a> {
 
         if self.consume_keyword(Keyword::Case) {
             let location = self.last_location();
-            let value = self.const_expr()?;
+            let begin = self.const_expr()?;
+            let end = if self.consume_punct(Punct::Ellipsis) {
+                let end = self.const_expr()?;
+                if end < begin {
+                    self.bail_at(self.last_location(), "empty case range specified")?;
+                }
+                end
+            } else {
+                begin
+            };
             self.expect_punct(Punct::Colon)?;
 
             let label = self.new_unique_name();
             if let Some(ctx) = self.current_switch.as_mut() {
                 ctx.cases.push(SwitchCase {
-                    value,
+                    begin,
+                    end,
                     label: label.clone(),
                 });
             } else {
@@ -677,7 +687,7 @@ impl<'a> Parser<'a> {
             let stmt = self.parse_stmt()?;
             return Ok(self.stmt_at(
                 StmtKind::Case {
-                    value: Some(value),
+                    range: Some(CaseRange { begin, end }),
                     label,
                     stmt: Box::new(stmt),
                 },
@@ -699,7 +709,7 @@ impl<'a> Parser<'a> {
             let stmt = self.parse_stmt()?;
             return Ok(self.stmt_at(
                 StmtKind::Case {
-                    value: None,
+                    range: None,
                     label,
                     stmt: Box::new(stmt),
                 },

@@ -755,11 +755,21 @@ impl Codegen {
             } => {
                 self.gen_expr(cond, function, globals);
                 let use_64 = cond.ty.as_ref().map(|ty| ty.size() == 8).unwrap_or(true);
-                let reg = if use_64 { "%rax" } else { "%eax" };
+                let ax = if use_64 { "%rax" } else { "%eax" };
+                let di = if use_64 { "%rdi" } else { "%edi" };
 
                 for case in cases {
-                    self.emit_line(&format!("  cmp ${}, {}", case.value, reg));
-                    self.emit_line(&format!("  je {}", case.label));
+                    if case.begin == case.end {
+                        self.emit_line(&format!("  cmp ${}, {}", case.begin, ax));
+                        self.emit_line(&format!("  je {}", case.label));
+                        continue;
+                    }
+
+                    // [GNU] Case ranges.
+                    self.emit_line(&format!("  mov {}, {}", ax, di));
+                    self.emit_line(&format!("  sub ${}, {}", case.begin, di));
+                    self.emit_line(&format!("  cmp ${}, {}", case.end - case.begin, di));
+                    self.emit_line(&format!("  jbe {}", case.label));
                 }
 
                 if let Some(label) = default_label {

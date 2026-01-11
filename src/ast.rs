@@ -70,7 +70,7 @@ pub enum StmtKind {
         break_label: String,
     },
     Case {
-        value: Option<i64>,
+        range: Option<CaseRange>,
         label: String,
         stmt: Box<Stmt>,
     },
@@ -229,8 +229,15 @@ pub struct Obj {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SwitchCase {
-    pub value: i64,
+    pub begin: i64,
+    pub end: i64,
     pub label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaseRange {
+    pub begin: i64,
+    pub end: i64,
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
