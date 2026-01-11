@@ -203,6 +203,7 @@ pub struct Obj {
     pub is_function: bool,
     pub is_definition: bool,
     pub is_static: bool,
+    pub is_inline: bool,
 
     // Global variable
     pub init_data: Option<Vec<u8>>,

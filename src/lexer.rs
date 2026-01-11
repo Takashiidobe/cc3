@@ -425,6 +425,7 @@ pub enum Keyword {
     Noreturn,
     Generic,
     Typeof,
+    Inline,
     Asm,
 }
 
@@ -470,6 +471,7 @@ impl std::fmt::Display for Keyword {
             Keyword::Noreturn => "_Noreturn",
             Keyword::Generic => "_Generic",
             Keyword::Typeof => "typeof",
+            Keyword::Inline => "inline",
             Keyword::Asm => "asm",
         };
         f.write_str(text)
@@ -1850,6 +1852,7 @@ fn is_keyword(name: &str) -> bool {
             | "_Noreturn"
             | "_Generic"
             | "typeof"
+            | "inline"
             | "asm"
     )
 }
@@ -1895,6 +1898,7 @@ fn convert_keyword(tok: &mut Token, name: &str) {
         "_Noreturn" => Keyword::Noreturn,
         "_Generic" => Keyword::Generic,
         "typeof" => Keyword::Typeof,
+        "inline" => Keyword::Inline,
         "asm" => Keyword::Asm,
         _ => return,
     };

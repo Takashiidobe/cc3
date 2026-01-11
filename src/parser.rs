@@ -62,6 +62,7 @@ struct VarAttr {
     is_typedef: bool,
     is_static: bool,
     is_extern: bool,
+    is_inline: bool,
     align: i32,
 }
 
@@ -186,8 +187,9 @@ impl<'a> Parser<'a> {
             let is_typedef_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Typedef));
             let is_static_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Static));
             let is_extern_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Extern));
+            let is_inline_kw = matches!(token.kind, TokenKind::Keyword(Keyword::Inline));
 
-            if is_typedef_kw || is_static_kw || is_extern_kw {
+            if is_typedef_kw || is_static_kw || is_extern_kw || is_inline_kw {
                 if let Some(attr) = attr.as_deref_mut() {
                     if is_typedef_kw {
                         self.consume_keyword(Keyword::Typedef);
@@ -195,13 +197,18 @@ impl<'a> Parser<'a> {
                     } else if is_static_kw {
                         self.consume_keyword(Keyword::Static);
                         attr.is_static = true;
-                    } else {
+                    } else if is_extern_kw {
                         self.consume_keyword(Keyword::Extern);
                         attr.is_extern = true;
+                    } else {
+                        self.consume_keyword(Keyword::Inline);
+                        attr.is_inline = true;
                     }
 
-                    if attr.is_typedef && (attr.is_static || attr.is_extern) {
-                        self.bail_here("typedef may not be used together with static or extern")?;
+                    if attr.is_typedef && (attr.is_static || attr.is_extern || attr.is_inline) {
+                        self.bail_here(
+                            "typedef may not be used together with static, extern or inline",
+                        )?;
                     }
                 } else {
                     self.bail_here("storage class specifier is not allowed in this context")?;
@@ -344,7 +351,8 @@ impl<'a> Parser<'a> {
                 | Keyword::Register
                 | Keyword::Restrict
                 | Keyword::Noreturn
-                | Keyword::Typeof,
+                | Keyword::Typeof
+                | Keyword::Inline,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
@@ -383,7 +391,8 @@ impl<'a> Parser<'a> {
 
         if !is_definition {
             // Function declaration - no body
-            self.new_function_decl(name, ty, attr.is_static);
+            let is_static = attr.is_static || (attr.is_inline && !attr.is_extern);
+            self.new_function_decl(name, ty, is_static, attr.is_inline);
             return Ok(());
         }
 
@@ -416,7 +425,8 @@ impl<'a> Parser<'a> {
         self.fn_gotos.clear();
 
         // Ensure the function is visible for recursive calls.
-        self.new_function_decl(name.clone(), ty.clone(), attr.is_static);
+        let is_static = attr.is_static || (attr.is_inline && !attr.is_extern);
+        self.new_function_decl(name.clone(), ty.clone(), is_static, attr.is_inline);
 
         let prev_return = self.current_fn_return.clone();
         self.current_fn_return = Some(return_ty.clone());
@@ -467,7 +477,8 @@ impl<'a> Parser<'a> {
             locals,
             va_area_idx,
             stack_size,
-            attr.is_static,
+            is_static,
+            attr.is_inline,
         );
         Ok(())
     }
@@ -781,8 +792,7 @@ impl<'a> Parser<'a> {
             if self.consume_keyword(Keyword::Volatile) {
                 continue;
             }
-            if matches!(self.peek().kind, TokenKind::Ident(ref name) if name == "inline") {
-                self.pos += 1;
+            if self.consume_keyword(Keyword::Inline) {
                 continue;
             }
             break;
@@ -2706,7 +2716,7 @@ impl<'a> Parser<'a> {
         idx
     }
 
-    fn new_function_decl(&mut self, name: String, ty: Type, is_static: bool) {
+    fn new_function_decl(&mut self, name: String, ty: Type, is_static: bool, is_inline: bool) {
         // Extract params from function type
         let params = if let Type::Func { params, .. } = &ty {
             params
@@ -2727,6 +2737,7 @@ impl<'a> Parser<'a> {
             ty,
             is_function: true,
             is_static,
+            is_inline,
             params,
             ..Default::default()
         });
@@ -2743,6 +2754,7 @@ impl<'a> Parser<'a> {
         va_area: Option<usize>,
         stack_size: i32,
         is_static: bool,
+        is_inline: bool,
     ) {
         self.globals.push(Obj {
             name,
@@ -2750,6 +2762,7 @@ impl<'a> Parser<'a> {
             is_function: true,
             is_definition: true,
             is_static,
+            is_inline,
             params,
             body,
             locals,
