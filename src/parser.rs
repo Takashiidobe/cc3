@@ -4,7 +4,10 @@ use crate::ast::{
 };
 use crate::error::{CompileError, CompileResult, SourceLocation};
 use crate::lexer::{Keyword, Punct, Token, TokenKind};
-use std::{fmt, mem};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt, mem,
+};
 
 pub fn parse(tokens: &[Token]) -> CompileResult<Program> {
     let mut parser = Parser::new(tokens);
@@ -29,6 +32,9 @@ struct Parser<'a> {
     string_label: usize,
     scopes: Vec<Scope>,
     current_fn_return: Option<Type>,
+    current_fn: Option<String>,
+    fn_refs: HashMap<String, Vec<String>>,
+    root_refs: HashSet<String>,
     fn_labels: Vec<(String, SourceLocation)>,
     fn_gotos: Vec<(String, SourceLocation)>,
     break_depth: usize,
@@ -136,6 +142,7 @@ impl<'a> Parser<'a> {
             // Global variable
             self.parse_global_variable(basety, &attr)?;
         }
+        self.apply_inline_liveness();
         Ok(Program {
             globals: mem::take(&mut self.globals),
         })
@@ -427,6 +434,9 @@ impl<'a> Parser<'a> {
         // Ensure the function is visible for recursive calls.
         let is_static = attr.is_static || (attr.is_inline && !attr.is_extern);
         self.new_function_decl(name.clone(), ty.clone(), is_static, attr.is_inline);
+        self.fn_refs.entry(name.clone()).or_default();
+        let prev_fn = self.current_fn.take();
+        self.current_fn = Some(name.clone());
 
         let prev_return = self.current_fn_return.clone();
         self.current_fn_return = Some(return_ty.clone());
@@ -455,6 +465,7 @@ impl<'a> Parser<'a> {
         self.validate_goto_labels()?;
         self.fn_labels.clear();
         self.fn_gotos.clear();
+        self.current_fn = prev_fn;
 
         for stmt in &mut body {
             self.add_type_stmt(stmt)?;
@@ -2295,7 +2306,10 @@ impl<'a> Parser<'a> {
                     } else {
                         self.bail_at(token.location, "undefined variable")?
                     }
-                } else if let Some((idx, _)) = self.find_global_idx(&name) {
+                } else if let Some((idx, obj)) = self.find_global_idx(&name) {
+                    if obj.is_function {
+                        self.record_function_ref(&obj.name.clone());
+                    }
                     self.expr_at(
                         ExprKind::Var {
                             idx,
@@ -2601,6 +2615,65 @@ impl<'a> Parser<'a> {
             .iter()
             .enumerate()
             .rfind(|(_, obj)| obj.name == name)
+    }
+
+    fn record_function_ref(&mut self, name: &str) {
+        if let Some(current_fn) = self.current_fn.clone() {
+            self.fn_refs
+                .entry(current_fn)
+                .or_default()
+                .push(name.to_string());
+        } else {
+            self.root_refs.insert(name.to_string());
+        }
+    }
+
+    fn apply_inline_liveness(&mut self) {
+        for obj in &mut self.globals {
+            if obj.is_function && obj.is_definition {
+                if let Some(refs) = self.fn_refs.get(&obj.name) {
+                    obj.refs = refs.clone();
+                }
+                obj.is_root =
+                    !(obj.is_static && obj.is_inline) || self.root_refs.contains(&obj.name);
+            }
+        }
+
+        for idx in 0..self.globals.len() {
+            if self.globals[idx].is_function
+                && self.globals[idx].is_definition
+                && self.globals[idx].is_root
+            {
+                self.mark_live(idx);
+            }
+        }
+    }
+
+    fn mark_live(&mut self, idx: usize) {
+        if !self.globals[idx].is_function || self.globals[idx].is_live {
+            return;
+        }
+        self.globals[idx].is_live = true;
+        let refs = self.globals[idx].refs.clone();
+        for name in refs {
+            if let Some(next_idx) = self.find_function_idx(&name) {
+                self.mark_live(next_idx);
+            }
+        }
+    }
+
+    fn find_function_idx(&self, name: &str) -> Option<usize> {
+        self.globals
+            .iter()
+            .enumerate()
+            .rfind(|(_, obj)| obj.is_function && obj.is_definition && obj.name == name)
+            .or_else(|| {
+                self.globals
+                    .iter()
+                    .enumerate()
+                    .rfind(|(_, obj)| obj.is_function && obj.name == name)
+            })
+            .map(|(idx, _)| idx)
     }
 
     fn find_typedef(&self, tok: &Token) -> Option<Type> {

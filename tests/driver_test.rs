@@ -1,6 +1,34 @@
 use assert_cmd::Command;
 use std::{fs, path::Path};
 
+fn compile_to_asm(src: &str) -> String {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("input.c");
+    fs::write(&input_path, src).expect("write input");
+    let output_path = dir.path().join("out.s");
+
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-S")
+        .arg("-o")
+        .arg(&output_path)
+        .arg(&input_path)
+        .output()
+        .expect("run cc3");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    fs::read_to_string(&output_path).expect("read output")
+}
+
+fn has_label(asm: &str, name: &str) -> bool {
+    let label = format!("{name}:");
+    asm.lines().any(|line| line.trim() == label)
+}
+
 #[test]
 fn preprocess_dash_e_outputs_includes() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -192,4 +220,25 @@ fn ignored_options() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(output_path.exists(), "output file should exist");
+}
+
+#[test]
+fn static_inline_emission() {
+    let asm = compile_to_asm("static inline void f1() {}");
+    assert!(!has_label(&asm, "f1"), "asm: {asm}");
+
+    let asm = compile_to_asm("static inline void f1() {} void foo() { f1(); }");
+    assert!(has_label(&asm, "f1"), "asm: {asm}");
+
+    let asm = compile_to_asm(
+        "static inline void f1() {} static inline void f2() { f1(); } void foo() { f1(); }",
+    );
+    assert!(has_label(&asm, "f1"), "asm: {asm}");
+    assert!(!has_label(&asm, "f2"), "asm: {asm}");
+
+    let asm = compile_to_asm(
+        "static inline void f1() {} static inline void f2() { f1(); } void foo() { f2(); }",
+    );
+    assert!(has_label(&asm, "f1"), "asm: {asm}");
+    assert!(has_label(&asm, "f2"), "asm: {asm}");
 }

@@ -204,6 +204,9 @@ pub struct Obj {
     pub is_definition: bool,
     pub is_static: bool,
     pub is_inline: bool,
+    pub is_live: bool,
+    pub is_root: bool,
+    pub refs: Vec<String>,
 
     // Global variable
     pub init_data: Option<Vec<u8>>,
