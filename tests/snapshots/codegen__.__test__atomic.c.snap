@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "add_millions() => 3000000\nOK\n"
+status: 0

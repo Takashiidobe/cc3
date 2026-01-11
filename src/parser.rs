@@ -2604,6 +2604,18 @@ impl<'a> Parser<'a> {
                 expr.ty = Some(Type::Int);
                 Ok(expr)
             }
+            TokenKind::Ident(ref name) if name == "__builtin_compare_and_swap" => {
+                let location = token.location;
+                self.pos += 1;
+                self.expect_punct(Punct::LParen)?;
+                let addr = Box::new(self.parse_assign()?);
+                self.expect_punct(Punct::Comma)?;
+                let old = Box::new(self.parse_assign()?);
+                self.expect_punct(Punct::Comma)?;
+                let new = Box::new(self.parse_assign()?);
+                self.expect_punct(Punct::RParen)?;
+                Ok(self.expr_at(ExprKind::Cas { addr, old, new }, location))
+            }
             TokenKind::Ident(ref name) => {
                 let name = name.clone();
                 let expr = if let Some(scope) = self.find_var_scope(&name) {
@@ -4845,6 +4857,23 @@ impl<'a> Parser<'a> {
                 | BinaryOp::Shl
                 | BinaryOp::Shr => self.usual_arith_conv(lhs, rhs)?,
             },
+            ExprKind::Cas { addr, old, new } => {
+                self.add_type_expr(addr)?;
+                self.add_type_expr(old)?;
+                self.add_type_expr(new)?;
+
+                // Check that addr is a pointer
+                if !matches!(addr.ty, Some(Type::Ptr(_))) {
+                    self.bail_at(addr.location, "pointer expected")?;
+                }
+
+                // Check that old is a pointer
+                if !matches!(old.ty, Some(Type::Ptr(_))) {
+                    self.bail_at(old.location, "pointer expected")?;
+                }
+
+                Type::Bool
+            }
         };
 
         expr.ty = Some(ty);

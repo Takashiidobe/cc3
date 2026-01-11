@@ -160,6 +160,12 @@ pub enum ExprKind {
         lhs: Box<Expr>,
         rhs: Box<Expr>,
     },
+    /// Atomic compare-and-swap
+    Cas {
+        addr: Box<Expr>,
+        old: Box<Expr>,
+        new: Box<Expr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

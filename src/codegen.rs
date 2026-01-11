@@ -1349,6 +1349,72 @@ impl Codegen {
                     }
                 }
             }
+            ExprKind::Cas { addr, old, new } => {
+                // Generate: __builtin_compare_and_swap(addr, old, new)
+                // This atomically compares *addr with *old, and if equal, swaps in new
+                // Returns 1 if successful, 0 otherwise
+                // If not equal, *old is updated with the actual value at *addr
+
+                // Evaluate addr and push
+                self.gen_expr(addr, function, globals);
+                self.push();
+
+                // Evaluate new and push
+                self.gen_expr(new, function, globals);
+                self.push();
+
+                // Evaluate old and save pointer in r8
+                self.gen_expr(old, function, globals);
+                self.emit_line("  mov %rax, %r8");
+
+                // Load the value pointed to by old into rax
+                if let Some(Type::Ptr(base)) = &old.ty {
+                    self.load(Some(base));
+                }
+
+                // Pop new into rdx, addr into rdi
+                self.pop("%rdx");
+                self.pop("%rdi");
+
+                // Get the size of the value being compared
+                let sz = if let Some(Type::Ptr(base)) = &addr.ty {
+                    base.size()
+                } else {
+                    8
+                };
+
+                // Use the appropriate register size for rdx and rax
+                let reg_dx = match sz {
+                    1 => "%dl",
+                    2 => "%dx",
+                    4 => "%edx",
+                    _ => "%rdx",
+                };
+
+                let reg_ax = match sz {
+                    1 => "%al",
+                    2 => "%ax",
+                    4 => "%eax",
+                    _ => "%rax",
+                };
+
+                // Atomic compare-and-swap
+                self.emit_line(&format!("  lock cmpxchg {}, (%rdi)", reg_dx));
+
+                // Set %cl to 1 if successful (ZF=1)
+                self.emit_line("  sete %cl");
+
+                // If successful (ZF=1), skip updating *old
+                self.emit_line("  je 1f");
+
+                // If failed, store actual value into *old
+                self.emit_line(&format!("  mov {}, (%r8)", reg_ax));
+
+                self.emit_line("1:");
+
+                // Return result (0 or 1) in %rax
+                self.emit_line("  movzbl %cl, %eax");
+            }
         }
     }
 
