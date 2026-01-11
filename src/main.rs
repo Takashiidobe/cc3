@@ -50,6 +50,9 @@ struct Args {
     /// Print dependency list for make.
     #[arg(short = 'M', action = clap::ArgAction::SetTrue)]
     dep_only: bool,
+    /// Add phony targets for dependencies.
+    #[arg(long = "MP", action = clap::ArgAction::SetTrue)]
+    dep_phony: bool,
     /// Write dependency output to file.
     #[arg(long = "MF", value_name = "FILE")]
     dep_output: Option<PathBuf>,
@@ -182,6 +185,7 @@ fn main() {
             output,
             args.preprocess_only,
             args.dep_only,
+            args.dep_phony,
             args.dep_output.as_deref(),
             cmdline_defines,
             cmdline_undefs,
@@ -229,6 +233,7 @@ fn preprocess_args(args: &[String]) -> Vec<String> {
                 "-fcommon" => "--fcommon".to_string(),
                 "-fno-common" => "--fno-common".to_string(),
                 "-MF" => "--MF".to_string(),
+                "-MP" => "--MP".to_string(),
                 _ => arg.clone(),
             })
         })
@@ -265,6 +270,7 @@ fn run_cc1_subprocess(
     preprocess_only: bool,
     dep_only: bool,
     dep_output: Option<&Path>,
+    dep_phony: bool,
     include_dirs: &[PathBuf],
     idirafter_dirs: &[PathBuf],
     include_files: &[PathBuf],
@@ -287,6 +293,9 @@ fn run_cc1_subprocess(
     if let Some(path) = dep_output {
         argv.push("--MF".to_string());
         argv.push(path.display().to_string());
+    }
+    if dep_phony {
+        argv.push("--MP".to_string());
     }
     argv.push("-cc1-input".to_string());
     argv.push(input.display().to_string());
@@ -323,6 +332,7 @@ fn run_cc1(
     output: Option<&Path>,
     preprocess_only: bool,
     dep_only: bool,
+    dep_phony: bool,
     dep_output: Option<&Path>,
     cmdline_defines: Vec<(String, String)>,
     cmdline_undefs: Vec<String>,
@@ -358,7 +368,7 @@ fn run_cc1(
 
     let tokens = preprocessor::preprocess(tokens, cmdline_defines, cmdline_undefs)?;
     if dep_only {
-        print_dependencies(input, dep_output, output)?;
+        print_dependencies(input, dep_output, output, dep_phony)?;
         return Ok(());
     }
     if preprocess_only {
@@ -416,6 +426,7 @@ fn print_dependencies(
     input: &Path,
     dep_output: Option<&Path>,
     output: Option<&Path>,
+    dep_phony: bool,
 ) -> CompileResult<()> {
     use std::io::Write;
 
@@ -438,6 +449,13 @@ fn print_dependencies(
 
     writeln!(writer, "\n")
         .map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
+
+    if dep_phony {
+        for file in lexer::get_input_files().into_iter().skip(1) {
+            writeln!(writer, "{}:\n", file.name.display())
+                .map_err(|err| CompileError::new(format!("failed to write output: {err}")))?;
+        }
+    }
     Ok(())
 }
 
@@ -536,6 +554,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 args.preprocess_only,
                 args.dep_only,
                 args.dep_output.as_deref(),
+                args.dep_phony,
                 &args.include_dirs,
                 &args.idirafter_dirs,
                 &args.include_files,
@@ -555,6 +574,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 false,
                 false,
                 None,
+                false,
                 &args.include_dirs,
                 &args.idirafter_dirs,
                 &args.include_files,
@@ -575,6 +595,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
                 false,
                 false,
                 None,
+                false,
                 &args.include_dirs,
                 &args.idirafter_dirs,
                 &args.include_files,
@@ -597,6 +618,7 @@ fn run_driver(args: &Args) -> io::Result<()> {
             false,
             false,
             None,
+            false,
             &args.include_dirs,
             &args.idirafter_dirs,
             &args.include_files,

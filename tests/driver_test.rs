@@ -153,6 +153,46 @@ fn preprocess_dash_mf_writes_dependencies_to_file() {
 }
 
 #[test]
+fn preprocess_dash_mp_adds_phony_targets() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let header1 = dir.path().join("out2.h");
+    let header2 = dir.path().join("out3.h");
+    fs::write(&header1, "foo\n").expect("write header1");
+    fs::write(&header2, "bar\n").expect("write header2");
+
+    let input_path = dir.path().join("input.c");
+    let input = "#include \"out2.h\"\n#include \"out3.h\"\n";
+    fs::write(&input_path, input).expect("write input");
+
+    let dep_path = dir.path().join("deps.d");
+    let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME")));
+    let output = cmd
+        .arg("-M")
+        .arg("--MF")
+        .arg(&dep_path)
+        .arg("--MP")
+        .arg(format!("-I{}", dir.path().display()))
+        .arg(&input_path)
+        .output()
+        .expect("run cc3 -MP");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let deps = fs::read_to_string(&dep_path).expect("read deps");
+    assert!(
+        deps.contains(&format!("{}:\n", header1.display())),
+        "deps: {deps}"
+    );
+    assert!(
+        deps.contains(&format!("{}:\n", header2.display())),
+        "deps: {deps}"
+    );
+}
+
+#[test]
 fn preprocess_skips_utf8_bom() {
     let dir = tempfile::tempdir().expect("tempdir");
     let input_path = dir.path().join("bom.c");
