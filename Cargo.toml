@@ -7,6 +7,7 @@ edition = "2024"
 chrono = "0.4"
 clap = { version = "4.5", features = ["derive"] }
 colored = "3.0.0"
+serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]
 assert_cmd = "2.0.17"
@@ -24,5 +25,7 @@ harness = false
 name = "diagnostics"
 harness = false
 
+
 [[test]]
-name = "thirdparty"
+name = "asm"
+harness = false

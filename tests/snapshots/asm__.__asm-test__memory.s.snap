@@ -1,0 +1,7 @@
+---
+source: tests/asm.rs
+expression: "&test_output"
+---
+stdout: "Parsed 12 nodes:\n0: Directive(Directive { name: \".text\", args: [] })\n1: Directive(Directive { name: \".globl\", args: [Symbol(\"test_memory\")] })\n2: Label(\"test_memory\")\n3: Instruction(Instruction { mnemonic: \"push\", operands: [Register(Rbp)] })\n4: Instruction(Instruction { mnemonic: \"mov\", operands: [Register(Rsp), Register(Rbp)] })\n5: Instruction(Instruction { mnemonic: \"mov\", operands: [Memory { displacement: 8, base: Some(Rbp), index: None, scale: 1, symbol: None }, Register(Rax)] })\n6: Instruction(Instruction { mnemonic: \"mov\", operands: [Memory { displacement: 16, base: Some(Rbp), index: None, scale: 1, symbol: None }, Register(Rcx)] })\n7: Instruction(Instruction { mnemonic: \"mov\", operands: [Memory { displacement: -8, base: Some(Rbp), index: None, scale: 1, symbol: None }, Register(Rdx)] })\n8: Instruction(Instruction { mnemonic: \"mov\", operands: [Memory { displacement: 0, base: Some(Rax), index: None, scale: 1, symbol: None }, Register(Rbx)] })\n9: Instruction(Instruction { mnemonic: \"mov\", operands: [Memory { displacement: 0, base: Some(Rax), index: Some(Rcx), scale: 8, symbol: None }, Register(Rsi)] })\n10: Instruction(Instruction { mnemonic: \"pop\", operands: [Register(Rbp)] })\n11: Instruction(Instruction { mnemonic: \"ret\", operands: [] })\n"
+stderr: ""
+status: 0

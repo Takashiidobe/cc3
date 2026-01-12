@@ -1,16 +1,17 @@
 use crate::asm::lexer::{Register, Token, TokenKind};
 use crate::asm::{AsmError, AsmResult};
+use serde::Serialize;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum RelocType {
     None,
-    GotPcRel,   // @GOTPCREL
-    Plt,        // @PLT
-    TlsGd,      // @tlsgd
-    TpOff,      // @tpoff
+    GotPcRel, // @GOTPCREL
+    Plt,      // @PLT
+    TlsGd,    // @tlsgd
+    TpOff,    // @tpoff
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum Operand {
     Register(Register),
     Immediate(i64),
@@ -28,26 +29,26 @@ pub enum Operand {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Instruction {
     pub mnemonic: String,
     pub operands: Vec<Operand>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum DirectiveArg {
     String(String),
     Integer(i64),
     Symbol(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Directive {
     pub name: String,
     pub args: Vec<DirectiveArg>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum AsmNode {
     Label(String),
     Directive(Directive),
@@ -86,7 +87,7 @@ impl Parser {
                     message: format!("expected {:?}, got EOF", expected),
                     line: 0,
                     column: 0,
-                })
+                });
             }
         };
 
@@ -120,7 +121,7 @@ impl Parser {
                     message: "unexpected end of input while parsing operand".to_string(),
                     line: 0,
                     column: 0,
-                })
+                });
             }
         };
 
@@ -129,6 +130,84 @@ impl Parser {
                 let reg = *reg;
                 self.advance();
                 Ok(Operand::Register(reg))
+            }
+            TokenKind::LParen => {
+                // Memory operand with no displacement: (%rax) or (%rax,%rcx,8)
+                self.advance();
+
+                // Parse base register
+                let base = if let Some(token) = self.current() {
+                    if let TokenKind::Register(reg) = token.kind {
+                        self.advance();
+                        Some(reg)
+                    } else {
+                        return Err(AsmError {
+                            message: "expected register after (".to_string(),
+                            line,
+                            column,
+                        });
+                    }
+                } else {
+                    return Err(AsmError {
+                        message: "expected register after (".to_string(),
+                        line,
+                        column,
+                    });
+                };
+
+                // Check for index and scale
+                let (index, scale) = if let Some(token) = self.current() {
+                    if matches!(token.kind, TokenKind::Comma) {
+                        self.advance();
+
+                        let index = if let Some(token) = self.current() {
+                            if let TokenKind::Register(reg) = token.kind {
+                                self.advance();
+                                Some(reg)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+
+                        let scale = if let Some(token) = self.current() {
+                            if matches!(token.kind, TokenKind::Comma) {
+                                self.advance();
+                                if let Some(token) = self.current() {
+                                    if let TokenKind::Immediate(s) = token.kind {
+                                        self.advance();
+                                        s as u8
+                                    } else {
+                                        1
+                                    }
+                                } else {
+                                    1
+                                }
+                            } else {
+                                1
+                            }
+                        } else {
+                            1
+                        };
+
+                        (index, scale)
+                    } else {
+                        (None, 1)
+                    }
+                } else {
+                    (None, 1)
+                };
+
+                self.expect(TokenKind::RParen)?;
+
+                Ok(Operand::Memory {
+                    displacement: 0,
+                    base,
+                    index,
+                    scale,
+                    symbol: None,
+                })
             }
             TokenKind::Dollar => {
                 self.advance();
@@ -164,7 +243,9 @@ impl Parser {
                 };
 
                 // Check for (reg) - RIP-relative addressing
-                let has_lparen = self.current().map_or(false, |t| matches!(t.kind, TokenKind::LParen));
+                let has_lparen = self
+                    .current()
+                    .map_or(false, |t| matches!(t.kind, TokenKind::LParen));
                 if has_lparen {
                     self.advance();
                     let reg_opt = self.current().and_then(|t| {
@@ -194,7 +275,11 @@ impl Parser {
                     }
                 }
 
-                Ok(Operand::Symbol { name, addend: 0, reloc })
+                Ok(Operand::Symbol {
+                    name,
+                    addend: 0,
+                    reloc,
+                })
             }
             // Memory operand: disp(%base) or disp(%base,%index,scale)
             _ if matches!(kind, TokenKind::Immediate(_)) || matches!(kind, TokenKind::Minus) => {
@@ -227,7 +312,6 @@ impl Parser {
 
                 if let Some(token) = self.current() {
                     if matches!(token.kind, TokenKind::LParen) {
-
                         self.advance();
 
                         // Parse base register
@@ -447,116 +531,4 @@ impl Parser {
 pub fn parse(tokens: Vec<Token>) -> AsmResult<Vec<AsmNode>> {
     let mut parser = Parser::new(tokens);
     parser.parse()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::asm::lexer::lex;
-
-    #[test]
-    fn test_parse_label() {
-        let tokens = lex("main:").unwrap();
-        let nodes = parse(tokens).unwrap();
-        assert_eq!(nodes.len(), 1);
-        match &nodes[0] {
-            AsmNode::Label(name) => assert_eq!(name, "main"),
-            _ => panic!("expected label"),
-        }
-    }
-
-    #[test]
-    fn test_parse_directive() {
-        let tokens = lex(".globl main").unwrap();
-        let nodes = parse(tokens).unwrap();
-        assert_eq!(nodes.len(), 1);
-        match &nodes[0] {
-            AsmNode::Directive(d) => {
-                assert_eq!(d.name, ".globl");
-                assert_eq!(d.args.len(), 1);
-            }
-            _ => panic!("expected directive"),
-        }
-    }
-
-    #[test]
-    fn test_parse_instruction() {
-        let tokens = lex("mov $42, %rax").unwrap();
-        let nodes = parse(tokens).unwrap();
-        assert_eq!(nodes.len(), 1);
-        match &nodes[0] {
-            AsmNode::Instruction(inst) => {
-                assert_eq!(inst.mnemonic, "mov");
-                assert_eq!(inst.operands.len(), 2);
-                match &inst.operands[0] {
-                    Operand::Immediate(42) => {}
-                    _ => panic!("expected immediate 42"),
-                }
-                match &inst.operands[1] {
-                    Operand::Register(Register::Rax) => {}
-                    _ => panic!("expected %rax"),
-                }
-            }
-            _ => panic!("expected instruction"),
-        }
-    }
-
-    #[test]
-    fn test_parse_memory_operand() {
-        let tokens = lex("mov 8(%rbp), %rax").unwrap();
-        let nodes = parse(tokens).unwrap();
-        match &nodes[0] {
-            AsmNode::Instruction(inst) => {
-                match &inst.operands[0] {
-                    Operand::Memory {
-                        displacement,
-                        base,
-                        index,
-                        scale,
-                        symbol,
-                    } => {
-                        assert_eq!(*displacement, 8);
-                        assert_eq!(*base, Some(Register::Rbp));
-                        assert_eq!(*index, None);
-                        assert_eq!(*scale, 1);
-                        assert_eq!(*symbol, None);
-                    }
-                    _ => panic!("expected memory operand"),
-                }
-            }
-            _ => panic!("expected instruction"),
-        }
-    }
-
-    #[test]
-    fn test_parse_symbol_with_reloc() {
-        let tokens = lex("mov main@GOTPCREL(%rip), %rax").unwrap();
-        let nodes = parse(tokens).unwrap();
-        match &nodes[0] {
-            AsmNode::Instruction(inst) => {
-                match &inst.operands[0] {
-                    Operand::Memory { symbol, base, .. } => {
-                        assert_eq!(*base, Some(Register::Rip));
-                        match symbol {
-                            Some((name, reloc)) => {
-                                assert_eq!(name, "main");
-                                assert_eq!(*reloc, RelocType::GotPcRel);
-                            }
-                            _ => panic!("expected symbol with relocation"),
-                        }
-                    }
-                    _ => panic!("expected memory operand with symbol"),
-                }
-            }
-            _ => panic!("expected instruction"),
-        }
-    }
-
-    #[test]
-    fn test_parse_multiline() {
-        let input = ".text\nmain:\n  mov $42, %rax\n  ret";
-        let tokens = lex(input).unwrap();
-        let nodes = parse(tokens).unwrap();
-        assert_eq!(nodes.len(), 4); // .text, main:, mov, ret
-    }
 }

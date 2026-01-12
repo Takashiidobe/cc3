@@ -1,0 +1,7 @@
+---
+source: tests/asm.rs
+expression: "&test_output"
+---
+stdout: "Parsed 5 nodes:\n0: Directive(Directive { name: \".text\", args: [] })\n1: Directive(Directive { name: \".globl\", args: [Symbol(\"main\")] })\n2: Label(\"main\")\n3: Instruction(Instruction { mnemonic: \"mov\", operands: [Immediate(42), Register(Rax)] })\n4: Instruction(Instruction { mnemonic: \"ret\", operands: [] })\n"
+stderr: ""
+status: 0

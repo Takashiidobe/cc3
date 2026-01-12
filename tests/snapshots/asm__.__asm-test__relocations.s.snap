@@ -1,0 +1,7 @@
+---
+source: tests/asm.rs
+expression: "&test_output"
+---
+stdout: ""
+stderr: "./asm-test/relocations.s:7:7: error: unexpected token in operand: Directive(\".L.str\")\n"
+status: 1

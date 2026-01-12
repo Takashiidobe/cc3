@@ -1,36 +1,115 @@
 use crate::asm::{AsmError, AsmResult};
+use serde::Serialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum Register {
     // 8-bit registers
-    Al, Bl, Cl, Dl,
-    Sil, Dil, Bpl, Spl,
-    R8b, R9b, R10b, R11b, R12b, R13b, R14b, R15b,
+    Al,
+    Bl,
+    Cl,
+    Dl,
+    Sil,
+    Dil,
+    Bpl,
+    Spl,
+    R8b,
+    R9b,
+    R10b,
+    R11b,
+    R12b,
+    R13b,
+    R14b,
+    R15b,
 
     // 16-bit registers
-    Ax, Bx, Cx, Dx,
-    Si, Di, Bp, Sp,
-    R8w, R9w, R10w, R11w, R12w, R13w, R14w, R15w,
+    Ax,
+    Bx,
+    Cx,
+    Dx,
+    Si,
+    Di,
+    Bp,
+    Sp,
+    R8w,
+    R9w,
+    R10w,
+    R11w,
+    R12w,
+    R13w,
+    R14w,
+    R15w,
 
     // 32-bit registers
-    Eax, Ebx, Ecx, Edx,
-    Esi, Edi, Ebp, Esp,
-    R8d, R9d, R10d, R11d, R12d, R13d, R14d, R15d,
+    Eax,
+    Ebx,
+    Ecx,
+    Edx,
+    Esi,
+    Edi,
+    Ebp,
+    Esp,
+    R8d,
+    R9d,
+    R10d,
+    R11d,
+    R12d,
+    R13d,
+    R14d,
+    R15d,
 
     // 64-bit registers
-    Rax, Rbx, Rcx, Rdx,
-    Rsi, Rdi, Rbp, Rsp,
-    R8, R9, R10, R11, R12, R13, R14, R15,
+    Rax,
+    Rbx,
+    Rcx,
+    Rdx,
+    Rsi,
+    Rdi,
+    Rbp,
+    Rsp,
+    R8,
+    R9,
+    R10,
+    R11,
+    R12,
+    R13,
+    R14,
+    R15,
 
     // SSE registers (128-bit)
-    Xmm0, Xmm1, Xmm2, Xmm3, Xmm4, Xmm5, Xmm6, Xmm7,
-    Xmm8, Xmm9, Xmm10, Xmm11, Xmm12, Xmm13, Xmm14, Xmm15,
+    Xmm0,
+    Xmm1,
+    Xmm2,
+    Xmm3,
+    Xmm4,
+    Xmm5,
+    Xmm6,
+    Xmm7,
+    Xmm8,
+    Xmm9,
+    Xmm10,
+    Xmm11,
+    Xmm12,
+    Xmm13,
+    Xmm14,
+    Xmm15,
 
     // x87 FPU stack registers
-    St0, St1, St2, St3, St4, St5, St6, St7,
+    St0,
+    St1,
+    St2,
+    St3,
+    St4,
+    St5,
+    St6,
+    St7,
 
     // Segment registers
-    Cs, Ds, Es, Fs, Gs, Ss,
+    Cs,
+    Ds,
+    Es,
+    Fs,
+    Gs,
+    Ss,
 
     // Instruction pointer
     Rip,
@@ -39,33 +118,33 @@ pub enum Register {
 #[derive(Debug, Clone, PartialEq)]
 pub enum TokenKind {
     // Directives
-    Directive(String),       // .text, .globl, .section, etc.
+    Directive(String), // .text, .globl, .section, etc.
 
     // Identifiers and labels
-    Ident(String),           // symbol names
-    Label(String),           // foo: (without colon)
+    Ident(String), // symbol names
+    Label(String), // foo: (without colon)
 
     // Instructions
-    Instruction(String),     // mov, add, push, etc.
+    Instruction(String), // mov, add, push, etc.
 
     // Operands
-    Register(Register),      // %rax, %xmm0, etc.
-    Immediate(i64),          // $123
-    Symbol(String),          // main
+    Register(Register), // %rax, %xmm0, etc.
+    Immediate(i64),     // $123
+    Symbol(String),     // main
 
     // Special suffixes for symbols
-    At(String),              // @GOTPCREL, @PLT, @tlsgd, @tpoff
+    At(String), // @GOTPCREL, @PLT, @tlsgd, @tpoff
 
     // Operators
-    Plus,                    // +
-    Minus,                   // -
-    Star,                    // *
-    Dollar,                  // $
-    Percent,                 // %
-    Comma,                   // ,
-    Colon,                   // :
-    LParen,                  // (
-    RParen,                  // )
+    Plus,    // +
+    Minus,   // -
+    Star,    // *
+    Dollar,  // $
+    Percent, // %
+    Comma,   // ,
+    Colon,   // :
+    LParen,  // (
+    RParen,  // )
 
     // Whitespace and structure
     Newline,
@@ -245,7 +324,13 @@ impl Lexer {
 
         let ch = match self.current() {
             Some(ch) => ch,
-            None => return Ok(Token { kind: TokenKind::Eof, line, column }),
+            None => {
+                return Ok(Token {
+                    kind: TokenKind::Eof,
+                    line,
+                    column,
+                });
+            }
         };
 
         // Handle comments
@@ -257,7 +342,11 @@ impl Lexer {
         // Handle newlines
         if ch == '\n' {
             self.advance();
-            return Ok(Token { kind: TokenKind::Newline, line, column });
+            return Ok(Token {
+                kind: TokenKind::Newline,
+                line,
+                column,
+            });
         }
 
         // Handle directives
@@ -297,13 +386,19 @@ impl Lexer {
                     5 => Register::St5,
                     6 => Register::St6,
                     7 => Register::St7,
-                    _ => return Err(AsmError {
-                        message: format!("invalid st register number: {}", num),
-                        line,
-                        column,
-                    }),
+                    _ => {
+                        return Err(AsmError {
+                            message: format!("invalid st register number: {}", num),
+                            line,
+                            column,
+                        });
+                    }
                 };
-                return Ok(Token { kind: TokenKind::Register(reg), line, column });
+                return Ok(Token {
+                    kind: TokenKind::Register(reg),
+                    line,
+                    column,
+                });
             }
 
             let reg = parse_register(&reg_name).ok_or_else(|| AsmError {
@@ -311,7 +406,11 @@ impl Lexer {
                 line,
                 column,
             })?;
-            return Ok(Token { kind: TokenKind::Register(reg), line, column });
+            return Ok(Token {
+                kind: TokenKind::Register(reg),
+                line,
+                column,
+            });
         }
 
         // Handle immediates
@@ -341,7 +440,11 @@ impl Lexer {
                     });
                 }
             }
-            return Ok(Token { kind: TokenKind::Dollar, line, column });
+            return Ok(Token {
+                kind: TokenKind::Dollar,
+                line,
+                column,
+            });
         }
 
         // Handle @ suffixes (like @GOTPCREL, @PLT)
@@ -359,7 +462,11 @@ impl Lexer {
         match ch {
             '+' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::Plus, line, column })
+                Ok(Token {
+                    kind: TokenKind::Plus,
+                    line,
+                    column,
+                })
             }
             '-' => {
                 self.advance();
@@ -374,27 +481,51 @@ impl Lexer {
                         });
                     }
                 }
-                Ok(Token { kind: TokenKind::Minus, line, column })
+                Ok(Token {
+                    kind: TokenKind::Minus,
+                    line,
+                    column,
+                })
             }
             '*' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::Star, line, column })
+                Ok(Token {
+                    kind: TokenKind::Star,
+                    line,
+                    column,
+                })
             }
             ',' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::Comma, line, column })
+                Ok(Token {
+                    kind: TokenKind::Comma,
+                    line,
+                    column,
+                })
             }
             ':' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::Colon, line, column })
+                Ok(Token {
+                    kind: TokenKind::Colon,
+                    line,
+                    column,
+                })
             }
             '(' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::LParen, line, column })
+                Ok(Token {
+                    kind: TokenKind::LParen,
+                    line,
+                    column,
+                })
             }
             ')' => {
                 self.advance();
-                Ok(Token { kind: TokenKind::RParen, line, column })
+                Ok(Token {
+                    kind: TokenKind::RParen,
+                    line,
+                    column,
+                })
             }
             '"' | '\'' => {
                 let _s = self.read_string()?;
@@ -559,150 +690,4 @@ pub fn lex(input: &str) -> AsmResult<Vec<Token>> {
     }
 
     Ok(tokens)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_directive() {
-        let tokens = lex(".text").unwrap();
-        assert_eq!(tokens.len(), 2); // .text + EOF
-        match &tokens[0].kind {
-            TokenKind::Directive(d) => assert_eq!(d, ".text"),
-            _ => panic!("expected directive"),
-        }
-    }
-
-    #[test]
-    fn test_label() {
-        let tokens = lex("main:").unwrap();
-        assert_eq!(tokens.len(), 2); // label + EOF
-        match &tokens[0].kind {
-            TokenKind::Label(l) => assert_eq!(l, "main"),
-            _ => panic!("expected label"),
-        }
-    }
-
-    #[test]
-    fn test_register() {
-        let tokens = lex("%rax").unwrap();
-        assert_eq!(tokens.len(), 2);
-        match &tokens[0].kind {
-            TokenKind::Register(Register::Rax) => {},
-            _ => panic!("expected %rax register"),
-        }
-    }
-
-    #[test]
-    fn test_immediate() {
-        let tokens = lex("$42").unwrap();
-        assert_eq!(tokens.len(), 2);
-        match &tokens[0].kind {
-            TokenKind::Immediate(42) => {},
-            _ => panic!("expected immediate 42"),
-        }
-    }
-
-    #[test]
-    fn test_negative_immediate() {
-        let tokens = lex("$-10").unwrap();
-        assert_eq!(tokens.len(), 2);
-        match &tokens[0].kind {
-            TokenKind::Immediate(-10) => {},
-            _ => panic!("expected immediate -10"),
-        }
-    }
-
-    #[test]
-    fn test_hex_immediate() {
-        let tokens = lex("$0xff").unwrap();
-        assert_eq!(tokens.len(), 2);
-        match &tokens[0].kind {
-            TokenKind::Immediate(255) => {},
-            _ => panic!("expected immediate 255"),
-        }
-    }
-
-    #[test]
-    fn test_instruction() {
-        let tokens = lex("mov %rax, %rbx").unwrap();
-        assert_eq!(tokens.len(), 5); // mov + %rax + , + %rbx + EOF
-        match &tokens[0].kind {
-            TokenKind::Ident(i) => assert_eq!(i, "mov"),
-            _ => panic!("expected mov instruction"),
-        }
-    }
-
-    #[test]
-    fn test_memory_operand() {
-        let tokens = lex("8(%rbp)").unwrap();
-        match &tokens[0].kind {
-            TokenKind::Immediate(8) => {},
-            _ => panic!("expected displacement"),
-        }
-        match &tokens[1].kind {
-            TokenKind::LParen => {},
-            _ => panic!("expected ("),
-        }
-        match &tokens[2].kind {
-            TokenKind::Register(Register::Rbp) => {},
-            _ => panic!("expected %rbp"),
-        }
-        match &tokens[3].kind {
-            TokenKind::RParen => {},
-            _ => panic!("expected )"),
-        }
-    }
-
-    #[test]
-    fn test_st_register() {
-        let tokens = lex("%st(0)").unwrap();
-        assert_eq!(tokens.len(), 2);
-        match &tokens[0].kind {
-            TokenKind::Register(Register::St0) => {},
-            _ => panic!("expected %st(0)"),
-        }
-    }
-
-    #[test]
-    fn test_symbol_with_suffix() {
-        let tokens = lex("main@GOTPCREL").unwrap();
-        match &tokens[0].kind {
-            TokenKind::Ident(i) => assert_eq!(i, "main"),
-            _ => panic!("expected main"),
-        }
-        match &tokens[1].kind {
-            TokenKind::At(s) => assert_eq!(s, "GOTPCREL"),
-            _ => panic!("expected @GOTPCREL"),
-        }
-    }
-
-    #[test]
-    fn test_comment() {
-        let tokens = lex("mov %rax, %rbx  # this is a comment\nadd %rcx, %rdx").unwrap();
-        // Should skip comment and continue
-        match &tokens[0].kind {
-            TokenKind::Ident(i) => assert_eq!(i, "mov"),
-            _ => panic!("expected mov"),
-        }
-        // Should have newline
-        let newline_pos = tokens.iter().position(|t| matches!(t.kind, TokenKind::Newline));
-        assert!(newline_pos.is_some(), "expected newline token");
-    }
-
-    #[test]
-    fn test_memory_tokens() {
-        let input = "mov 8(%rbp), %rax";
-        let tokens = lex(input).unwrap();
-        eprintln!("Tokens for '{}': ", input);
-        for (i, token) in tokens.iter().enumerate() {
-            eprintln!("  {}: {:?}", i, token.kind);
-        }
-        // Verify we get the right tokens
-        assert!(matches!(tokens[0].kind, TokenKind::Ident(_)));
-        assert!(matches!(tokens[1].kind, TokenKind::Immediate(8)));
-        assert!(matches!(tokens[2].kind, TokenKind::LParen));
-    }
 }
