@@ -3571,6 +3571,7 @@ impl<'a> Parser<'a> {
         let idx = self.new_anon_gvar(ty);
         if let Some(obj) = self.globals.get_mut(idx) {
             obj.init_data = Some(bytes);
+            obj.is_readonly = true;
         }
         idx
     }

@@ -29,6 +29,20 @@ fn has_label(asm: &str, name: &str) -> bool {
     asm.lines().any(|line| line.trim() == label)
 }
 
+fn readelf_sections(path: &Path) -> String {
+    let output = Command::new("readelf")
+        .arg("-WS")
+        .arg(path)
+        .output()
+        .expect("run readelf");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 #[test]
 fn preprocess_dash_e_outputs_includes() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -599,6 +613,35 @@ fn linker_xlinker_option_passed_through() {
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn gc_sections_drops_unused_function() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input_path = dir.path().join("input.c");
+    fs::write(
+        &input_path,
+        "const char *unused_str = \"unused\";\nint unused() { return 123; }\nint used() { return 1; }\nint main() { return used(); }\n",
+    )
+    .expect("write input");
+
+    let out_path = dir.path().join("out");
+    let bin = assert_cmd::cargo::cargo_bin!(env!("CARGO_PKG_NAME"));
+    let output = Command::new(bin)
+        .arg("-o")
+        .arg(&out_path)
+        .arg(&input_path)
+        .output()
+        .expect("link");
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let sections = readelf_sections(&out_path);
+    assert!(!sections.contains(".text.unused"), "sections: {sections}");
+    assert!(!sections.contains(".rodata."), "sections: {sections}");
 }
 
 #[test]

@@ -106,6 +106,10 @@ impl Codegen {
         out
     }
 
+    fn section_name(&self, base: &str, symbol: &str) -> String {
+        format!("{base}.{symbol}")
+    }
+
     fn emit_files(&mut self) {
         for file in get_input_files() {
             self.emit_line(&format!(
@@ -147,11 +151,20 @@ impl Codegen {
             }
 
             if let Some(init_data) = &obj.init_data {
-                // .data or .tdata
+                // .data/.rodata or .tdata
                 if obj.is_tls {
-                    self.emit_line("  .section .tdata,\"awT\",@progbits");
+                    self.emit_line(&format!(
+                        "  .section {},\"awT\",@progbits",
+                        self.section_name(".tdata", &symbol)
+                    ));
                 } else {
-                    self.emit_line("  .data");
+                    let section = if obj.is_readonly { ".rodata" } else { ".data" };
+                    let flags = if obj.is_readonly { "\"a\"" } else { "\"aw\"" };
+                    self.emit_line(&format!(
+                        "  .section {},{},@progbits",
+                        self.section_name(section, &symbol),
+                        flags
+                    ));
                 }
 
                 let align = if matches!(obj.ty, Type::Array { .. }) && obj.ty.size() >= 16 {
@@ -196,9 +209,15 @@ impl Codegen {
 
             // .bss or .tbss
             if obj.is_tls {
-                self.emit_line("  .section .tbss,\"awT\",@nobits");
+                self.emit_line(&format!(
+                    "  .section {},\"awT\",@nobits",
+                    self.section_name(".tbss", &symbol)
+                ));
             } else {
-                self.emit_line("  .bss");
+                self.emit_line(&format!(
+                    "  .section {},\"aw\",@nobits",
+                    self.section_name(".bss", &symbol)
+                ));
             }
             let align = if matches!(obj.ty, Type::Array { .. }) && obj.ty.size() >= 16 {
                 obj.align.max(16)
@@ -259,7 +278,10 @@ impl Codegen {
         } else {
             self.emit_line(&format!("  .globl {}", symbol));
         }
-        self.emit_line("  .text");
+        self.emit_line(&format!(
+            "  .section {},\"ax\",@progbits",
+            self.section_name(".text", &symbol)
+        ));
         self.emit_line(&format!("  .type {}, @function", symbol));
         self.emit_line(&format!("{}:", symbol));
         self.emit_line("  push %rbp");
@@ -847,7 +869,11 @@ impl Codegen {
             }
             StmtKind::Expr(expr) => {
                 self.gen_expr(expr, function, globals);
-                if expr.ty.as_ref().is_some_and(|ty| matches!(ty, Type::LDouble)) {
+                if expr
+                    .ty
+                    .as_ref()
+                    .is_some_and(|ty| matches!(ty, Type::LDouble))
+                {
                     self.emit_line("  fstp %st(0)");
                 }
             }
@@ -1116,11 +1142,9 @@ impl Codegen {
             ExprKind::StmtExpr(stmts) => {
                 for (idx, stmt) in stmts.iter().enumerate() {
                     let is_last = idx + 1 == stmts.len();
-                    if is_last {
-                        if let StmtKind::Expr(expr) = &stmt.kind {
-                            self.gen_expr(expr, function, globals);
-                            continue;
-                        }
+                    if is_last && let StmtKind::Expr(expr) = &stmt.kind {
+                        self.gen_expr(expr, function, globals);
+                        continue;
                     }
                     self.gen_stmt(stmt, function, globals);
                 }
@@ -1174,7 +1198,11 @@ impl Codegen {
             }
             ExprKind::Comma { lhs, rhs } => {
                 self.gen_expr(lhs, function, globals);
-                if lhs.ty.as_ref().is_some_and(|ty| matches!(ty, Type::LDouble)) {
+                if lhs
+                    .ty
+                    .as_ref()
+                    .is_some_and(|ty| matches!(ty, Type::LDouble))
+                {
                     self.emit_line("  fstp %st(0)");
                 }
                 self.gen_expr(rhs, function, globals);
@@ -1535,18 +1563,18 @@ impl Codegen {
 
     fn type_id(&self, ty: &Type) -> usize {
         match ty {
-            Type::Bool => 0,   // I8
-            Type::Char => 0,   // I8
-            Type::Short => 1,  // I16
-            Type::Int => 2,    // I32
-            Type::Enum => 2,   // I32
-            Type::Long => 3,   // I64
-            Type::UChar => 4,  // U8
-            Type::UShort => 5, // U16
-            Type::UInt => 6,   // U32
-            Type::ULong => 7,  // U64
-            Type::Float => 8,  // F32
-            Type::Double => 9, // F64
+            Type::Bool => 0,     // I8
+            Type::Char => 0,     // I8
+            Type::Short => 1,    // I16
+            Type::Int => 2,      // I32
+            Type::Enum => 2,     // I32
+            Type::Long => 3,     // I64
+            Type::UChar => 4,    // U8
+            Type::UShort => 5,   // U16
+            Type::UInt => 6,     // U32
+            Type::ULong => 7,    // U64
+            Type::Float => 8,    // F32
+            Type::Double => 9,   // F64
             Type::LDouble => 10, // F80
             _ => 7,              // U64
         }

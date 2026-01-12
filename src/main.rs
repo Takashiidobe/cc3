@@ -987,9 +987,14 @@ fn run_linker(
     for dir in library_dirs {
         argv.push(format!("-L{}", dir.display()));
     }
+    let map_path = output.with_extension("map");
+    argv.push("-Wl,--gc-sections".to_string());
+    argv.push("-Wl,--start-group".to_string());
     for arg in linker_args {
         argv.push(arg.clone());
     }
+    argv.push("-Wl,--end-group".to_string());
+    argv.push(format!("-Wl,-Map,{}", map_path.display()));
     run_subprocess(&argv, show_cmd)
 }
 
