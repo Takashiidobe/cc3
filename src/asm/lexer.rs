@@ -131,6 +131,7 @@ pub enum TokenKind {
     Register(Register), // %rax, %xmm0, etc.
     Immediate(i64),     // $123
     Symbol(String),     // main
+    String(String),     // "ax", "awT", etc.
 
     // Special suffixes for symbols
     At(String), // @GOTPCREL, @PLT, @tlsgd, @tpoff
@@ -349,10 +350,18 @@ impl Lexer {
             });
         }
 
-        // Handle directives
+        // Handle directives and dot-prefixed labels/symbols
         if ch == '.' {
             self.advance();
             let ident = self.read_identifier();
+            if self.current() == Some(':') {
+                self.advance();
+                return Ok(Token {
+                    kind: TokenKind::Label(format!(".{}", ident)),
+                    line,
+                    column,
+                });
+            }
             return Ok(Token {
                 kind: TokenKind::Directive(format!(".{}", ident)),
                 line,
@@ -528,10 +537,12 @@ impl Lexer {
                 })
             }
             '"' | '\'' => {
-                let _s = self.read_string()?;
-                // For now, treat strings as identifiers
-                // In a full implementation, we'd handle string directives
-                self.next_token()
+                let s = self.read_string()?;
+                Ok(Token {
+                    kind: TokenKind::String(s),
+                    line,
+                    column,
+                })
             }
             _ if ch.is_alphabetic() || ch == '_' => {
                 let ident = self.read_identifier();

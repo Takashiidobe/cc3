@@ -218,7 +218,7 @@ impl Parser {
                     column,
                 })
             }
-            TokenKind::Symbol(name) | TokenKind::Ident(name) => {
+            TokenKind::Symbol(name) | TokenKind::Ident(name) | TokenKind::Directive(name) => {
                 let name = name.clone();
                 self.advance();
 
@@ -458,8 +458,16 @@ impl Parser {
                     args.push(DirectiveArg::Integer(*val));
                     self.advance();
                 }
-                TokenKind::Ident(s) | TokenKind::Symbol(s) => {
+                TokenKind::Ident(s) | TokenKind::Symbol(s) | TokenKind::Directive(s) => {
                     args.push(DirectiveArg::Symbol(s.clone()));
+                    self.advance();
+                }
+                TokenKind::String(s) => {
+                    args.push(DirectiveArg::String(s.clone()));
+                    self.advance();
+                }
+                TokenKind::At(s) => {
+                    args.push(DirectiveArg::Symbol(format!("@{}", s)));
                     self.advance();
                 }
                 TokenKind::Comma => {

@@ -2,6 +2,6 @@
 source: tests/asm.rs
 expression: "&test_output"
 ---
-stdout: ""
-stderr: "./asm-test/relocations.s:7:7: error: unexpected token in operand: Directive(\".L.str\")\n"
-status: 1
+stdout: "Parsed 13 nodes:\n0: Directive(Directive { name: \".text\", args: [] })\n1: Directive(Directive { name: \".globl\", args: [Symbol(\"test_reloc\")] })\n2: Label(\"test_reloc\")\n3: Instruction(Instruction { mnemonic: \"call\", operands: [Symbol { name: \"printf\", addend: 0, reloc: Plt }] })\n4: Instruction(Instruction { mnemonic: \"mov\", operands: [Memory { displacement: 0, base: Some(Rip), index: None, scale: 1, symbol: Some((\"global_var\", GotPcRel)) }, Register(Rax)] })\n5: Instruction(Instruction { mnemonic: \"lea\", operands: [Memory { displacement: 0, base: Some(Rip), index: None, scale: 1, symbol: Some((\".L.str\", None)) }, Register(Rdi)] })\n6: Instruction(Instruction { mnemonic: \"ret\", operands: [] })\n7: Directive(Directive { name: \".data\", args: [] })\n8: Label(\"global_var\")\n9: Directive(Directive { name: \".quad\", args: [Integer(0)] })\n10: Directive(Directive { name: \".rodata\", args: [] })\n11: Label(\".L.str\")\n12: Directive(Directive { name: \".byte\", args: [Integer(72), Integer(101), Integer(108), Integer(108), Integer(111), Integer(0)] })\nSections:\n0: Section { name: \".text\", typ: ProgBits, flags: Some(\"ax\"), align: 1, size: 0 }\n1: Section { name: \".data\", typ: ProgBits, flags: Some(\"aw\"), align: 1, size: 0 }\n2: Section { name: \".rodata\", typ: ProgBits, flags: Some(\"a\"), align: 1, size: 0 }\nSymbols:\n0: Symbol { name: \"test_reloc\", section: Some(0), value: 0, size: None, binding: Global, typ: NoType }\n1: Symbol { name: \"global_var\", section: Some(1), value: 0, size: None, binding: Local, typ: NoType }\n2: Symbol { name: \".L.str\", section: Some(2), value: 0, size: None, binding: Local, typ: NoType }\n"
+stderr: ""
+status: 0

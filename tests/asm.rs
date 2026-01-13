@@ -22,13 +22,22 @@ fn run_case(path: &Path) -> datatest_stable::Result<()> {
         .stderr(Stdio::piped())
         .output()?;
 
-    let test_output = TestOutput {
+    let out = TestOutput {
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         status: output.status.code().unwrap_or(-1),
     };
 
-    assert_yaml_snapshot!(path.to_str(), &test_output);
+    assert!(
+        out.status == 0,
+        "{} failed (status: {})\n--- stdout ---\n{}\n--- stderr ---\n{}",
+        path.display(),
+        out.status,
+        out.stdout,
+        out.stderr,
+    );
+
+    assert_yaml_snapshot!(path.to_str(), &out);
 
     Ok(())
 }

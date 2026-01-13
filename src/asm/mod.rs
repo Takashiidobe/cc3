@@ -1,8 +1,14 @@
+pub mod assembler;
 pub mod lexer;
 pub mod parser;
+pub mod section;
+pub mod symbol;
 
+pub use assembler::{build_program, AsmProgram};
 pub use lexer::{lex, Register, Token, TokenKind};
 pub use parser::{parse, AsmNode, Directive, Instruction, Operand};
+pub use section::{Section, SectionType};
+pub use symbol::{Symbol, SymbolBinding, SymbolType};
 
 use std::fmt;
 

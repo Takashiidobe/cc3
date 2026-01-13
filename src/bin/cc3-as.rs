@@ -78,10 +78,28 @@ fn main() {
         }
     };
 
-    // For Phase 1, output parsed AST
-    // In later phases, this will output an actual object file
+    // For Phase 2, output parsed AST and section/symbol info.
+    // In later phases, this will output an actual object file.
     println!("Parsed {} nodes:", nodes.len());
     for (i, node) in nodes.iter().enumerate() {
         println!("{}: {:?}", i, node);
+    }
+
+    let program = match asm::build_program(&nodes) {
+        Ok(program) => program,
+        Err(err) => {
+            eprintln!("{}:{}:{}: error: {}", input_file, err.line, err.column, err.message);
+            process::exit(1);
+        }
+    };
+
+    println!("Sections:");
+    for (i, section) in program.sections.iter().enumerate() {
+        println!("{}: {:?}", i, section);
+    }
+
+    println!("Symbols:");
+    for (i, symbol) in program.symbols.iter().enumerate() {
+        println!("{}: {:?}", i, symbol);
     }
 }
