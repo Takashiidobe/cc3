@@ -1,12 +1,13 @@
+#![allow(unused)]
 pub mod assembler;
 pub mod lexer;
 pub mod parser;
 pub mod section;
 pub mod symbol;
 
-pub use assembler::{build_program, AsmProgram};
-pub use lexer::{lex, Register, Token, TokenKind};
-pub use parser::{parse, AsmNode, Directive, Instruction, Operand};
+pub use assembler::{AsmProgram, build_program};
+pub use lexer::{Register, Token, TokenKind, lex};
+pub use parser::{AsmNode, Directive, Instruction, Operand, parse};
 pub use section::{Section, SectionType};
 pub use symbol::{Symbol, SymbolBinding, SymbolType};
 
