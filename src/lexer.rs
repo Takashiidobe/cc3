@@ -109,194 +109,15 @@ fn register_file(path: PathBuf, contents: String) -> File {
     file
 }
 
-fn remove_backslash_newline(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    let mut pending_newlines = 0;
-
-    while i < bytes.len() {
-        if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
-            i += 2;
-            pending_newlines += 1;
-            continue;
-        }
-
-        if bytes[i] == b'\n' {
-            out.push(b'\n');
-            i += 1;
-            if pending_newlines > 0 {
-                out.extend(std::iter::repeat_n(b'\n', pending_newlines));
-                pending_newlines = 0;
-            }
-            continue;
-        }
-
-        out.push(bytes[i]);
-        i += 1;
-    }
-
-    if pending_newlines > 0 {
-        out.extend(std::iter::repeat_n(b'\n', pending_newlines));
-    }
-
-    String::from_utf8(out).expect("line continuation removal")
-}
-
-fn canonicalize_newline(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-
-    while i < bytes.len() {
-        if bytes[i] == b'\r' {
-            if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
-                i += 2;
-            } else {
-                i += 1;
-            }
-            out.push(b'\n');
-            continue;
-        }
-
-        out.push(bytes[i]);
-        i += 1;
-    }
-
-    String::from_utf8(out).expect("newline canonicalization")
-}
-
-fn read_universal_char(bytes: &[u8]) -> Option<u32> {
-    let mut c = 0u32;
-    for &b in bytes {
-        if !is_hex_digit(b) {
-            return None;
-        }
-        c = (c << 4) | from_hex(b);
-    }
-    Some(c)
-}
-
-fn encode_utf8(out: &mut Vec<u8>, c: u32) -> usize {
-    if c <= 0x7F {
-        out.push(c as u8);
-        return 1;
-    }
-
-    if c <= 0x7FF {
-        out.push((0b1100_0000 | (c >> 6)) as u8);
-        out.push((0b1000_0000 | (c & 0b0011_1111)) as u8);
-        return 2;
-    }
-
-    if c <= 0xFFFF {
-        out.push((0b1110_0000 | (c >> 12)) as u8);
-        out.push((0b1000_0000 | ((c >> 6) & 0b0011_1111)) as u8);
-        out.push((0b1000_0000 | (c & 0b0011_1111)) as u8);
-        return 3;
-    }
-
-    out.push((0b1111_0000 | (c >> 18)) as u8);
-    out.push((0b1000_0000 | ((c >> 12) & 0b0011_1111)) as u8);
-    out.push((0b1000_0000 | ((c >> 6) & 0b0011_1111)) as u8);
-    out.push((0b1000_0000 | (c & 0b0011_1111)) as u8);
-    4
-}
-
-fn convert_universal_chars(input: &str) -> String {
-    let bytes = input.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-
-    while i < bytes.len() {
-        if bytes[i] == b'\\' && i + 1 < bytes.len() {
-            if bytes[i + 1] == b'u' {
-                if i + 6 <= bytes.len()
-                    && let Some(c) = read_universal_char(&bytes[i + 2..i + 6])
-                    && c != 0
-                {
-                    i += 6;
-                    encode_utf8(&mut out, c);
-                    continue;
-                }
-                out.push(bytes[i]);
-                i += 1;
-                continue;
-            }
-
-            if bytes[i + 1] == b'U' {
-                if i + 10 <= bytes.len()
-                    && let Some(c) = read_universal_char(&bytes[i + 2..i + 10])
-                    && c != 0
-                {
-                    i += 10;
-                    encode_utf8(&mut out, c);
-                    continue;
-                }
-                out.push(bytes[i]);
-                i += 1;
-                continue;
-            }
-
-            out.push(bytes[i]);
-            out.push(bytes[i + 1]);
-            i += 2;
-            continue;
-        }
-
-        out.push(bytes[i]);
-        i += 1;
-    }
-
-    String::from_utf8(out).expect("universal character conversion")
-}
-
-fn decode_utf8(input: &[u8], pos: &mut usize, location: SourceLocation) -> CompileResult<u32> {
-    if *pos >= input.len() {
-        return Ok(0);
-    }
-
-    let b = input[*pos];
-    if b < 0x80 {
-        *pos += 1;
-        return Ok(b as u32);
-    }
-
-    let (len, mut c) = if b >= 0b1111_0000 {
-        (4, (b & 0b0000_0111) as u32)
-    } else if b >= 0b1110_0000 {
-        (3, (b & 0b0000_1111) as u32)
-    } else if b >= 0b1100_0000 {
-        (2, (b & 0b0001_1111) as u32)
-    } else {
-        return Err(CompileError::at("invalid UTF-8 sequence", location));
-    };
-
-    if *pos + len > input.len() {
-        return Err(CompileError::at("invalid UTF-8 sequence", location));
-    }
-
-    for i in 1..len {
-        let byte = input[*pos + i];
-        if byte >> 6 != 0b10 {
-            return Err(CompileError::at("invalid UTF-8 sequence", location));
-        }
-        c = (c << 6) | (byte & 0b0011_1111) as u32;
-    }
-
-    *pos += len;
-    Ok(c)
-}
-
 pub fn tokenize_file(path: &Path) -> CompileResult<Vec<Token>> {
     let mut contents = fs::read_to_string(path)
         .map_err(|err| CompileError::new(format!("failed to read {}: {err}", path.display())))?;
     if contents.as_bytes().starts_with(b"\xEF\xBB\xBF") {
         contents = contents[3..].to_string();
     }
-    let contents = canonicalize_newline(&contents);
-    let contents = remove_backslash_newline(&contents);
-    let contents = convert_universal_chars(&contents);
+    let contents = Lexer::canonicalize_newline(&contents);
+    let contents = Lexer::remove_backslash_newline(&contents);
+    let contents = Lexer::convert_universal_chars(&contents);
     set_base_file(path);
     let file = register_file(path.to_path_buf(), contents);
     tokenize(&file.contents, file.file_no)
@@ -331,11 +152,11 @@ pub fn tokenize_string_literal(token: &Token, base: &Type) -> CompileResult<Toke
         start
     };
     let mut new_token = if base.size() == 1 {
-        read_string_literal(input, start, quote, location)?
+        Lexer::read_string_literal(input, start, quote, location)?
     } else if base.size() == 2 {
-        read_utf16_string_literal(input, start, quote, location)?
+        Lexer::read_utf16_string_literal(input, start, quote, location)?
     } else {
-        read_utf32_string_literal(input, start, quote, location, base.clone())?
+        Lexer::read_utf32_string_literal(input, start, quote, location, base.clone())?
     };
     new_token.location = location;
     new_token.at_bol = token.at_bol;
@@ -878,6 +699,201 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    // Text preprocessing functions (called before tokenization)
+
+    fn remove_backslash_newline(input: &str) -> String {
+        let bytes = input.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+        let mut pending_newlines = 0;
+
+        while i < bytes.len() {
+            if bytes[i] == b'\\' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+                i += 2;
+                pending_newlines += 1;
+                continue;
+            }
+
+            if bytes[i] == b'\n' {
+                out.push(b'\n');
+                i += 1;
+                if pending_newlines > 0 {
+                    out.extend(std::iter::repeat_n(b'\n', pending_newlines));
+                    pending_newlines = 0;
+                }
+                continue;
+            }
+
+            out.push(bytes[i]);
+            i += 1;
+        }
+
+        if pending_newlines > 0 {
+            out.extend(std::iter::repeat_n(b'\n', pending_newlines));
+        }
+
+        String::from_utf8(out).expect("line continuation removal")
+    }
+
+    fn canonicalize_newline(input: &str) -> String {
+        let bytes = input.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+
+        while i < bytes.len() {
+            if bytes[i] == b'\r' {
+                if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+                out.push(b'\n');
+                continue;
+            }
+
+            out.push(bytes[i]);
+            i += 1;
+        }
+
+        String::from_utf8(out).expect("newline canonicalization")
+    }
+
+    fn read_universal_char(bytes: &[u8]) -> Option<u32> {
+        let mut c = 0u32;
+        for &b in bytes {
+            if !b.is_ascii_hexdigit() {
+                return None;
+            }
+            c = (c << 4) | Self::from_hex(b);
+        }
+        Some(c)
+    }
+
+    fn convert_universal_chars(input: &str) -> String {
+        let bytes = input.as_bytes();
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut i = 0;
+
+        while i < bytes.len() {
+            if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                if bytes[i + 1] == b'u' {
+                    if i + 6 <= bytes.len()
+                        && let Some(c) = Self::read_universal_char(&bytes[i + 2..i + 6])
+                        && c != 0
+                    {
+                        i += 6;
+                        Self::encode_utf8(&mut out, c);
+                        continue;
+                    }
+                    out.push(bytes[i]);
+                    i += 1;
+                    continue;
+                }
+
+                if bytes[i + 1] == b'U' {
+                    if i + 10 <= bytes.len()
+                        && let Some(c) = Self::read_universal_char(&bytes[i + 2..i + 10])
+                        && c != 0
+                    {
+                        i += 10;
+                        Self::encode_utf8(&mut out, c);
+                        continue;
+                    }
+                    out.push(bytes[i]);
+                    i += 1;
+                    continue;
+                }
+
+                out.push(bytes[i]);
+                out.push(bytes[i + 1]);
+                i += 2;
+                continue;
+            }
+
+            out.push(bytes[i]);
+            i += 1;
+        }
+
+        String::from_utf8(out).expect("universal character conversion")
+    }
+
+    // Character utility functions
+
+    fn is_hex_digit(b: u8) -> bool {
+        b.is_ascii_hexdigit()
+    }
+
+    fn from_hex(b: u8) -> u32 {
+        match b {
+            b'0'..=b'9' => (b - b'0') as u32,
+            b'a'..=b'f' => (b - b'a' + 10) as u32,
+            _ => (b - b'A' + 10) as u32,
+        }
+    }
+
+    fn encode_utf8(out: &mut Vec<u8>, c: u32) -> usize {
+        if c <= 0x7F {
+            out.push(c as u8);
+            return 1;
+        }
+
+        if c <= 0x7FF {
+            out.push((0b1100_0000 | (c >> 6)) as u8);
+            out.push((0b1000_0000 | (c & 0b0011_1111)) as u8);
+            return 2;
+        }
+
+        if c <= 0xFFFF {
+            out.push((0b1110_0000 | (c >> 12)) as u8);
+            out.push((0b1000_0000 | ((c >> 6) & 0b0011_1111)) as u8);
+            out.push((0b1000_0000 | (c & 0b0011_1111)) as u8);
+            return 3;
+        }
+
+        out.push((0b1111_0000 | (c >> 18)) as u8);
+        out.push((0b1000_0000 | ((c >> 12) & 0b0011_1111)) as u8);
+        out.push((0b1000_0000 | ((c >> 6) & 0b0011_1111)) as u8);
+        out.push((0b1000_0000 | (c & 0b0011_1111)) as u8);
+        4
+    }
+
+    fn decode_utf8(input: &[u8], pos: &mut usize, location: SourceLocation) -> CompileResult<u32> {
+        if *pos >= input.len() {
+            return Ok(0);
+        }
+
+        let b = input[*pos];
+        if b < 0x80 {
+            *pos += 1;
+            return Ok(b as u32);
+        }
+
+        let (len, mut c) = if b >= 0b1111_0000 {
+            (4, (b & 0b0000_0111) as u32)
+        } else if b >= 0b1110_0000 {
+            (3, (b & 0b0000_1111) as u32)
+        } else if b >= 0b1100_0000 {
+            (2, (b & 0b0001_1111) as u32)
+        } else {
+            return Err(CompileError::at("invalid UTF-8 sequence", location));
+        };
+
+        if *pos + len > input.len() {
+            return Err(CompileError::at("invalid UTF-8 sequence", location));
+        }
+
+        for i in 1..len {
+            let byte = input[*pos + i];
+            if byte >> 6 != 0b10 {
+                return Err(CompileError::at("invalid UTF-8 sequence", location));
+            }
+            c = (c << 6) | (byte & 0b0011_1111) as u32;
+        }
+
+        *pos += len;
+        Ok(c)
+    }
+
     fn tokenize(mut self) -> CompileResult<Vec<Token>> {
         let mut tokens = Vec::new();
 
@@ -975,7 +991,7 @@ impl<'a> Lexer<'a> {
             if b == b'L' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'\'' {
                 let start = self.pos;
                 let location = self.location();
-                let (value, end) = read_char_literal(self.input, start, start + 1, location)?;
+                let (value, end) = Self::read_char_literal(self.input, start, start + 1, location)?;
                 self.pos = end;
                 self.column += self.pos - start;
                 tokens.push(Token {
@@ -998,7 +1014,7 @@ impl<'a> Lexer<'a> {
             if b == b'u' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'\'' {
                 let start = self.pos;
                 let location = self.location();
-                let (value, end) = read_char_literal(self.input, start, start + 1, location)?;
+                let (value, end) = Self::read_char_literal(self.input, start, start + 1, location)?;
                 let value = value & 0xffff;
                 self.pos = end;
                 self.column += self.pos - start;
@@ -1022,7 +1038,7 @@ impl<'a> Lexer<'a> {
             if b == b'U' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'\'' {
                 let start = self.pos;
                 let location = self.location();
-                let (value, end) = read_char_literal(self.input, start, start + 1, location)?;
+                let (value, end) = Self::read_char_literal(self.input, start, start + 1, location)?;
                 self.pos = end;
                 self.column += self.pos - start;
                 tokens.push(Token {
@@ -1045,7 +1061,7 @@ impl<'a> Lexer<'a> {
             if b == b'"' {
                 let start = self.pos;
                 let location = self.location();
-                let mut token = read_string_literal(self.input, start, start, location)?;
+                let mut token = Self::read_string_literal(self.input, start, start, location)?;
                 token.at_bol = self.at_bol;
                 token.has_space = self.has_space;
                 let len = token.len;
@@ -1060,7 +1076,8 @@ impl<'a> Lexer<'a> {
             if b == b'u' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'"' {
                 let start = self.pos;
                 let location = self.location();
-                let mut token = read_utf16_string_literal(self.input, start, start + 1, location)?;
+                let mut token =
+                    Self::read_utf16_string_literal(self.input, start, start + 1, location)?;
                 token.at_bol = self.at_bol;
                 token.has_space = self.has_space;
                 let len = token.len;
@@ -1075,8 +1092,13 @@ impl<'a> Lexer<'a> {
             if b == b'U' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'"' {
                 let start = self.pos;
                 let location = self.location();
-                let mut token =
-                    read_utf32_string_literal(self.input, start, start + 1, location, Type::UInt)?;
+                let mut token = Self::read_utf32_string_literal(
+                    self.input,
+                    start,
+                    start + 1,
+                    location,
+                    Type::UInt,
+                )?;
                 token.at_bol = self.at_bol;
                 token.has_space = self.has_space;
                 let len = token.len;
@@ -1095,7 +1117,7 @@ impl<'a> Lexer<'a> {
             {
                 let start = self.pos;
                 let location = self.location();
-                let mut token = read_string_literal(self.input, start, start + 2, location)?;
+                let mut token = Self::read_string_literal(self.input, start, start + 2, location)?;
                 token.at_bol = self.at_bol;
                 token.has_space = self.has_space;
                 let len = token.len;
@@ -1110,8 +1132,13 @@ impl<'a> Lexer<'a> {
             if b == b'L' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'"' {
                 let start = self.pos;
                 let location = self.location();
-                let mut token =
-                    read_utf32_string_literal(self.input, start, start + 1, location, Type::Int)?;
+                let mut token = Self::read_utf32_string_literal(
+                    self.input,
+                    start,
+                    start + 1,
+                    location,
+                    Type::Int,
+                )?;
                 token.at_bol = self.at_bol;
                 token.has_space = self.has_space;
                 let len = token.len;
@@ -1148,7 +1175,7 @@ impl<'a> Lexer<'a> {
             if b == b'\'' {
                 let start = self.pos;
                 let location = self.location();
-                let (value, end) = read_char_literal(self.input, start, start, location)?;
+                let (value, end) = Self::read_char_literal(self.input, start, start, location)?;
                 let value = value as i8 as i64;
                 self.pos = end;
                 self.column += self.pos - start;
@@ -1201,316 +1228,308 @@ impl<'a> Lexer<'a> {
         tokens.push(self.eof_token());
         Ok(tokens)
     }
-}
 
-pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
-    Lexer::new(input, file_no).tokenize()
-}
+    // Literal parsing functions
 
-fn read_escaped_char(
-    input: &[u8],
-    pos: &mut usize,
-    location: SourceLocation,
-) -> CompileResult<u32> {
-    if *pos >= input.len() {
-        return Ok(0);
-    }
+    fn read_escaped_char(
+        input: &[u8],
+        pos: &mut usize,
+        location: SourceLocation,
+    ) -> CompileResult<u32> {
+        if *pos >= input.len() {
+            return Ok(0);
+        }
 
-    let b = input[*pos];
-    if b.is_ascii_digit() && b <= b'7' {
-        let mut value = (b - b'0') as u32;
-        *pos += 1;
-        if *pos < input.len() && input[*pos].is_ascii_digit() && input[*pos] <= b'7' {
-            value = (value << 3) + (input[*pos] - b'0') as u32;
+        let b = input[*pos];
+        if b.is_ascii_digit() && b <= b'7' {
+            let mut value = (b - b'0') as u32;
             *pos += 1;
             if *pos < input.len() && input[*pos].is_ascii_digit() && input[*pos] <= b'7' {
                 value = (value << 3) + (input[*pos] - b'0') as u32;
                 *pos += 1;
+                if *pos < input.len() && input[*pos].is_ascii_digit() && input[*pos] <= b'7' {
+                    value = (value << 3) + (input[*pos] - b'0') as u32;
+                    *pos += 1;
+                }
             }
+            return Ok(value);
         }
-        return Ok(value);
-    }
 
-    if b == b'x' {
-        *pos += 1;
-        if *pos >= input.len() || !is_hex_digit(input[*pos]) {
-            return Err(CompileError::at("invalid hex escape sequence", location));
-        }
-        let mut value: u32 = 0;
-        while *pos < input.len() && is_hex_digit(input[*pos]) {
-            value = (value << 4) + from_hex(input[*pos]);
+        if b == b'x' {
             *pos += 1;
+            if *pos >= input.len() || !Self::is_hex_digit(input[*pos]) {
+                return Err(CompileError::at("invalid hex escape sequence", location));
+            }
+            let mut value: u32 = 0;
+            while *pos < input.len() && Self::is_hex_digit(input[*pos]) {
+                value = (value << 4) + Self::from_hex(input[*pos]);
+                *pos += 1;
+            }
+            return Ok(value);
         }
-        return Ok(value);
+
+        *pos += 1;
+        Ok(match b {
+            b'a' => b'\x07',
+            b'b' => b'\x08',
+            b't' => b'\t',
+            b'n' => b'\n',
+            b'v' => b'\x0b',
+            b'f' => b'\x0c',
+            b'r' => b'\r',
+            b'e' => 27,
+            _ => b,
+        } as u32)
     }
 
-    *pos += 1;
-    Ok(match b {
-        b'a' => b'\x07',
-        b'b' => b'\x08',
-        b't' => b'\t',
-        b'n' => b'\n',
-        b'v' => b'\x0b',
-        b'f' => b'\x0c',
-        b'r' => b'\r',
-        b'e' => 27,
-        _ => b,
-    } as u32)
-}
+    fn read_char_literal(
+        input: &[u8],
+        _start: usize,
+        quote: usize,
+        location: SourceLocation,
+    ) -> CompileResult<(i64, usize)> {
+        let mut i = quote + 1;
+        if i >= input.len() {
+            return Err(CompileError::at("unclosed char literal", location));
+        }
 
-fn read_char_literal(
-    input: &[u8],
-    _start: usize,
-    quote: usize,
-    location: SourceLocation,
-) -> CompileResult<(i64, usize)> {
-    let mut i = quote + 1;
-    if i >= input.len() {
-        return Err(CompileError::at("unclosed char literal", location));
-    }
-
-    let value = if input[i] == b'\\' {
-        let mut escaped_pos = i + 1;
-        let escaped = read_escaped_char(input, &mut escaped_pos, location)?;
-        i = escaped_pos;
-        escaped as i64
-    } else {
-        let mut utf8_pos = i;
-        let decoded = decode_utf8(input, &mut utf8_pos, location)?;
-        i = utf8_pos;
-        decoded as i64
-    };
-
-    if i >= input.len() || input[i] != b'\'' {
-        return Err(CompileError::at("unclosed char literal", location));
-    }
-    i += 1;
-
-    Ok((value, i))
-}
-
-fn read_string_literal(
-    input: &[u8],
-    start: usize,
-    quote: usize,
-    location: SourceLocation,
-) -> CompileResult<Token> {
-    let end = string_literal_end(input, quote + 1, location)?;
-    let mut str_bytes = Vec::with_capacity(end - (quote + 1) + 1);
-    let mut p = quote + 1;
-    while p < end {
-        if input[p] == b'\\' {
-            let mut escaped_pos = p + 1;
-            let escaped = read_escaped_char(input, &mut escaped_pos, location)?;
-            str_bytes.push(escaped as u8);
-            p = escaped_pos;
+        let value = if input[i] == b'\\' {
+            let mut escaped_pos = i + 1;
+            let escaped = Self::read_escaped_char(input, &mut escaped_pos, location)?;
+            i = escaped_pos;
+            escaped as i64
         } else {
-            str_bytes.push(input[p]);
-            p += 1;
+            let mut utf8_pos = i;
+            let decoded = Self::decode_utf8(input, &mut utf8_pos, location)?;
+            i = utf8_pos;
+            decoded as i64
+        };
+
+        if i >= input.len() || input[i] != b'\'' {
+            return Err(CompileError::at("unclosed char literal", location));
         }
-    }
-    str_bytes.push(0);
-    let ty = Type::Array {
-        base: Box::new(Type::Char),
-        len: str_bytes.len() as i32,
-    };
-    Ok(Token {
-        kind: TokenKind::Str {
-            bytes: str_bytes,
-            ty,
-        },
-        location,
-        at_bol: false,
-        has_space: false,
-        len: end + 1 - start,
-        hideset: HideSet::default(),
-        origin: None,
-        line_delta: 0,
-    })
-}
+        i += 1;
 
-fn encode_utf16(buf: &mut Vec<u8>, c: u32) {
-    if c < 0x10000 {
-        buf.extend_from_slice(&(c as u16).to_le_bytes());
-    } else {
-        let c = c - 0x10000;
-        let high = 0xd800 + ((c >> 10) & 0x3ff);
-        let low = 0xdc00 + (c & 0x3ff);
-        buf.extend_from_slice(&(high as u16).to_le_bytes());
-        buf.extend_from_slice(&(low as u16).to_le_bytes());
+        Ok((value, i))
     }
-}
 
-fn read_utf16_string_literal(
-    input: &[u8],
-    start: usize,
-    quote: usize,
-    location: SourceLocation,
-) -> CompileResult<Token> {
-    let end = string_literal_end(input, quote + 1, location)?;
-    let mut buf = Vec::with_capacity((end - quote + 1) * 2);
-    let mut p = quote + 1;
-    while p < end {
-        if input[p] == b'\\' {
-            let mut escaped_pos = p + 1;
-            let escaped = read_escaped_char(input, &mut escaped_pos, location)?;
-            p = escaped_pos;
-            encode_utf16(&mut buf, escaped);
-            continue;
+    fn string_literal_end(
+        input: &[u8],
+        mut pos: usize,
+        start_location: SourceLocation,
+    ) -> CompileResult<usize> {
+        while pos < input.len() {
+            match input[pos] {
+                b'"' => return Ok(pos),
+                b'\n' | b'\0' => {
+                    return Err(CompileError::at("unclosed string literal", start_location));
+                }
+                b'\\' => {
+                    pos += 1;
+                }
+                _ => {}
+            }
+            pos += 1;
         }
-
-        let mut utf8_pos = p;
-        let decoded = decode_utf8(input, &mut utf8_pos, location)?;
-        p = utf8_pos;
-        encode_utf16(&mut buf, decoded);
+        Err(CompileError::at("unclosed string literal", start_location))
     }
-    buf.extend_from_slice(&0u16.to_le_bytes());
-    let ty = Type::Array {
-        base: Box::new(Type::UShort),
-        len: (buf.len() / 2) as i32,
-    };
-    Ok(Token {
-        kind: TokenKind::Str { bytes: buf, ty },
-        location,
-        at_bol: false,
-        has_space: false,
-        len: end + 1 - start,
-        hideset: HideSet::default(),
-        origin: None,
-        line_delta: 0,
-    })
-}
 
-fn read_utf32_string_literal(
-    input: &[u8],
-    start: usize,
-    quote: usize,
-    location: SourceLocation,
-    base: Type,
-) -> CompileResult<Token> {
-    let end = string_literal_end(input, quote + 1, location)?;
-    let mut buf = Vec::with_capacity((end - quote + 1) * 4);
-    let mut p = quote + 1;
-    while p < end {
-        if input[p] == b'\\' {
-            let mut escaped_pos = p + 1;
-            let escaped = read_escaped_char(input, &mut escaped_pos, location)?;
-            p = escaped_pos;
-            buf.extend_from_slice(&escaped.to_le_bytes());
+    fn read_string_literal(
+        input: &[u8],
+        start: usize,
+        quote: usize,
+        location: SourceLocation,
+    ) -> CompileResult<Token> {
+        let end = Self::string_literal_end(input, quote + 1, location)?;
+        let mut str_bytes = Vec::with_capacity(end - (quote + 1) + 1);
+        let mut p = quote + 1;
+        while p < end {
+            if input[p] == b'\\' {
+                let mut escaped_pos = p + 1;
+                let escaped = Self::read_escaped_char(input, &mut escaped_pos, location)?;
+                str_bytes.push(escaped as u8);
+                p = escaped_pos;
+            } else {
+                str_bytes.push(input[p]);
+                p += 1;
+            }
+        }
+        str_bytes.push(0);
+        let ty = Type::Array {
+            base: Box::new(Type::Char),
+            len: str_bytes.len() as i32,
+        };
+        Ok(Token {
+            kind: TokenKind::Str {
+                bytes: str_bytes,
+                ty,
+            },
+            location,
+            at_bol: false,
+            has_space: false,
+            len: end + 1 - start,
+            hideset: HideSet::default(),
+            origin: None,
+            line_delta: 0,
+        })
+    }
+
+    fn encode_utf16(buf: &mut Vec<u8>, c: u32) {
+        if c < 0x10000 {
+            buf.extend_from_slice(&(c as u16).to_le_bytes());
         } else {
+            let c = c - 0x10000;
+            let high = 0xd800 + ((c >> 10) & 0x3ff);
+            let low = 0xdc00 + (c & 0x3ff);
+            buf.extend_from_slice(&(high as u16).to_le_bytes());
+            buf.extend_from_slice(&(low as u16).to_le_bytes());
+        }
+    }
+
+    fn read_utf16_string_literal(
+        input: &[u8],
+        start: usize,
+        quote: usize,
+        location: SourceLocation,
+    ) -> CompileResult<Token> {
+        let end = Self::string_literal_end(input, quote + 1, location)?;
+        let mut buf = Vec::with_capacity((end - quote + 1) * 2);
+        let mut p = quote + 1;
+        while p < end {
+            if input[p] == b'\\' {
+                let mut escaped_pos = p + 1;
+                let escaped = Self::read_escaped_char(input, &mut escaped_pos, location)?;
+                p = escaped_pos;
+                Self::encode_utf16(&mut buf, escaped);
+                continue;
+            }
+
             let mut utf8_pos = p;
-            let decoded = decode_utf8(input, &mut utf8_pos, location)?;
+            let decoded = Self::decode_utf8(input, &mut utf8_pos, location)?;
             p = utf8_pos;
-            buf.extend_from_slice(&decoded.to_le_bytes());
+            Self::encode_utf16(&mut buf, decoded);
         }
+        buf.extend_from_slice(&0u16.to_le_bytes());
+        let ty = Type::Array {
+            base: Box::new(Type::UShort),
+            len: (buf.len() / 2) as i32,
+        };
+        Ok(Token {
+            kind: TokenKind::Str { bytes: buf, ty },
+            location,
+            at_bol: false,
+            has_space: false,
+            len: end + 1 - start,
+            hideset: HideSet::default(),
+            origin: None,
+            line_delta: 0,
+        })
     }
-    buf.extend_from_slice(&0u32.to_le_bytes());
-    let ty = Type::Array {
-        base: Box::new(base),
-        len: (buf.len() / 4) as i32,
-    };
-    Ok(Token {
-        kind: TokenKind::Str { bytes: buf, ty },
-        location,
-        at_bol: false,
-        has_space: false,
-        len: end + 1 - start,
-        hideset: HideSet::default(),
-        origin: None,
-        line_delta: 0,
-    })
-}
 
-fn string_literal_end(
-    input: &[u8],
-    mut pos: usize,
-    start_location: SourceLocation,
-) -> CompileResult<usize> {
-    while pos < input.len() {
-        match input[pos] {
-            b'"' => return Ok(pos),
-            b'\n' | b'\0' => {
-                return Err(CompileError::at("unclosed string literal", start_location));
+    fn read_utf32_string_literal(
+        input: &[u8],
+        start: usize,
+        quote: usize,
+        location: SourceLocation,
+        base: Type,
+    ) -> CompileResult<Token> {
+        let end = Self::string_literal_end(input, quote + 1, location)?;
+        let mut buf = Vec::with_capacity((end - quote + 1) * 4);
+        let mut p = quote + 1;
+        while p < end {
+            if input[p] == b'\\' {
+                let mut escaped_pos = p + 1;
+                let escaped = Self::read_escaped_char(input, &mut escaped_pos, location)?;
+                p = escaped_pos;
+                buf.extend_from_slice(&escaped.to_le_bytes());
+            } else {
+                let mut utf8_pos = p;
+                let decoded = Self::decode_utf8(input, &mut utf8_pos, location)?;
+                p = utf8_pos;
+                buf.extend_from_slice(&decoded.to_le_bytes());
             }
-            b'\\' => {
-                pos += 1;
+        }
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        let ty = Type::Array {
+            base: Box::new(base),
+            len: (buf.len() / 4) as i32,
+        };
+        Ok(Token {
+            kind: TokenKind::Str { bytes: buf, ty },
+            location,
+            at_bol: false,
+            has_space: false,
+            len: end + 1 - start,
+            hideset: HideSet::default(),
+            origin: None,
+            line_delta: 0,
+        })
+    }
+
+    // Identifier/punct parsing functions
+
+    fn in_range(ranges: &[u32], c: u32) -> bool {
+        let mut i = 0;
+        while i + 1 < ranges.len() {
+            if c >= ranges[i] && c <= ranges[i + 1] {
+                return true;
             }
-            _ => {}
+            i += 2;
         }
-        pos += 1;
+        false
     }
-    Err(CompileError::at("unclosed string literal", start_location))
-}
 
-fn is_hex_digit(b: u8) -> bool {
-    b.is_ascii_hexdigit()
-}
+    fn char_width(c: u32) -> usize {
+        const RANGE1: &[u32] = &[
+            0x0000, 0x001F, 0x007F, 0x00A0, 0x0300, 0x036F, 0x0483, 0x0486, 0x0488, 0x0489, 0x0591,
+            0x05BD, 0x05BF, 0x05BF, 0x05C1, 0x05C2, 0x05C4, 0x05C5, 0x05C7, 0x05C7, 0x0600, 0x0603,
+            0x0610, 0x0615, 0x064B, 0x065E, 0x0670, 0x0670, 0x06D6, 0x06E4, 0x06E7, 0x06E8, 0x06EA,
+            0x06ED, 0x070F, 0x070F, 0x0711, 0x0711, 0x0730, 0x074A, 0x07A6, 0x07B0, 0x07EB, 0x07F3,
+            0x0901, 0x0902, 0x093C, 0x093C, 0x0941, 0x0948, 0x094D, 0x094D, 0x0951, 0x0954, 0x0962,
+            0x0963, 0x0981, 0x0981, 0x09BC, 0x09BC, 0x09C1, 0x09C4, 0x09CD, 0x09CD, 0x09E2, 0x09E3,
+            0x0A01, 0x0A02, 0x0A3C, 0x0A3C, 0x0A41, 0x0A42, 0x0A47, 0x0A48, 0x0A4B, 0x0A4D, 0x0A70,
+            0x0A71, 0x0A81, 0x0A82, 0x0ABC, 0x0ABC, 0x0AC1, 0x0AC5, 0x0AC7, 0x0AC8, 0x0ACD, 0x0ACD,
+            0x0AE2, 0x0AE3, 0x0B01, 0x0B01, 0x0B3C, 0x0B3C, 0x0B3F, 0x0B3F, 0x0B41, 0x0B43, 0x0B4D,
+            0x0B4D, 0x0B56, 0x0B56, 0x0B82, 0x0B82, 0x0BC0, 0x0BC0, 0x0BCD, 0x0BCD, 0x0C3E, 0x0C40,
+            0x0C46, 0x0C48, 0x0C4A, 0x0C4D, 0x0C55, 0x0C56, 0x0CBC, 0x0CBC, 0x0CBF, 0x0CBF, 0x0CC6,
+            0x0CC6, 0x0CCC, 0x0CCD, 0x0CE2, 0x0CE3, 0x0D41, 0x0D43, 0x0D4D, 0x0D4D, 0x0DCA, 0x0DCA,
+            0x0DD2, 0x0DD4, 0x0DD6, 0x0DD6, 0x0E31, 0x0E31, 0x0E34, 0x0E3A, 0x0E47, 0x0E4E, 0x0EB1,
+            0x0EB1, 0x0EB4, 0x0EB9, 0x0EBB, 0x0EBC, 0x0EC8, 0x0ECD, 0x0F18, 0x0F19, 0x0F35, 0x0F35,
+            0x0F37, 0x0F37, 0x0F39, 0x0F39, 0x0F71, 0x0F7E, 0x0F80, 0x0F84, 0x0F86, 0x0F87, 0x0F90,
+            0x0F97, 0x0F99, 0x0FBC, 0x0FC6, 0x0FC6, 0x102D, 0x1030, 0x1032, 0x1032, 0x1036, 0x1037,
+            0x1039, 0x1039, 0x1058, 0x1059, 0x1160, 0x11FF, 0x135F, 0x135F, 0x1712, 0x1714, 0x1732,
+            0x1734, 0x1752, 0x1753, 0x1772, 0x1773, 0x17B4, 0x17B5, 0x17B7, 0x17BD, 0x17C6, 0x17C6,
+            0x17C9, 0x17D3, 0x17DD, 0x17DD, 0x180B, 0x180D, 0x18A9, 0x18A9, 0x1920, 0x1922, 0x1927,
+            0x1928, 0x1932, 0x1932, 0x1939, 0x193B, 0x1A17, 0x1A18, 0x1B00, 0x1B03, 0x1B34, 0x1B34,
+            0x1B36, 0x1B3A, 0x1B3C, 0x1B3C, 0x1B42, 0x1B42, 0x1B6B, 0x1B73, 0x1DC0, 0x1DCA, 0x1DFE,
+            0x1DFF, 0x200B, 0x200F, 0x202A, 0x202E, 0x2060, 0x2063, 0x206A, 0x206F, 0x20D0, 0x20EF,
+            0x302A, 0x302F, 0x3099, 0x309A, 0xA806, 0xA806, 0xA80B, 0xA80B, 0xA825, 0xA826, 0xFB1E,
+            0xFB1E, 0xFE00, 0xFE0F, 0xFE20, 0xFE23, 0xFEFF, 0xFEFF, 0xFFF9, 0xFFFB, 0x10A01,
+            0x10A03, 0x10A05, 0x10A06, 0x10A0C, 0x10A0F, 0x10A38, 0x10A3A, 0x10A3F, 0x10A3F,
+            0x1D167, 0x1D169, 0x1D173, 0x1D182, 0x1D185, 0x1D18B, 0x1D1AA, 0x1D1AD, 0x1D242,
+            0x1D244, 0xE0001, 0xE0001, 0xE0020, 0xE007F, 0xE0100, 0xE01EF,
+        ];
 
-fn from_hex(b: u8) -> u32 {
-    match b {
-        b'0'..=b'9' => (b - b'0') as u32,
-        b'a'..=b'f' => (b - b'a' + 10) as u32,
-        _ => (b - b'A' + 10) as u32,
-    }
-}
-
-fn in_range(ranges: &[u32], c: u32) -> bool {
-    let mut i = 0;
-    while i + 1 < ranges.len() {
-        if c >= ranges[i] && c <= ranges[i + 1] {
-            return true;
+        if Self::in_range(RANGE1, c) {
+            return 0;
         }
-        i += 2;
+
+        const RANGE2: &[u32] = &[
+            0x1100, 0x115F, 0x2329, 0x2329, 0x232A, 0x232A, 0x2E80, 0x303E, 0x3040, 0xA4CF, 0xAC00,
+            0xD7A3, 0xF900, 0xFAFF, 0xFE10, 0xFE19, 0xFE30, 0xFE6F, 0xFF00, 0xFF60, 0xFFE0, 0xFFE6,
+            0x1F000, 0x1F644, 0x20000, 0x2FFFD, 0x30000, 0x3FFFD,
+        ];
+
+        if Self::in_range(RANGE2, c) {
+            return 2;
+        }
+
+        1
     }
-    false
 }
 
-fn char_width(c: u32) -> usize {
-    const RANGE1: &[u32] = &[
-        0x0000, 0x001F, 0x007F, 0x00A0, 0x0300, 0x036F, 0x0483, 0x0486, 0x0488, 0x0489, 0x0591,
-        0x05BD, 0x05BF, 0x05BF, 0x05C1, 0x05C2, 0x05C4, 0x05C5, 0x05C7, 0x05C7, 0x0600, 0x0603,
-        0x0610, 0x0615, 0x064B, 0x065E, 0x0670, 0x0670, 0x06D6, 0x06E4, 0x06E7, 0x06E8, 0x06EA,
-        0x06ED, 0x070F, 0x070F, 0x0711, 0x0711, 0x0730, 0x074A, 0x07A6, 0x07B0, 0x07EB, 0x07F3,
-        0x0901, 0x0902, 0x093C, 0x093C, 0x0941, 0x0948, 0x094D, 0x094D, 0x0951, 0x0954, 0x0962,
-        0x0963, 0x0981, 0x0981, 0x09BC, 0x09BC, 0x09C1, 0x09C4, 0x09CD, 0x09CD, 0x09E2, 0x09E3,
-        0x0A01, 0x0A02, 0x0A3C, 0x0A3C, 0x0A41, 0x0A42, 0x0A47, 0x0A48, 0x0A4B, 0x0A4D, 0x0A70,
-        0x0A71, 0x0A81, 0x0A82, 0x0ABC, 0x0ABC, 0x0AC1, 0x0AC5, 0x0AC7, 0x0AC8, 0x0ACD, 0x0ACD,
-        0x0AE2, 0x0AE3, 0x0B01, 0x0B01, 0x0B3C, 0x0B3C, 0x0B3F, 0x0B3F, 0x0B41, 0x0B43, 0x0B4D,
-        0x0B4D, 0x0B56, 0x0B56, 0x0B82, 0x0B82, 0x0BC0, 0x0BC0, 0x0BCD, 0x0BCD, 0x0C3E, 0x0C40,
-        0x0C46, 0x0C48, 0x0C4A, 0x0C4D, 0x0C55, 0x0C56, 0x0CBC, 0x0CBC, 0x0CBF, 0x0CBF, 0x0CC6,
-        0x0CC6, 0x0CCC, 0x0CCD, 0x0CE2, 0x0CE3, 0x0D41, 0x0D43, 0x0D4D, 0x0D4D, 0x0DCA, 0x0DCA,
-        0x0DD2, 0x0DD4, 0x0DD6, 0x0DD6, 0x0E31, 0x0E31, 0x0E34, 0x0E3A, 0x0E47, 0x0E4E, 0x0EB1,
-        0x0EB1, 0x0EB4, 0x0EB9, 0x0EBB, 0x0EBC, 0x0EC8, 0x0ECD, 0x0F18, 0x0F19, 0x0F35, 0x0F35,
-        0x0F37, 0x0F37, 0x0F39, 0x0F39, 0x0F71, 0x0F7E, 0x0F80, 0x0F84, 0x0F86, 0x0F87, 0x0F90,
-        0x0F97, 0x0F99, 0x0FBC, 0x0FC6, 0x0FC6, 0x102D, 0x1030, 0x1032, 0x1032, 0x1036, 0x1037,
-        0x1039, 0x1039, 0x1058, 0x1059, 0x1160, 0x11FF, 0x135F, 0x135F, 0x1712, 0x1714, 0x1732,
-        0x1734, 0x1752, 0x1753, 0x1772, 0x1773, 0x17B4, 0x17B5, 0x17B7, 0x17BD, 0x17C6, 0x17C6,
-        0x17C9, 0x17D3, 0x17DD, 0x17DD, 0x180B, 0x180D, 0x18A9, 0x18A9, 0x1920, 0x1922, 0x1927,
-        0x1928, 0x1932, 0x1932, 0x1939, 0x193B, 0x1A17, 0x1A18, 0x1B00, 0x1B03, 0x1B34, 0x1B34,
-        0x1B36, 0x1B3A, 0x1B3C, 0x1B3C, 0x1B42, 0x1B42, 0x1B6B, 0x1B73, 0x1DC0, 0x1DCA, 0x1DFE,
-        0x1DFF, 0x200B, 0x200F, 0x202A, 0x202E, 0x2060, 0x2063, 0x206A, 0x206F, 0x20D0, 0x20EF,
-        0x302A, 0x302F, 0x3099, 0x309A, 0xA806, 0xA806, 0xA80B, 0xA80B, 0xA825, 0xA826, 0xFB1E,
-        0xFB1E, 0xFE00, 0xFE0F, 0xFE20, 0xFE23, 0xFEFF, 0xFEFF, 0xFFF9, 0xFFFB, 0x10A01, 0x10A03,
-        0x10A05, 0x10A06, 0x10A0C, 0x10A0F, 0x10A38, 0x10A3A, 0x10A3F, 0x10A3F, 0x1D167, 0x1D169,
-        0x1D173, 0x1D182, 0x1D185, 0x1D18B, 0x1D1AA, 0x1D1AD, 0x1D242, 0x1D244, 0xE0001, 0xE0001,
-        0xE0020, 0xE007F, 0xE0100, 0xE01EF,
-    ];
-
-    if in_range(RANGE1, c) {
-        return 0;
-    }
-
-    const RANGE2: &[u32] = &[
-        0x1100, 0x115F, 0x2329, 0x2329, 0x232A, 0x232A, 0x2E80, 0x303E, 0x3040, 0xA4CF, 0xAC00,
-        0xD7A3, 0xF900, 0xFAFF, 0xFE10, 0xFE19, 0xFE30, 0xFE6F, 0xFF00, 0xFF60, 0xFFE0, 0xFFE6,
-        0x1F000, 0x1F644, 0x20000, 0x2FFFD, 0x30000, 0x3FFFD,
-    ];
-
-    if in_range(RANGE2, c) {
-        return 2;
-    }
-
-    1
+pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
+    Lexer::new(input, file_no).tokenize()
 }
 
 pub fn display_width(input: &str, len: usize) -> usize {
@@ -1527,8 +1546,8 @@ pub fn display_width(input: &str, len: usize) -> usize {
 
     while pos < limit {
         let start = pos;
-        match decode_utf8(bytes, &mut pos, location) {
-            Ok(c) => width += char_width(c),
+        match Lexer::decode_utf8(bytes, &mut pos, location) {
+            Ok(c) => width += Lexer::char_width(c),
             Err(_) => {
                 pos = start + 1;
                 width += 1;
@@ -1648,7 +1667,7 @@ fn is_ident1(c: u32) -> bool {
         0xE0000,
         0xEFFFD,
     ];
-    in_range(RANGES, c)
+    Lexer::in_range(RANGES, c)
 }
 
 fn is_ident2(c: u32) -> bool {
@@ -1666,13 +1685,13 @@ fn is_ident2(c: u32) -> bool {
         0xFE20,
         0xFE2F,
     ];
-    is_ident1(c) || in_range(RANGES, c)
+    is_ident1(c) || Lexer::in_range(RANGES, c)
 }
 
 fn read_ident(input: &[u8], pos: usize, location: SourceLocation) -> CompileResult<usize> {
     let mut p = pos;
     let mut decoded_pos = p;
-    let c = decode_utf8(input, &mut decoded_pos, location)?;
+    let c = Lexer::decode_utf8(input, &mut decoded_pos, location)?;
     if !is_ident1(c) {
         return Ok(0);
     }
@@ -1680,7 +1699,7 @@ fn read_ident(input: &[u8], pos: usize, location: SourceLocation) -> CompileResu
 
     loop {
         let mut next_pos = p;
-        let c = decode_utf8(input, &mut next_pos, location)?;
+        let c = Lexer::decode_utf8(input, &mut next_pos, location)?;
         if !is_ident2(c) {
             return Ok(p - pos);
         }
