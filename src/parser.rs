@@ -41,6 +41,7 @@ struct Parser<'a> {
     loop_depth: usize,
     current_switch: Option<SwitchContext>,
     builtin_alloca_idx: Option<usize>, // Index of the builtin alloca function in globals
+    in_func_params: bool, // True when parsing function parameter declarations (for VLA bounds)
 }
 
 #[derive(Default, Debug, Clone, PartialEq)]
@@ -1680,6 +1681,11 @@ impl<'a> Parser<'a> {
             return Ok(Type::func(return_ty, Vec::new(), true));
         }
 
+        // Set flag to allow VLA bounds to reference undefined identifiers
+        // (e.g., function parameters that haven't been added to scope yet)
+        let was_in_func_params = self.in_func_params;
+        self.in_func_params = true;
+
         // Parse parameter list
         loop {
             // Check for "..."
@@ -1691,9 +1697,9 @@ impl<'a> Parser<'a> {
             let param_basety = self.parse_declspec(None)?;
             let (param_ty, param_token) = self.parse_declarator(param_basety)?;
 
-            // Decay array parameters to pointers
+            // Decay array parameters to pointers (also decay VLAs)
             let param_ty = match param_ty {
-                Type::Array { base, .. } => Type::Ptr(base),
+                Type::Array { base, .. } | Type::Vla { base, .. } => Type::Ptr(base),
                 Type::Func { .. } => Type::Ptr(Box::new(param_ty)),
                 other => other,
             };
@@ -1710,6 +1716,7 @@ impl<'a> Parser<'a> {
             }
         }
 
+        self.in_func_params = was_in_func_params;
         self.expect_punct(Punct::RParen)?;
         Ok(Type::func(return_ty, params, is_variadic))
     }
@@ -2948,6 +2955,16 @@ impl<'a> Parser<'a> {
                         },
                         token.location,
                     )
+                } else if self.in_func_params {
+                    // In function parameter declarations, undefined identifiers in array
+                    // bounds (like VLA sizes referencing other parameters) are allowed.
+                    // The array will decay to a pointer anyway, so use a placeholder.
+                    let mut expr = self.expr_at(
+                        ExprKind::Num { value: 1, fval: 0.0 },
+                        token.location,
+                    );
+                    expr.ty = Some(Type::Int);
+                    expr
                 } else {
                     if matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LParen)) {
                         self.bail_at(token.location, "implicit declaration of a function")?;

@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "sum_array(5, arr5) => 15\nsum_array(10, arr10) => 55\nsum_doubled(5, arr10) => 55\ndst[0] => 1\ndst[4] => 5\nfirst_elem(5, arr5) => 1\ndot_product(3, a, b) => 32\nOK\n"
+status: 0
