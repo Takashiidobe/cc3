@@ -26,6 +26,3 @@ name = "diagnostics"
 harness = false
 
 
-[[test]]
-name = "asm"
-harness = false

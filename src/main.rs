@@ -1,4 +1,3 @@
-mod asm;
 mod ast;
 mod codegen;
 mod error;
@@ -192,16 +191,6 @@ fn main() {
         args.defines.iter().map(|s| parse_define(s)).collect();
     let cmdline_undefs: Vec<String> = args.undefs.clone();
 
-    // Handle -fcommon/-fno-common flags
-    if args.fno_common {
-        codegen::set_opt_fcommon(false);
-    } else if args.fcommon {
-        codegen::set_opt_fcommon(true);
-    }
-    if args.fpic {
-        codegen::set_opt_fpic(true);
-    }
-
     if args.cc1 {
         let std_include_paths = default_include_paths(&argv0);
         let mut include_paths = args.include_dirs.clone();
@@ -236,6 +225,8 @@ fn main() {
             cmdline_defines,
             cmdline_undefs,
             args.include_files.clone(),
+            !args.fno_common,
+            args.fpic,
         ) {
             eprintln!("{}", format_diagnostic(&err, input.as_path()));
             std::process::exit(1);
@@ -484,6 +475,8 @@ fn run_cc1(
     cmdline_defines: Vec<(String, String)>,
     cmdline_undefs: Vec<String>,
     include_files: Vec<PathBuf>,
+    opt_fcommon: bool,
+    opt_fpic: bool,
 ) -> CompileResult<()> {
     // Process -include files first
     let mut tokens = Vec::new();
@@ -538,7 +531,10 @@ fn run_cc1(
         return Ok(());
     }
     let program = parser::parse(&tokens)?;
-    let asm = codegen::Codegen::new().generate(&program);
+    let asm = codegen::Codegen::new()
+        .with_opt_fcommon(opt_fcommon)
+        .with_opt_fpic(opt_fpic)
+        .generate(&program);
 
     if let Some(path) = output {
         fs::write(path, asm).map_err(|err| {

@@ -1,26 +1,6 @@
 use crate::ast::{BinaryOp, Expr, ExprKind, Obj, Program, Stmt, StmtKind, Type, UnaryOp};
 use crate::error::SourceLocation;
 use crate::lexer::get_input_files;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-static OPT_FCOMMON: AtomicBool = AtomicBool::new(true);
-static OPT_FPIC: AtomicBool = AtomicBool::new(false);
-
-pub fn set_opt_fcommon(value: bool) {
-    OPT_FCOMMON.store(value, Ordering::Relaxed);
-}
-
-fn get_opt_fcommon() -> bool {
-    OPT_FCOMMON.load(Ordering::Relaxed)
-}
-
-pub fn set_opt_fpic(value: bool) {
-    OPT_FPIC.store(value, Ordering::Relaxed);
-}
-
-fn get_opt_fpic() -> bool {
-    OPT_FPIC.load(Ordering::Relaxed)
-}
 const ARG_REGS_8: [&str; 6] = ["%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b"];
 const ARG_REGS_16: [&str; 6] = ["%di", "%si", "%dx", "%cx", "%r8w", "%r9w"];
 const ARG_REGS_32: [&str; 6] = ["%edi", "%esi", "%edx", "%ecx", "%r8d", "%r9d"];
@@ -34,40 +14,30 @@ enum ArgClass {
     Fp,
 }
 
+#[derive(Default)]
 struct ArgInfo {
     pass_by_stack: bool,
     reg_classes: Vec<ArgClass>,
     stack_slots: usize,
 }
 
-fn align_to(n: i64, align: i64) -> i64 {
-    (n + align - 1) / align * align
-}
-
-fn has_flonum(ty: &Type, lo: i64, hi: i64, offset: i64) -> bool {
-    match ty {
-        Type::Struct { members, .. } | Type::Union { members, .. } => members
-            .iter()
-            .all(|member| has_flonum(&member.ty, lo, hi, offset + member.offset as i64)),
-        Type::Array { base, len } => {
-            (0..*len).all(|idx| has_flonum(base, lo, hi, offset + base.size() * idx as i64))
+impl ArgInfo {
+    fn stack(slots: usize) -> Self {
+        Self {
+            pass_by_stack: true,
+            stack_slots: slots,
+            ..Default::default()
         }
-        _ => {
-            let is_flonum = matches!(ty, Type::Float | Type::Double);
-            offset < lo || hi <= offset || is_flonum
+    }
+
+    fn register(reg_classes: Vec<ArgClass>) -> Self {
+        Self {
+            reg_classes,
+            ..Default::default()
         }
     }
 }
 
-fn has_flonum1(ty: &Type) -> bool {
-    has_flonum(ty, 0, 8, 0)
-}
-
-fn has_flonum2(ty: &Type) -> bool {
-    has_flonum(ty, 8, 16, 0)
-}
-
-#[derive(Default)]
 pub struct Codegen {
     buffer: String,
     label_counter: usize,
@@ -75,11 +45,38 @@ pub struct Codegen {
     break_stack: Vec<String>,
     continue_stack: Vec<String>,
     depth: usize,
+    opt_fcommon: bool,
+    opt_fpic: bool,
+}
+
+impl Default for Codegen {
+    fn default() -> Self {
+        Self {
+            buffer: String::new(),
+            label_counter: 0,
+            current_fn: None,
+            break_stack: Vec::new(),
+            continue_stack: Vec::new(),
+            depth: 0,
+            opt_fcommon: true,
+            opt_fpic: false,
+        }
+    }
 }
 
 impl Codegen {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn with_opt_fcommon(mut self, value: bool) -> Self {
+        self.opt_fcommon = value;
+        self
+    }
+
+    pub fn with_opt_fpic(mut self, value: bool) -> Self {
+        self.opt_fpic = value;
+        self
     }
 
     pub fn generate(mut self, program: &Program) -> String {
@@ -134,17 +131,9 @@ impl Codegen {
                     self.emit_line(&format!("  .globl {}", symbol));
                 }
 
-                // AMD64 System V ABI has a special alignment rule for an array of
-                // length at least 16 bytes. We need to align such array to at least
-                // 16-byte boundaries. See p.14 of
-                // https://github.com/hjl-tools/x86-psABI/wiki/x86-64-psABI-draft.pdf.
-                let align = if matches!(obj.ty, Type::Array { .. }) && obj.ty.size() >= 16 {
-                    obj.align.max(16)
-                } else {
-                    obj.align
-                };
+                let align = Self::data_align(&obj.ty, obj.align);
 
-                if get_opt_fcommon() && obj.is_tentative {
+                if self.opt_fcommon && obj.is_tentative {
                     self.emit_line(&format!("  .comm {}, {}, {}", symbol, obj.ty.size(), align));
                     continue;
                 }
@@ -167,11 +156,7 @@ impl Codegen {
                     ));
                 }
 
-                let align = if matches!(obj.ty, Type::Array { .. }) && obj.ty.size() >= 16 {
-                    obj.align.max(16)
-                } else {
-                    obj.align
-                };
+                let align = Self::data_align(&obj.ty, obj.align);
                 self.emit_line(&format!("  .type {}, @object", symbol));
                 self.emit_line(&format!("  .size {}, {}", symbol, obj.ty.size()));
                 self.emit_line(&format!("  .align {}", align));
@@ -219,11 +204,7 @@ impl Codegen {
                     self.section_name(".bss", &symbol)
                 ));
             }
-            let align = if matches!(obj.ty, Type::Array { .. }) && obj.ty.size() >= 16 {
-                obj.align.max(16)
-            } else {
-                obj.align
-            };
+            let align = Self::data_align(&obj.ty, obj.align);
             self.emit_line(&format!("  .align {}", align));
             self.emit_line(&format!("{}:", symbol));
             self.emit_line(&format!("  .zero {}", obj.ty.size()));
@@ -348,7 +329,7 @@ impl Codegen {
                 Type::Struct { .. } | Type::Union { .. } => {
                     debug_assert!(param.ty.size() <= 16);
                     let first = std::cmp::min(8, param.ty.size());
-                    if has_flonum(&param.ty, 0, 8, 0) {
+                    if Self::has_flonum(&param.ty, 0, 8, 0) {
                         self.store_fp(fp, param.offset, first);
                         fp += 1;
                     } else {
@@ -358,7 +339,7 @@ impl Codegen {
 
                     if param.ty.size() > 8 {
                         let second = param.ty.size() - 8;
-                        if has_flonum(&param.ty, 8, 16, 0) {
+                        if Self::has_flonum(&param.ty, 8, 16, 0) {
                             self.store_fp(fp, param.offset + 8, second);
                             fp += 1;
                         } else {
@@ -412,6 +393,83 @@ impl Codegen {
         self.emit_line(&format!("  .loc {} {}", file_no, location.line));
     }
 
+    /// Calculate alignment for data, respecting AMD64 ABI rule for arrays >= 16 bytes
+    fn data_align(ty: &Type, base_align: i32) -> i32 {
+        if matches!(ty, Type::Array { .. }) && ty.size() >= 16 {
+            base_align.max(16)
+        } else {
+            base_align
+        }
+    }
+
+    /// Get instruction suffix for float/double operations (ss for float, sd for double)
+    fn float_suffix(ty: &Type) -> &'static str {
+        if matches!(ty, Type::Float) {
+            "ss"
+        } else {
+            "sd"
+        }
+    }
+
+    /// Get register name for the given size (al/ax/eax/rax variants)
+    fn reg_ax(sz: i64) -> &'static str {
+        match sz {
+            1 => "%al",
+            2 => "%ax",
+            4 => "%eax",
+            _ => "%rax",
+        }
+    }
+
+    /// Get register name for the given size (dl/dx/edx/rdx variants)
+    fn reg_dx(sz: i64) -> &'static str {
+        match sz {
+            1 => "%dl",
+            2 => "%dx",
+            4 => "%edx",
+            _ => "%rdx",
+        }
+    }
+
+    /// Get 8-bit and 64-bit register pair for GP register index
+    fn gp_reg_pair(gp: usize) -> (&'static str, &'static str) {
+        if gp == 0 {
+            ("%al", "%rax")
+        } else {
+            ("%dl", "%rdx")
+        }
+    }
+
+    /// Align `n` up to the nearest multiple of `align`
+    fn align_to(n: i64, align: i64) -> i64 {
+        (n + align - 1) / align * align
+    }
+
+    /// Check if a type has floating point members in the given byte range
+    fn has_flonum(ty: &Type, lo: i64, hi: i64, offset: i64) -> bool {
+        match ty {
+            Type::Struct { members, .. } | Type::Union { members, .. } => members
+                .iter()
+                .all(|member| Self::has_flonum(&member.ty, lo, hi, offset + member.offset as i64)),
+            Type::Array { base, len } => (0..*len)
+                .all(|idx| Self::has_flonum(base, lo, hi, offset + base.size() * idx as i64)),
+            _ => {
+                let is_flonum = matches!(ty, Type::Float | Type::Double);
+                offset < lo || hi <= offset || is_flonum
+            }
+        }
+    }
+
+    /// Check if a type has flonum in first 8 bytes
+    fn has_flonum1(ty: &Type) -> bool {
+        Self::has_flonum(ty, 0, 8, 0)
+    }
+
+    /// Check if a type has flonum in second 8 bytes (bytes 8-16)
+    fn has_flonum2(ty: &Type) -> bool {
+        Self::has_flonum(ty, 8, 16, 0)
+    }
+
     fn push(&mut self) {
         self.emit_line("  push %rax");
         self.depth += 1;
@@ -451,7 +509,7 @@ impl Codegen {
 
     fn push_struct(&mut self, ty: &Type) {
         let size = ty.size();
-        let aligned = align_to(size, 8);
+        let aligned = Self::align_to(size, 8);
         self.emit_line(&format!("  sub ${}, %rsp", aligned));
         self.depth += (aligned / 8) as usize;
 
@@ -471,79 +529,46 @@ impl Codegen {
             match ty {
                 Type::Struct { .. } | Type::Union { .. } => {
                     if ty.size() > 16 {
-                        let slots = (align_to(ty.size(), 8) / 8) as usize;
-                        infos.push(ArgInfo {
-                            pass_by_stack: true,
-                            reg_classes: Vec::new(),
-                            stack_slots: slots,
-                        });
+                        let slots = (Self::align_to(ty.size(), 8) / 8) as usize;
+                        infos.push(ArgInfo::stack(slots));
                         continue;
                     }
 
-                    let fp1 = has_flonum1(ty);
-                    let fp2 = has_flonum2(ty);
+                    let fp1 = Self::has_flonum1(ty);
+                    let fp2 = Self::has_flonum2(ty);
                     let fp_needed = fp1 as usize + fp2 as usize;
                     let gp_needed = (!fp1) as usize + (!fp2) as usize;
 
                     if fp + fp_needed < FP_MAX && gp + gp_needed < GP_MAX {
                         fp += fp_needed;
                         gp += gp_needed;
-                        let mut reg_classes = Vec::new();
-                        reg_classes.push(if fp1 { ArgClass::Fp } else { ArgClass::Gp });
+                        let mut reg_classes = vec![if fp1 { ArgClass::Fp } else { ArgClass::Gp }];
                         if ty.size() > 8 {
                             reg_classes.push(if fp2 { ArgClass::Fp } else { ArgClass::Gp });
                         }
-                        infos.push(ArgInfo {
-                            pass_by_stack: false,
-                            reg_classes,
-                            stack_slots: 0,
-                        });
+                        infos.push(ArgInfo::register(reg_classes));
                     } else {
-                        let slots = (align_to(ty.size(), 8) / 8) as usize;
-                        infos.push(ArgInfo {
-                            pass_by_stack: true,
-                            reg_classes: Vec::new(),
-                            stack_slots: slots,
-                        });
+                        let slots = (Self::align_to(ty.size(), 8) / 8) as usize;
+                        infos.push(ArgInfo::stack(slots));
                     }
                 }
                 Type::Float | Type::Double => {
                     if fp >= FP_MAX {
-                        infos.push(ArgInfo {
-                            pass_by_stack: true,
-                            reg_classes: Vec::new(),
-                            stack_slots: 1,
-                        });
+                        infos.push(ArgInfo::stack(1));
                     } else {
                         fp += 1;
-                        infos.push(ArgInfo {
-                            pass_by_stack: false,
-                            reg_classes: vec![ArgClass::Fp],
-                            stack_slots: 0,
-                        });
+                        infos.push(ArgInfo::register(vec![ArgClass::Fp]));
                     }
                 }
                 Type::LDouble => {
-                    infos.push(ArgInfo {
-                        pass_by_stack: true,
-                        reg_classes: Vec::new(),
-                        stack_slots: 2,
-                    });
+                    infos.push(ArgInfo::stack(2));
                 }
                 _ => {
                     if gp >= GP_MAX {
-                        infos.push(ArgInfo {
-                            pass_by_stack: true,
-                            reg_classes: Vec::new(),
-                            stack_slots: 1,
-                        });
+                        infos.push(ArgInfo::stack(1));
                     } else {
                         gp += 1;
-                        infos.push(ArgInfo {
-                            pass_by_stack: false,
-                            reg_classes: vec![ArgClass::Gp],
-                            stack_slots: 0,
-                        });
+                        infos.push(ArgInfo::register(vec![ArgClass::Gp]));
                     }
                 }
             }
@@ -610,7 +635,7 @@ impl Codegen {
         let mut gp = 0;
         let mut fp = 0;
 
-        if has_flonum1(ty) {
+        if Self::has_flonum1(ty) {
             if ty.size() == 4 {
                 self.emit_line(&format!("  movss %xmm0, {}(%rbp)", var.offset));
             } else {
@@ -626,7 +651,7 @@ impl Codegen {
         }
 
         if ty.size() > 8 {
-            if has_flonum2(ty) {
+            if Self::has_flonum2(ty) {
                 let reg = fp;
                 if ty.size() == 12 {
                     self.emit_line(&format!("  movss %xmm{}, {}(%rbp)", reg, var.offset + 8));
@@ -634,11 +659,7 @@ impl Codegen {
                     self.emit_line(&format!("  movsd %xmm{}, {}(%rbp)", reg, var.offset + 8));
                 }
             } else {
-                let (reg8, reg64) = if gp == 0 {
-                    ("%al", "%rax")
-                } else {
-                    ("%dl", "%rdx")
-                };
+                let (reg8, reg64) = Self::gp_reg_pair(gp);
                 for i in 8..std::cmp::min(16, ty.size()) {
                     self.emit_line(&format!("  mov {}, {}(%rbp)", reg8, var.offset + i as i32));
                     self.emit_line(&format!("  shr $8, {}", reg64));
@@ -654,7 +675,7 @@ impl Codegen {
 
         self.emit_line("  mov %rax, %rdi");
 
-        if has_flonum1(ty) {
+        if Self::has_flonum1(ty) {
             if size == 4 {
                 self.emit_line("  movss (%rdi), %xmm0");
             } else {
@@ -672,18 +693,14 @@ impl Codegen {
         }
 
         if size > 8 {
-            if has_flonum2(ty) {
+            if Self::has_flonum2(ty) {
                 if size == 12 {
                     self.emit_line(&format!("  movss 8(%rdi), %xmm{}", fp));
                 } else {
                     self.emit_line(&format!("  movsd 8(%rdi), %xmm{}", fp));
                 }
             } else {
-                let (reg8, reg64) = if gp == 0 {
-                    ("%al", "%rax")
-                } else {
-                    ("%dl", "%rdx")
-                };
+                let (reg8, reg64) = Self::gp_reg_pair(gp);
                 self.emit_line(&format!("  mov $0, {}", reg64));
                 let end = std::cmp::min(16, size) as i32;
                 for i in (8..end).rev() {
@@ -1264,11 +1281,7 @@ impl Codegen {
                         self.gen_expr(lhs, function, globals);
                         self.popf(1);
 
-                        let sz = if matches!(lhs_ty, Type::Float) {
-                            "ss"
-                        } else {
-                            "sd"
-                        };
+                        let sz = Self::float_suffix(lhs_ty);
 
                         match op {
                             BinaryOp::Add => {
@@ -1491,20 +1504,8 @@ impl Codegen {
                     8
                 };
 
-                // Use the appropriate register size for rdx and rax
-                let reg_dx = match sz {
-                    1 => "%dl",
-                    2 => "%dx",
-                    4 => "%edx",
-                    _ => "%rdx",
-                };
-
-                let reg_ax = match sz {
-                    1 => "%al",
-                    2 => "%ax",
-                    4 => "%eax",
-                    _ => "%rax",
-                };
+                let reg_dx = Self::reg_dx(sz);
+                let reg_ax = Self::reg_ax(sz);
 
                 // Atomic compare-and-swap
                 self.emit_line(&format!("  lock cmpxchg {}, (%rdi)", reg_dx));
@@ -1544,13 +1545,7 @@ impl Codegen {
                     8
                 };
 
-                // Use the appropriate register size for rax
-                let reg_ax = match sz {
-                    1 => "%al",
-                    2 => "%ax",
-                    4 => "%eax",
-                    _ => "%rax",
-                };
+                let reg_ax = Self::reg_ax(sz);
 
                 // Atomic exchange using xchg
                 // xchg automatically has lock semantics (no lock prefix needed)
@@ -1819,7 +1814,7 @@ impl Codegen {
         let obj = &globals[idx];
         let symbol = self.asm_symbol(&obj.name);
 
-        if get_opt_fpic() {
+        if self.opt_fpic {
             // Thread-local variable
             if obj.is_tls {
                 self.emit_line(&format!("  data16 lea {}@tlsgd(%rip), %rdi", symbol));

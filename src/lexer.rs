@@ -808,423 +808,403 @@ impl Token {
     }
 }
 
-pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
-    let bytes = input.as_bytes();
-    let mut tokens = Vec::new();
-    let mut i = 0;
-    let mut line = 1;
-    let mut column = 1;
-    let mut at_bol = true;
-    let mut has_space = false;
+struct Lexer<'a> {
+    input: &'a [u8],
+    input_str: &'a str,
+    file_no: usize,
+    pos: usize,
+    line: usize,
+    column: usize,
+    at_bol: bool,
+    has_space: bool,
+}
 
-    while i < bytes.len() {
-        let b = bytes[i];
-        if b == b'/' && i + 1 < bytes.len() {
-            if bytes[i + 1] == b'/' {
-                i += 2;
-                column += 2;
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                    column += 1;
-                }
-                has_space = true;
-                continue;
-            }
-            if bytes[i + 1] == b'*' {
-                let start_location = SourceLocation {
-                    line,
-                    column,
-                    byte: i,
-                    file_no,
-                };
-                i += 2;
-                column += 2;
-                let mut closed = false;
-                while i + 1 < bytes.len() {
-                    if bytes[i] == b'*' && bytes[i + 1] == b'/' {
-                        i += 2;
-                        column += 2;
-                        closed = true;
-                        break;
-                    }
-                    if bytes[i] == b'\n' {
-                        line += 1;
-                        column = 1;
-                        i += 1;
-                        at_bol = true;
-                    } else {
-                        i += 1;
-                        column += 1;
-                    }
-                }
-                if !closed {
-                    return Err(CompileError::at("unclosed block comment", start_location));
-                }
-                has_space = true;
-                continue;
-            }
+impl Default for Lexer<'_> {
+    fn default() -> Self {
+        Self {
+            input: &[],
+            input_str: "",
+            file_no: 0,
+            pos: 0,
+            line: 1,
+            column: 1,
+            at_bol: true,
+            has_space: false,
         }
-        if b == b'\n' {
-            line += 1;
-            column = 1;
-            i += 1;
-            at_bol = true;
-            has_space = false;
-            continue;
+    }
+}
+
+impl<'a> Lexer<'a> {
+    fn new(input: &'a str, file_no: usize) -> Self {
+        Self {
+            input: input.as_bytes(),
+            input_str: input,
+            file_no,
+            ..Default::default()
         }
-        if b.is_ascii_whitespace() {
-            column += 1;
-            i += 1;
-            has_space = true;
-            continue;
-        }
-
-        // Numeric literal
-        if b.is_ascii_digit() || (b == b'.' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit())
-        {
-            let start = i;
-            i += 1;
-
-            // Read a pp-number following C preprocessing rules
-            loop {
-                if i + 1 < bytes.len()
-                    && matches!(bytes[i], b'e' | b'E' | b'p' | b'P')
-                    && matches!(bytes[i + 1], b'+' | b'-')
-                {
-                    i += 2;
-                } else if i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'.')
-                {
-                    i += 1;
-                } else {
-                    break;
-                }
-            }
-
-            tokens.push(Token {
-                kind: TokenKind::PPNum,
-                location: SourceLocation {
-                    line,
-                    column,
-                    byte: start,
-                    file_no,
-                },
-                at_bol,
-                has_space,
-                len: i - start,
-                hideset: HideSet::default(),
-                origin: None,
-                line_delta: 0,
-            });
-            at_bol = false;
-            has_space = false;
-            column += i - start;
-            continue;
-        }
-
-        if b == b'L' && i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
-            let start = i;
-            let location = SourceLocation {
-                line,
-                column,
-                byte: start,
-                file_no,
-            };
-            let (value, end) = read_char_literal(bytes, start, start + 1, location)?;
-            tokens.push(Token {
-                kind: TokenKind::Num {
-                    value,
-                    fval: 0.0,
-                    ty: Type::Int,
-                },
-                location,
-                at_bol,
-                has_space,
-                len: end - start,
-                hideset: HideSet::default(),
-                origin: None,
-                line_delta: 0,
-            });
-            at_bol = false;
-            has_space = false;
-            i = end;
-            column += i - start;
-            continue;
-        }
-
-        if b == b'u' && i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
-            let start = i;
-            let location = SourceLocation {
-                line,
-                column,
-                byte: start,
-                file_no,
-            };
-            let (value, end) = read_char_literal(bytes, start, start + 1, location)?;
-            let value = value & 0xffff;
-            tokens.push(Token {
-                kind: TokenKind::Num {
-                    value,
-                    fval: 0.0,
-                    ty: Type::UShort,
-                },
-                location,
-                at_bol,
-                has_space,
-                len: end - start,
-                hideset: HideSet::default(),
-                origin: None,
-                line_delta: 0,
-            });
-            at_bol = false;
-            has_space = false;
-            i = end;
-            column += i - start;
-            continue;
-        }
-
-        if b == b'U' && i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
-            let start = i;
-            let location = SourceLocation {
-                line,
-                column,
-                byte: start,
-                file_no,
-            };
-            let (value, end) = read_char_literal(bytes, start, start + 1, location)?;
-            tokens.push(Token {
-                kind: TokenKind::Num {
-                    value,
-                    fval: 0.0,
-                    ty: Type::UInt,
-                },
-                location,
-                at_bol,
-                has_space,
-                len: end - start,
-                hideset: HideSet::default(),
-                origin: None,
-                line_delta: 0,
-            });
-            at_bol = false;
-            has_space = false;
-            i = end;
-            column += i - start;
-            continue;
-        }
-
-        if b == b'"' {
-            let start = i;
-            let location = SourceLocation {
-                line,
-                column,
-                byte: start,
-                file_no,
-            };
-            let mut token = read_string_literal(bytes, start, start, location)?;
-            token.at_bol = at_bol;
-            token.has_space = has_space;
-            let len = token.len;
-            tokens.push(token);
-            at_bol = false;
-            has_space = false;
-            i += len;
-            column += len;
-            continue;
-        }
-
-        if b == b'u' && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
-            let start = i;
-            let location = SourceLocation {
-                line,
-                column,
-                byte: start,
-                file_no,
-            };
-            let mut token = read_utf16_string_literal(bytes, start, start + 1, location)?;
-            token.at_bol = at_bol;
-            token.has_space = has_space;
-            let len = token.len;
-            tokens.push(token);
-            at_bol = false;
-            has_space = false;
-            i += len;
-            column += len;
-            continue;
-        }
-
-        if b == b'U' && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
-            let start = i;
-            let location = SourceLocation {
-                line,
-                column,
-                byte: start,
-                file_no,
-            };
-            let mut token =
-                read_utf32_string_literal(bytes, start, start + 1, location, Type::UInt)?;
-            token.at_bol = at_bol;
-            token.has_space = has_space;
-            let len = token.len;
-            tokens.push(token);
-            at_bol = false;
-            has_space = false;
-            i += len;
-            column += len;
-            continue;
-        }
-
-        if b == b'u' && i + 2 < bytes.len() && bytes[i + 1] == b'8' && bytes[i + 2] == b'"' {
-            let start = i;
-            let location = SourceLocation {
-                line,
-                column,
-                byte: start,
-                file_no,
-            };
-            let mut token = read_string_literal(bytes, start, start + 2, location)?;
-            token.at_bol = at_bol;
-            token.has_space = has_space;
-            let len = token.len;
-            tokens.push(token);
-            at_bol = false;
-            has_space = false;
-            i += len;
-            column += len;
-            continue;
-        }
-
-        if b == b'L' && i + 1 < bytes.len() && bytes[i + 1] == b'"' {
-            let start = i;
-            let location = SourceLocation {
-                line,
-                column,
-                byte: start,
-                file_no,
-            };
-            let mut token =
-                read_utf32_string_literal(bytes, start, start + 1, location, Type::Int)?;
-            token.at_bol = at_bol;
-            token.has_space = has_space;
-            let len = token.len;
-            tokens.push(token);
-            at_bol = false;
-            has_space = false;
-            i += len;
-            column += len;
-            continue;
-        }
-
-        {
-            let location = SourceLocation {
-                line,
-                column,
-                byte: i,
-                file_no,
-            };
-            let ident_len = read_ident(bytes, i, location)?;
-            if ident_len > 0 {
-                let word = &input[i..i + ident_len];
-                let kind = TokenKind::Ident(word.to_string());
-                tokens.push(Token {
-                    kind,
-                    location,
-                    at_bol,
-                    has_space,
-                    len: ident_len,
-                    hideset: HideSet::default(),
-                    origin: None,
-                    line_delta: 0,
-                });
-                at_bol = false;
-                has_space = false;
-                i += ident_len;
-                column += ident_len;
-                continue;
-            }
-        }
-
-        if b == b'\'' {
-            let start = i;
-            let location = SourceLocation {
-                line,
-                column,
-                byte: start,
-                file_no,
-            };
-            let (value, end) = read_char_literal(bytes, start, start, location)?;
-            let value = value as i8 as i64;
-            tokens.push(Token {
-                kind: TokenKind::Num {
-                    value,
-                    fval: 0.0,
-                    ty: Type::Int,
-                },
-                location,
-                at_bol,
-                has_space,
-                len: end - start,
-                hideset: HideSet::default(),
-                origin: None,
-                line_delta: 0,
-            });
-            at_bol = false;
-            has_space = false;
-            i = end;
-            column += i - start;
-            continue;
-        }
-
-        if let Some((punct, len)) = read_punct(&input[i..]) {
-            tokens.push(Token {
-                kind: TokenKind::Punct(punct),
-                location: SourceLocation {
-                    line,
-                    column,
-                    byte: i,
-                    file_no,
-                },
-                at_bol,
-                has_space,
-                len,
-                hideset: HideSet::default(),
-                origin: None,
-                line_delta: 0,
-            });
-            at_bol = false;
-            has_space = false;
-            i += len;
-            column += len;
-            continue;
-        }
-
-        return Err(CompileError::at(
-            format!("invalid token: {}", b as char),
-            SourceLocation {
-                line,
-                column,
-                byte: i,
-                file_no,
-            },
-        ));
     }
 
-    tokens.push(Token {
-        kind: TokenKind::Eof,
-        location: SourceLocation {
-            line,
-            column,
-            byte: input.len(),
-            file_no,
-        },
-        at_bol,
-        has_space: false,
-        len: 0,
-        hideset: HideSet::default(),
-        origin: None,
-        line_delta: 0,
-    });
+    fn location(&self) -> SourceLocation {
+        SourceLocation {
+            line: self.line,
+            column: self.column,
+            byte: self.pos,
+            file_no: self.file_no,
+        }
+    }
 
-    Ok(tokens)
+    fn make_token(&self, kind: TokenKind, start: usize, start_column: usize) -> Token {
+        Token {
+            kind,
+            location: SourceLocation {
+                line: self.line,
+                column: start_column,
+                byte: start,
+                file_no: self.file_no,
+            },
+            at_bol: self.at_bol,
+            has_space: self.has_space,
+            len: self.pos - start,
+            ..Default::default()
+        }
+    }
+
+    fn eof_token(&self) -> Token {
+        Token {
+            kind: TokenKind::Eof,
+            location: self.location(),
+            at_bol: self.at_bol,
+            ..Default::default()
+        }
+    }
+
+    fn tokenize(mut self) -> CompileResult<Vec<Token>> {
+        let mut tokens = Vec::new();
+
+        while self.pos < self.input.len() {
+            let b = self.input[self.pos];
+            if b == b'/' && self.pos + 1 < self.input.len() {
+                if self.input[self.pos + 1] == b'/' {
+                    self.pos += 2;
+                    self.column += 2;
+                    while self.pos < self.input.len() && self.input[self.pos] != b'\n' {
+                        self.pos += 1;
+                        self.column += 1;
+                    }
+                    self.has_space = true;
+                    continue;
+                }
+                if self.input[self.pos + 1] == b'*' {
+                    let start_location = self.location();
+                    self.pos += 2;
+                    self.column += 2;
+                    let mut closed = false;
+                    while self.pos + 1 < self.input.len() {
+                        if self.input[self.pos] == b'*' && self.input[self.pos + 1] == b'/' {
+                            self.pos += 2;
+                            self.column += 2;
+                            closed = true;
+                            break;
+                        }
+                        if self.input[self.pos] == b'\n' {
+                            self.line += 1;
+                            self.column = 1;
+                            self.pos += 1;
+                            self.at_bol = true;
+                        } else {
+                            self.pos += 1;
+                            self.column += 1;
+                        }
+                    }
+                    if !closed {
+                        return Err(CompileError::at("unclosed block comment", start_location));
+                    }
+                    self.has_space = true;
+                    continue;
+                }
+            }
+            if b == b'\n' {
+                self.line += 1;
+                self.column = 1;
+                self.pos += 1;
+                self.at_bol = true;
+                self.has_space = false;
+                continue;
+            }
+            if b.is_ascii_whitespace() {
+                self.column += 1;
+                self.pos += 1;
+                self.has_space = true;
+                continue;
+            }
+
+            // Numeric literal
+            if b.is_ascii_digit()
+                || (b == b'.'
+                    && self.pos + 1 < self.input.len()
+                    && self.input[self.pos + 1].is_ascii_digit())
+            {
+                let start = self.pos;
+                let start_column = self.column;
+                self.pos += 1;
+
+                // Read a pp-number following C preprocessing rules
+                loop {
+                    if self.pos + 1 < self.input.len()
+                        && matches!(self.input[self.pos], b'e' | b'E' | b'p' | b'P')
+                        && matches!(self.input[self.pos + 1], b'+' | b'-')
+                    {
+                        self.pos += 2;
+                    } else if self.pos < self.input.len()
+                        && (self.input[self.pos].is_ascii_alphanumeric()
+                            || self.input[self.pos] == b'.')
+                    {
+                        self.pos += 1;
+                    } else {
+                        break;
+                    }
+                }
+
+                self.column += self.pos - start;
+                tokens.push(self.make_token(TokenKind::PPNum, start, start_column));
+                self.at_bol = false;
+                self.has_space = false;
+                continue;
+            }
+
+            if b == b'L' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'\'' {
+                let start = self.pos;
+                let location = self.location();
+                let (value, end) = read_char_literal(self.input, start, start + 1, location)?;
+                self.pos = end;
+                self.column += self.pos - start;
+                tokens.push(Token {
+                    kind: TokenKind::Num {
+                        value,
+                        fval: 0.0,
+                        ty: Type::Int,
+                    },
+                    location,
+                    at_bol: self.at_bol,
+                    has_space: self.has_space,
+                    len: end - start,
+                    ..Default::default()
+                });
+                self.at_bol = false;
+                self.has_space = false;
+                continue;
+            }
+
+            if b == b'u' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'\'' {
+                let start = self.pos;
+                let location = self.location();
+                let (value, end) = read_char_literal(self.input, start, start + 1, location)?;
+                let value = value & 0xffff;
+                self.pos = end;
+                self.column += self.pos - start;
+                tokens.push(Token {
+                    kind: TokenKind::Num {
+                        value,
+                        fval: 0.0,
+                        ty: Type::UShort,
+                    },
+                    location,
+                    at_bol: self.at_bol,
+                    has_space: self.has_space,
+                    len: end - start,
+                    ..Default::default()
+                });
+                self.at_bol = false;
+                self.has_space = false;
+                continue;
+            }
+
+            if b == b'U' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'\'' {
+                let start = self.pos;
+                let location = self.location();
+                let (value, end) = read_char_literal(self.input, start, start + 1, location)?;
+                self.pos = end;
+                self.column += self.pos - start;
+                tokens.push(Token {
+                    kind: TokenKind::Num {
+                        value,
+                        fval: 0.0,
+                        ty: Type::UInt,
+                    },
+                    location,
+                    at_bol: self.at_bol,
+                    has_space: self.has_space,
+                    len: end - start,
+                    ..Default::default()
+                });
+                self.at_bol = false;
+                self.has_space = false;
+                continue;
+            }
+
+            if b == b'"' {
+                let start = self.pos;
+                let location = self.location();
+                let mut token = read_string_literal(self.input, start, start, location)?;
+                token.at_bol = self.at_bol;
+                token.has_space = self.has_space;
+                let len = token.len;
+                tokens.push(token);
+                self.at_bol = false;
+                self.has_space = false;
+                self.pos += len;
+                self.column += len;
+                continue;
+            }
+
+            if b == b'u' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'"' {
+                let start = self.pos;
+                let location = self.location();
+                let mut token = read_utf16_string_literal(self.input, start, start + 1, location)?;
+                token.at_bol = self.at_bol;
+                token.has_space = self.has_space;
+                let len = token.len;
+                tokens.push(token);
+                self.at_bol = false;
+                self.has_space = false;
+                self.pos += len;
+                self.column += len;
+                continue;
+            }
+
+            if b == b'U' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'"' {
+                let start = self.pos;
+                let location = self.location();
+                let mut token =
+                    read_utf32_string_literal(self.input, start, start + 1, location, Type::UInt)?;
+                token.at_bol = self.at_bol;
+                token.has_space = self.has_space;
+                let len = token.len;
+                tokens.push(token);
+                self.at_bol = false;
+                self.has_space = false;
+                self.pos += len;
+                self.column += len;
+                continue;
+            }
+
+            if b == b'u'
+                && self.pos + 2 < self.input.len()
+                && self.input[self.pos + 1] == b'8'
+                && self.input[self.pos + 2] == b'"'
+            {
+                let start = self.pos;
+                let location = self.location();
+                let mut token = read_string_literal(self.input, start, start + 2, location)?;
+                token.at_bol = self.at_bol;
+                token.has_space = self.has_space;
+                let len = token.len;
+                tokens.push(token);
+                self.at_bol = false;
+                self.has_space = false;
+                self.pos += len;
+                self.column += len;
+                continue;
+            }
+
+            if b == b'L' && self.pos + 1 < self.input.len() && self.input[self.pos + 1] == b'"' {
+                let start = self.pos;
+                let location = self.location();
+                let mut token =
+                    read_utf32_string_literal(self.input, start, start + 1, location, Type::Int)?;
+                token.at_bol = self.at_bol;
+                token.has_space = self.has_space;
+                let len = token.len;
+                tokens.push(token);
+                self.at_bol = false;
+                self.has_space = false;
+                self.pos += len;
+                self.column += len;
+                continue;
+            }
+
+            {
+                let location = self.location();
+                let ident_len = read_ident(self.input, self.pos, location)?;
+                if ident_len > 0 {
+                    let word = &self.input_str[self.pos..self.pos + ident_len];
+                    let kind = TokenKind::Ident(word.to_string());
+                    tokens.push(Token {
+                        kind,
+                        location,
+                        at_bol: self.at_bol,
+                        has_space: self.has_space,
+                        len: ident_len,
+                        ..Default::default()
+                    });
+                    self.at_bol = false;
+                    self.has_space = false;
+                    self.pos += ident_len;
+                    self.column += ident_len;
+                    continue;
+                }
+            }
+
+            if b == b'\'' {
+                let start = self.pos;
+                let location = self.location();
+                let (value, end) = read_char_literal(self.input, start, start, location)?;
+                let value = value as i8 as i64;
+                self.pos = end;
+                self.column += self.pos - start;
+                tokens.push(Token {
+                    kind: TokenKind::Num {
+                        value,
+                        fval: 0.0,
+                        ty: Type::Int,
+                    },
+                    location,
+                    at_bol: self.at_bol,
+                    has_space: self.has_space,
+                    len: end - start,
+                    ..Default::default()
+                });
+                self.at_bol = false;
+                self.has_space = false;
+                continue;
+            }
+
+            if let Some((punct, len)) = read_punct(&self.input_str[self.pos..]) {
+                let start_column = self.column;
+                let start = self.pos;
+                self.pos += len;
+                self.column += len;
+                tokens.push(Token {
+                    kind: TokenKind::Punct(punct),
+                    location: SourceLocation {
+                        line: self.line,
+                        column: start_column,
+                        byte: start,
+                        file_no: self.file_no,
+                    },
+                    at_bol: self.at_bol,
+                    has_space: self.has_space,
+                    len,
+                    ..Default::default()
+                });
+                self.at_bol = false;
+                self.has_space = false;
+                continue;
+            }
+
+            return Err(CompileError::at(
+                format!("invalid token: {}", b as char),
+                self.location(),
+            ));
+        }
+
+        tokens.push(self.eof_token());
+        Ok(tokens)
+    }
+}
+
+pub fn tokenize(input: &str, file_no: usize) -> CompileResult<Vec<Token>> {
+    Lexer::new(input, file_no).tokenize()
 }
 
 fn read_escaped_char(

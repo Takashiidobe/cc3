@@ -2960,7 +2960,10 @@ impl<'a> Parser<'a> {
                     // bounds (like VLA sizes referencing other parameters) are allowed.
                     // The array will decay to a pointer anyway, so use a placeholder.
                     let mut expr = self.expr_at(
-                        ExprKind::Num { value: 1, fval: 0.0 },
+                        ExprKind::Num {
+                            value: 1,
+                            fval: 0.0,
+                        },
                         token.location,
                     );
                     expr.ty = Some(Type::Int);
