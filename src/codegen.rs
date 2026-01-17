@@ -411,6 +411,172 @@ impl Codegen {
         }
     }
 
+    /// Generate code for complex binary operations
+    /// For add/sub: inline component-wise operations
+    /// For mul/div: call libgcc functions
+    fn gen_complex_binary(
+        &mut self,
+        op: &BinaryOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        function: &Obj,
+        globals: &[Obj],
+    ) {
+        let ty = lhs.ty.as_ref().unwrap_or(&Type::DoubleComplex);
+
+        match ty {
+            Type::FloatComplex => {
+                // Generate rhs first, save to stack
+                self.gen_expr(rhs, function, globals);
+                // rhs: xmm0=real, xmm1=imag
+                self.emit_line("  sub $16, %rsp");
+                self.depth += 2;
+                self.emit_line("  movss %xmm0, (%rsp)"); // rhs.real
+                self.emit_line("  movss %xmm1, 4(%rsp)"); // rhs.imag (float is 4 bytes)
+
+                // Generate lhs
+                self.gen_expr(lhs, function, globals);
+                // lhs: xmm0=real, xmm1=imag
+
+                match op {
+                    BinaryOp::Add => {
+                        self.emit_line("  addss (%rsp), %xmm0"); // real += rhs.real
+                        self.emit_line("  addss 4(%rsp), %xmm1"); // imag += rhs.imag
+                    }
+                    BinaryOp::Sub => {
+                        self.emit_line("  subss (%rsp), %xmm0"); // real -= rhs.real
+                        self.emit_line("  subss 4(%rsp), %xmm1"); // imag -= rhs.imag
+                    }
+                    BinaryOp::Mul | BinaryOp::Div => {
+                        // Call __mulsc3(a, b, c, d) or __divsc3(a, b, c, d)
+                        // Arguments: xmm0=a, xmm1=b, xmm2=c, xmm3=d
+                        // lhs = a + bi, rhs = c + di
+                        self.emit_line("  movss (%rsp), %xmm2"); // c = rhs.real
+                        self.emit_line("  movss 4(%rsp), %xmm3"); // d = rhs.imag
+                        // xmm0=a, xmm1=b already set
+                        self.emit_line("  mov $4, %rax"); // 4 FP args
+                        let func = if matches!(op, BinaryOp::Mul) {
+                            "__mulsc3"
+                        } else {
+                            "__divsc3"
+                        };
+                        self.emit_line(&format!("  call {}", func));
+                        // Result is returned packed in xmm0; unpack into xmm0/xmm1.
+                        self.emit_line("  movaps %xmm0, %xmm1");
+                        self.emit_line("  shufps $0x55, %xmm1, %xmm1");
+                    }
+                    _ => unreachable!(),
+                }
+
+                self.emit_line("  add $16, %rsp");
+                self.depth -= 2;
+            }
+            Type::DoubleComplex => {
+                // Generate rhs first, save to stack
+                self.gen_expr(rhs, function, globals);
+                // rhs: xmm0=real, xmm1=imag
+                self.emit_line("  sub $16, %rsp");
+                self.depth += 2;
+                self.emit_line("  movsd %xmm0, (%rsp)"); // rhs.real
+                self.emit_line("  movsd %xmm1, 8(%rsp)"); // rhs.imag
+
+                // Generate lhs
+                self.gen_expr(lhs, function, globals);
+                // lhs: xmm0=real, xmm1=imag
+
+                match op {
+                    BinaryOp::Add => {
+                        self.emit_line("  addsd (%rsp), %xmm0"); // real += rhs.real
+                        self.emit_line("  addsd 8(%rsp), %xmm1"); // imag += rhs.imag
+                    }
+                    BinaryOp::Sub => {
+                        self.emit_line("  subsd (%rsp), %xmm0"); // real -= rhs.real
+                        self.emit_line("  subsd 8(%rsp), %xmm1"); // imag -= rhs.imag
+                    }
+                    BinaryOp::Mul | BinaryOp::Div => {
+                        // Call __muldc3(a, b, c, d) or __divdc3(a, b, c, d)
+                        self.emit_line("  movsd (%rsp), %xmm2"); // c = rhs.real
+                        self.emit_line("  movsd 8(%rsp), %xmm3"); // d = rhs.imag
+                        self.emit_line("  mov $4, %rax"); // 4 FP args
+                        let func = if matches!(op, BinaryOp::Mul) {
+                            "__muldc3"
+                        } else {
+                            "__divdc3"
+                        };
+                        self.emit_line(&format!("  call {}", func));
+                    }
+                    _ => unreachable!(),
+                }
+
+                self.emit_line("  add $16, %rsp");
+                self.depth -= 2;
+            }
+            Type::LDoubleComplex => {
+                // For long double complex, use x87 FPU stack
+                // lhs and rhs are both on x87 stack as (real, imag) pairs
+                self.gen_expr(lhs, function, globals);
+                // After lhs: st(0)=lhs.real, st(1)=lhs.imag
+
+                // Save lhs to memory to make room for rhs
+                self.emit_line("  sub $64, %rsp");
+                self.depth += 8;
+                self.emit_line("  fstpt (%rsp)"); // lhs.real
+                self.emit_line("  fstpt 16(%rsp)"); // lhs.imag
+
+                self.gen_expr(rhs, function, globals);
+                // After rhs: st(0)=rhs.real, st(1)=rhs.imag
+                self.emit_line("  fstpt 32(%rsp)"); // rhs.real
+                self.emit_line("  fstpt 48(%rsp)"); // rhs.imag
+
+                match op {
+                    BinaryOp::Add => {
+                        // real = lhs.real + rhs.real
+                        self.emit_line("  fldt (%rsp)");
+                        self.emit_line("  fldt 32(%rsp)");
+                        self.emit_line("  faddp");
+                        // imag = lhs.imag + rhs.imag
+                        self.emit_line("  fldt 16(%rsp)");
+                        self.emit_line("  fldt 48(%rsp)");
+                        self.emit_line("  faddp");
+                        // Stack: st(0)=imag, st(1)=real - need to swap
+                        self.emit_line("  fxch %st(1)");
+                    }
+                    BinaryOp::Sub => {
+                        self.emit_line("  fldt (%rsp)");
+                        self.emit_line("  fldt 32(%rsp)");
+                        self.emit_line("  fsubrp");
+                        self.emit_line("  fldt 16(%rsp)");
+                        self.emit_line("  fldt 48(%rsp)");
+                        self.emit_line("  fsubrp");
+                        self.emit_line("  fxch %st(1)");
+                    }
+                    BinaryOp::Mul | BinaryOp::Div => {
+                        // Call __mulxc3 or __divxc3
+                        // These take arguments on the stack for x86-64
+                        // Arguments pushed right-to-left: d, c, b, a
+                        // Each long double is 16 bytes
+                        let func = if matches!(op, BinaryOp::Mul) {
+                            "__mulxc3"
+                        } else {
+                            "__divxc3"
+                        };
+                        // lhs = a + bi at (%rsp) and 16(%rsp)
+                        // rhs = c + di at 32(%rsp) and 48(%rsp)
+                        // Need to pass as: a(xmm0-like), b, c, d via stack
+                        self.emit_line("  mov $0, %rax"); // No FP regs
+                        self.emit_line(&format!("  call {}", func));
+                        // Result is returned in st(0)=real, st(1)=imag
+                    }
+                    _ => unreachable!(),
+                }
+
+                self.emit_line("  add $64, %rsp");
+                self.depth -= 8;
+            }
+            _ => unreachable!(),
+        }
+    }
+
     /// Get register name for the given size (al/ax/eax/rax variants)
     fn reg_ax(sz: i64) -> &'static str {
         match sz {
@@ -954,7 +1120,7 @@ impl Codegen {
                             // Convert f32 to u32 to get bit pattern
                             let bits = (*fval as f32).to_bits();
                             self.emit_line(&format!("  mov ${}, %eax  # float {}", bits, fval));
-                            self.emit_line("  movq %rax, %xmm0");
+                            self.emit_line("  movd %eax, %xmm0");
                         }
                         Type::Double => {
                             // Convert f64 to u64 to get bit pattern
@@ -970,6 +1136,38 @@ impl Codegen {
                             ));
                             self.emit_line("  mov %rax, -8(%rsp)");
                             self.emit_line("  fldl -8(%rsp)");
+                        }
+                        Type::FloatComplex => {
+                            // Imaginary literal: real=0, imag=fval
+                            self.emit_line("  xorps %xmm0, %xmm0"); // real = 0
+                            let bits = (*fval as f32).to_bits();
+                            self.emit_line(&format!(
+                                "  mov ${}, %eax  # imag float {}",
+                                bits, fval
+                            ));
+                            self.emit_line("  movd %eax, %xmm1");
+                        }
+                        Type::DoubleComplex => {
+                            // Imaginary literal: real=0, imag=fval
+                            self.emit_line("  xorpd %xmm0, %xmm0"); // real = 0
+                            let bits = fval.to_bits();
+                            self.emit_line(&format!(
+                                "  mov ${}, %rax  # imag double {}",
+                                bits, fval
+                            ));
+                            self.emit_line("  movq %rax, %xmm1");
+                        }
+                        Type::LDoubleComplex => {
+                            // Imaginary literal: real=0, imag=fval
+                            self.emit_line("  fldz"); // push 0 (will be real)
+                            let bits = fval.to_bits();
+                            self.emit_line(&format!(
+                                "  mov ${}, %rax  # imag long double {}",
+                                bits, fval
+                            ));
+                            self.emit_line("  mov %rax, -8(%rsp)");
+                            self.emit_line("  fldl -8(%rsp)"); // push imag, then swap
+                            self.emit_line("  fxch %st(1)"); // st(0)=real, st(1)=imag
                         }
                         _ => {
                             self.emit_line(&format!("  mov ${}, %rax", value));
@@ -1017,6 +1215,46 @@ impl Codegen {
                     }
                     UnaryOp::BitNot => {
                         self.emit_line("  not %rax");
+                    }
+                    UnaryOp::Real => {
+                        // For complex types, the real part is already in the right place
+                        // For float/double complex: xmm0 has real, xmm1 has imag
+                        // For long double complex: st(0) has real, st(1) has imag
+                        // For Real, we just need to discard the imag part
+                        let ty = expr.ty.as_ref().unwrap_or(&Type::DoubleComplex);
+                        match ty {
+                            Type::FloatComplex | Type::DoubleComplex => {
+                                // xmm0 already has the real part, nothing to do
+                            }
+                            Type::LDoubleComplex => {
+                                // st(0)=real, st(1)=imag, pop the imag
+                                self.emit_line("  fstp %st(1)");
+                            }
+                            _ => {
+                                // Non-complex type, value is already in rax/xmm0
+                            }
+                        }
+                    }
+                    UnaryOp::Imag => {
+                        // For complex types, extract the imaginary part
+                        let ty = expr.ty.as_ref().unwrap_or(&Type::DoubleComplex);
+                        match ty {
+                            Type::FloatComplex => {
+                                // Move imag from xmm1 to xmm0
+                                self.emit_line("  movaps %xmm1, %xmm0");
+                            }
+                            Type::DoubleComplex => {
+                                self.emit_line("  movapd %xmm1, %xmm0");
+                            }
+                            Type::LDoubleComplex => {
+                                // st(0)=real, st(1)=imag, need imag in st(0)
+                                self.emit_line("  fstp %st(0)"); // pop real, imag becomes st(0)
+                            }
+                            _ => {
+                                // Non-complex type, imaginary is 0
+                                self.emit_line("  xor %eax, %eax");
+                            }
+                        }
                     }
                 }
             }
@@ -1259,6 +1497,18 @@ impl Codegen {
                         self.emit_line("  mov $1, %rax");
                         self.emit_line(&format!(".L.end.{}:", c));
                     }
+                    return;
+                }
+
+                // Handle complex type operations
+                let lhs_ty = lhs.ty.as_ref().unwrap_or(&Type::Int);
+                if lhs_ty.is_complex()
+                    && matches!(
+                        op,
+                        BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                    )
+                {
+                    self.gen_complex_binary(op, lhs, rhs, function, globals);
                     return;
                 }
 
@@ -1587,6 +1837,12 @@ impl Codegen {
             return;
         }
 
+        // Handle complex type conversions
+        if from.is_complex() || to.is_complex() {
+            self.cast_complex(from, to);
+            return;
+        }
+
         const I32I8: &str = "movsbl %al, %eax";
         const I32U8: &str = "movzbl %al, %eax";
         const I32I16: &str = "movswl %ax, %eax";
@@ -1667,6 +1923,98 @@ impl Codegen {
         }
     }
 
+    /// Handle casts involving complex types
+    fn cast_complex(&mut self, from: &Type, to: &Type) {
+        // Same type - no conversion needed
+        if from == to {
+            return;
+        }
+
+        // Real to complex: set real part, zero imaginary
+        if !from.is_complex() && to.is_complex() {
+            match to {
+                Type::FloatComplex => {
+                    // Convert from real type to float if needed
+                    self.cast(from, &Type::Float);
+                    // xmm0 has the real part, zero the imaginary
+                    self.emit_line("  xorps %xmm1, %xmm1");
+                }
+                Type::DoubleComplex => {
+                    self.cast(from, &Type::Double);
+                    self.emit_line("  xorpd %xmm1, %xmm1");
+                }
+                Type::LDoubleComplex => {
+                    self.cast(from, &Type::LDouble);
+                    // st(0) has real, push 0 for imaginary
+                    self.emit_line("  fldz"); // st(0)=0, st(1)=real
+                    self.emit_line("  fxch %st(1)"); // st(0)=real, st(1)=0
+                }
+                _ => unreachable!(),
+            }
+            return;
+        }
+
+        // Complex to real: discard imaginary, convert real part
+        if from.is_complex() && !to.is_complex() {
+            match from {
+                Type::FloatComplex => {
+                    // xmm0 already has real part, xmm1 has imaginary (ignored)
+                    self.cast(&Type::Float, to);
+                }
+                Type::DoubleComplex => {
+                    self.cast(&Type::Double, to);
+                }
+                Type::LDoubleComplex => {
+                    // st(0)=real, st(1)=imag - pop the imaginary
+                    self.emit_line("  fstp %st(1)"); // pop st(1), keep st(0)
+                    self.cast(&Type::LDouble, to);
+                }
+                _ => unreachable!(),
+            }
+            return;
+        }
+
+        // Complex to complex conversions
+        match (from, to) {
+            (Type::FloatComplex, Type::DoubleComplex) => {
+                // Convert both parts from float to double
+                self.emit_line("  cvtss2sd %xmm0, %xmm0");
+                self.emit_line("  cvtss2sd %xmm1, %xmm1");
+            }
+            (Type::FloatComplex, Type::LDoubleComplex) => {
+                // Convert float to long double
+                self.emit_line("  movss %xmm1, -4(%rsp)"); // save imag
+                self.emit_line("  flds -4(%rsp)"); // load imag to st(0)
+                self.emit_line("  movss %xmm0, -4(%rsp)"); // save real
+                self.emit_line("  flds -4(%rsp)"); // load real to st(0), imag to st(1)
+            }
+            (Type::DoubleComplex, Type::FloatComplex) => {
+                self.emit_line("  cvtsd2ss %xmm0, %xmm0");
+                self.emit_line("  cvtsd2ss %xmm1, %xmm1");
+            }
+            (Type::DoubleComplex, Type::LDoubleComplex) => {
+                self.emit_line("  movsd %xmm1, -8(%rsp)");
+                self.emit_line("  fldl -8(%rsp)");
+                self.emit_line("  movsd %xmm0, -8(%rsp)");
+                self.emit_line("  fldl -8(%rsp)");
+            }
+            (Type::LDoubleComplex, Type::FloatComplex) => {
+                // st(0)=real, st(1)=imag
+                self.emit_line("  fstps -4(%rsp)"); // store and pop real
+                self.emit_line("  movss -4(%rsp), %xmm0");
+                self.emit_line("  fstps -4(%rsp)"); // store and pop imag
+                self.emit_line("  movss -4(%rsp), %xmm1");
+            }
+            (Type::LDoubleComplex, Type::DoubleComplex) => {
+                self.emit_line("  fstpl -8(%rsp)");
+                self.emit_line("  movsd -8(%rsp), %xmm0");
+                self.emit_line("  fstpl -8(%rsp)");
+                self.emit_line("  movsd -8(%rsp), %xmm1");
+            }
+            _ => {} // Same type, already handled
+        }
+    }
+
     fn cmp_zero(&mut self, ty: &Type) {
         match ty {
             Type::Float => {
@@ -1722,6 +2070,24 @@ impl Codegen {
                     self.emit_line("  fldt (%rax)");
                     return;
                 }
+                Type::FloatComplex => {
+                    // Load real part to xmm0, imag part to xmm1
+                    self.emit_line("  movss (%rax), %xmm0");
+                    self.emit_line("  movss 4(%rax), %xmm1");
+                    return;
+                }
+                Type::DoubleComplex => {
+                    // Load real part to xmm0, imag part to xmm1
+                    self.emit_line("  movsd (%rax), %xmm0");
+                    self.emit_line("  movsd 8(%rax), %xmm1");
+                    return;
+                }
+                Type::LDoubleComplex => {
+                    // Load both parts to x87 FPU stack
+                    self.emit_line("  fldt 16(%rax)"); // imag part (pushed first, will be st(1))
+                    self.emit_line("  fldt (%rax)"); // real part (pushed second, will be st(0))
+                    return;
+                }
                 _ => {}
             }
 
@@ -1771,6 +2137,26 @@ impl Codegen {
                 Type::LDouble => {
                     self.emit_line("  fstpt (%rdi)");
                     self.emit_line("  fldt (%rdi)");
+                    return;
+                }
+                Type::FloatComplex => {
+                    // Store real part from xmm0, imag part from xmm1
+                    self.emit_line("  movss %xmm0, (%rdi)");
+                    self.emit_line("  movss %xmm1, 4(%rdi)");
+                    return;
+                }
+                Type::DoubleComplex => {
+                    // Store real part from xmm0, imag part from xmm1
+                    self.emit_line("  movsd %xmm0, (%rdi)");
+                    self.emit_line("  movsd %xmm1, 8(%rdi)");
+                    return;
+                }
+                Type::LDoubleComplex => {
+                    // Store from x87 FPU stack (st(0)=real, st(1)=imag)
+                    self.emit_line("  fstpt (%rdi)"); // store and pop real
+                    self.emit_line("  fstpt 16(%rdi)"); // store and pop imag
+                    self.emit_line("  fldt 16(%rdi)"); // reload imag
+                    self.emit_line("  fldt (%rdi)"); // reload real
                     return;
                 }
                 Type::Vla { .. } => {

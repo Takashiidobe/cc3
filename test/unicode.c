@@ -2,8 +2,8 @@
 
 #define STR(x) #x
 
-typedef unsigned short char16_t;
-typedef unsigned int char32_t;
+// char16_t and char32_t are now built-in typedefs (C11)
+// wchar_t still needs manual typedef (provided by <stddef.h> in standard C)
 typedef int wchar_t;
 
 int π = 3;

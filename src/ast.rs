@@ -179,6 +179,8 @@ pub enum UnaryOp {
     Neg,
     Not,
     BitNot,
+    Real, // __real__ - extract real part of complex
+    Imag, // __imag__ - extract imaginary part of complex
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -276,6 +278,12 @@ pub enum Type {
     Double,
     /// 80-bit extended precision float (stored as 16 bytes on x86-64).
     LDouble,
+    /// Complex float - 8 bytes (2x float)
+    FloatComplex,
+    /// Complex double - 16 bytes (2x double)
+    DoubleComplex,
+    /// Complex long double - 32 bytes (2x long double)
+    LDoubleComplex,
     Enum,
     Ptr(Box<Type>),
     Atomic(Box<Type>),
@@ -363,6 +371,9 @@ impl Type {
             Type::Float => 4,
             Type::Double => 8,
             Type::LDouble => 16,
+            Type::FloatComplex => 8,
+            Type::DoubleComplex => 16,
+            Type::LDoubleComplex => 32,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func { .. } => 1,
@@ -432,6 +443,9 @@ impl Type {
             Type::Float => 4,
             Type::Double => 8,
             Type::LDouble => 16,
+            Type::FloatComplex => 4,
+            Type::DoubleComplex => 8,
+            Type::LDoubleComplex => 16,
             Type::Enum => 4,
             Type::Ptr(_) => 8,
             Type::Func { .. } => 1,
@@ -504,8 +518,15 @@ impl Type {
         matches!(self, Type::Float | Type::Double | Type::LDouble)
     }
 
+    pub fn is_complex(&self) -> bool {
+        matches!(
+            self,
+            Type::FloatComplex | Type::DoubleComplex | Type::LDoubleComplex
+        )
+    }
+
     pub fn is_numeric(&self) -> bool {
-        self.is_integer() || self.is_flonum()
+        self.is_integer() || self.is_flonum() || self.is_complex()
     }
 
     pub fn incomplete_struct(tag: Option<String>) -> Type {
@@ -573,6 +594,9 @@ pub fn is_compatible(t1: &Type, t2: &Type) -> bool {
         | (Float, Float)
         | (Double, Double)
         | (LDouble, LDouble)
+        | (FloatComplex, FloatComplex)
+        | (DoubleComplex, DoubleComplex)
+        | (LDoubleComplex, LDoubleComplex)
         | (Enum, Enum) => true,
         (Ptr(base1), Ptr(base2)) => is_compatible(base1, base2),
         (

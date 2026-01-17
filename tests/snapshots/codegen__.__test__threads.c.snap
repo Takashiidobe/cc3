@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "mtx_init(&mutex, mtx_plain) => 0\nthrd_create(&t1, thread_func, &arg1) => 0\nthrd_create(&t2, thread_func, &arg2) => 0\nthrd_join(t1, &res1) => 0\nthrd_join(t2, &res2) => 0\nres1 => 0\nres2 => 0\ncounter => 30\nOK\n"
+status: 0

@@ -2013,6 +2013,9 @@ impl Preprocessor {
         self.define_macro("__UINT_LEAST16_TYPE__", "unsigned short")?;
         self.define_macro("__UINT_LEAST32_TYPE__", "unsigned int")?;
         self.define_macro("__UINT_LEAST64_TYPE__", "unsigned long")?;
+        // C11 char16_t and char32_t underlying types
+        self.define_macro("__CHAR16_TYPE__", "unsigned short")?;
+        self.define_macro("__CHAR32_TYPE__", "unsigned int")?;
         self.define_macro("__STDC_HOSTED__", "1")?;
         self.define_macro("__STDC_VERSION__", "201112L")?;
         self.define_macro("__STDC__", "1")?;
@@ -2020,9 +2023,7 @@ impl Preprocessor {
         self.define_macro("__STDC_UTF_16__", "1")?;
         self.define_macro("__STDC_UTF_32__", "1")?;
         self.define_macro("__STDC_IEC_559__", "1")?; // IEEE 754 floating point
-        // Optional features NOT supported (defined to 1 means NOT available)
-        self.define_macro("__STDC_NO_COMPLEX__", "1")?; // No _Complex support
-        self.define_macro("__STDC_NO_THREADS__", "1")?; // No <threads.h> support
+        self.define_macro("__STDC_IEC_559_COMPLEX__", "1")?; // IEC 60559 complex support
         self.define_macro("__USER_LABEL_PREFIX__", "")?;
         self.define_macro("__alignof__", "_Alignof")?;
         self.define_macro("static_assert", "_Static_assert")?;

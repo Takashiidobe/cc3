@@ -250,6 +250,9 @@ pub enum Keyword {
     Asm,
     ThreadLocal,
     Atomic,
+    Complex,
+    Real,
+    Imag,
     Attribute,
     StaticAssert,
 }
@@ -300,6 +303,9 @@ impl std::fmt::Display for Keyword {
             Keyword::Asm => "asm",
             Keyword::ThreadLocal => "_Thread_local",
             Keyword::Atomic => "_Atomic",
+            Keyword::Complex => "_Complex",
+            Keyword::Real => "__real__",
+            Keyword::Imag => "__imag__",
             Keyword::Attribute => "__attribute__",
             Keyword::StaticAssert => "_Static_assert",
         };
@@ -605,15 +611,33 @@ impl Token {
         let input = self.text();
         let mut parse_str = input.as_str();
 
-        // Check for suffix
-        let ty = if input.ends_with('f') || input.ends_with('F') {
-            parse_str = &input[..input.len() - 1];
+        // Check for imaginary suffix (i or I) - must come last
+        let is_imaginary = parse_str.ends_with('i') || parse_str.ends_with('I');
+        if is_imaginary {
+            parse_str = &parse_str[..parse_str.len() - 1];
+        }
+
+        // Check for float/long double suffix
+        let base_ty = if parse_str.ends_with('f') || parse_str.ends_with('F') {
+            parse_str = &parse_str[..parse_str.len() - 1];
             Type::Float
-        } else if input.ends_with('l') || input.ends_with('L') {
-            parse_str = &input[..input.len() - 1];
+        } else if parse_str.ends_with('l') || parse_str.ends_with('L') {
+            parse_str = &parse_str[..parse_str.len() - 1];
             Type::LDouble
         } else {
             Type::Double
+        };
+
+        // If imaginary, convert base type to complex type
+        let ty = if is_imaginary {
+            match base_ty {
+                Type::Float => Type::FloatComplex,
+                Type::Double => Type::DoubleComplex,
+                Type::LDouble => Type::LDoubleComplex,
+                _ => base_ty,
+            }
+        } else {
+            base_ty
         };
 
         let fval = if parse_str.starts_with("0x") || parse_str.starts_with("0X") {
@@ -1865,6 +1889,9 @@ fn keyword_map() -> &'static HashMap<&'static str, ()> {
             "_Thread_local",
             "__thread",
             "_Atomic",
+            "_Complex",
+            "__real__",
+            "__imag__",
             "__attribute__",
             "_Static_assert",
         ];
@@ -1925,6 +1952,9 @@ fn convert_keyword(tok: &mut Token, name: &str) {
         "asm" => Keyword::Asm,
         "_Thread_local" | "__thread" => Keyword::ThreadLocal,
         "_Atomic" => Keyword::Atomic,
+        "_Complex" => Keyword::Complex,
+        "__real__" => Keyword::Real,
+        "__imag__" => Keyword::Imag,
         "__attribute__" => Keyword::Attribute,
         "_Static_assert" => Keyword::StaticAssert,
         _ => return,

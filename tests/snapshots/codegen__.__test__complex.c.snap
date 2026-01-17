@@ -1,0 +1,6 @@
+---
+source: tests/codegen.rs
+expression: "&mine"
+---
+stdout: "sizeof(float _Complex) => 8\nsizeof(double _Complex) => 16\nsizeof(long double _Complex) => 32\n_Alignof(float _Complex) => 4\n_Alignof(double _Complex) => 8\n_Alignof(long double _Complex) => 16\n(int)__real__ sum => 4\n(int)__imag__ sum => 6\n(int)__real__ diff => 2\n(int)__imag__ diff => 2\n(int)__real__ prod => -5\n(int)__imag__ prod => 10\n(int)__real__ quot => 2\n(int)__imag__ quot => 0\n(int)__real__ fsum => 4\n(int)__imag__ fsum => 6\n(int)__real__ fprod => -5\n(int)__imag__ fprod => 10\n(int)__real__ from_real => 5\n(int)__imag__ from_real => 0\n(int)to_real => 1\n(int)__real__ from_dc => 1\n(int)__imag__ from_dc => 2\nOK\n"
+status: 0

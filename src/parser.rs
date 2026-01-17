@@ -145,8 +145,15 @@ impl<'a> Parser<'a> {
         self.builtin_alloca_idx = Some(alloca_idx);
     }
 
+    fn declare_builtin_typedefs(&mut self) {
+        // C11 char16_t and char32_t types (normally defined in <uchar.h>)
+        self.push_scope_typedef("char16_t".to_string(), Type::UShort);
+        self.push_scope_typedef("char32_t".to_string(), Type::UInt);
+    }
+
     fn parse_program(&mut self) -> CompileResult<Program> {
         self.declare_builtin_functions();
+        self.declare_builtin_typedefs();
 
         while !self.check_eof() {
             // Handle _Static_assert at file scope
@@ -193,6 +200,10 @@ impl<'a> Parser<'a> {
         const FLOAT: i32 = 1 << 16;
         const DOUBLE: i32 = 1 << 18;
         const LONG_DOUBLE: i32 = LONG + DOUBLE;
+        const COMPLEX: i32 = 1 << 20;
+        const FLOAT_COMPLEX: i32 = FLOAT + COMPLEX;
+        const DOUBLE_COMPLEX: i32 = DOUBLE + COMPLEX;
+        const LONG_DOUBLE_COMPLEX: i32 = LONG_DOUBLE + COMPLEX;
         const SIGNED: i32 = 1 << 13;
         const UNSIGNED: i32 = 1 << 14;
         const SIGNED_CHAR: i32 = SIGNED + CHAR;
@@ -349,6 +360,8 @@ impl<'a> Parser<'a> {
                 counter |= SIGNED;
             } else if self.consume_keyword(Keyword::Unsigned) {
                 counter |= UNSIGNED;
+            } else if self.consume_keyword(Keyword::Complex) {
+                counter |= COMPLEX;
             } else {
                 self.bail_at(location, "invalid type")?;
             }
@@ -370,6 +383,9 @@ impl<'a> Parser<'a> {
                 FLOAT => Type::Float,
                 DOUBLE => Type::Double,
                 LONG_DOUBLE => Type::LDouble,
+                FLOAT_COMPLEX => Type::FloatComplex,
+                DOUBLE_COMPLEX | COMPLEX => Type::DoubleComplex,
+                LONG_DOUBLE_COMPLEX => Type::LDoubleComplex,
                 _ => self.bail_at(location, "invalid type")?,
             };
         }
@@ -418,7 +434,8 @@ impl<'a> Parser<'a> {
                 | Keyword::Typeof
                 | Keyword::Inline
                 | Keyword::ThreadLocal
-                | Keyword::Atomic,
+                | Keyword::Atomic
+                | Keyword::Complex,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
@@ -2494,6 +2511,31 @@ impl<'a> Parser<'a> {
             ));
         }
 
+        // __real__ and __imag__ for complex numbers
+        if self.consume_keyword(Keyword::Real) {
+            let location = self.last_location();
+            let expr = self.parse_cast()?;
+            return Ok(self.expr_at(
+                ExprKind::Unary {
+                    op: UnaryOp::Real,
+                    expr: Box::new(expr),
+                },
+                location,
+            ));
+        }
+
+        if self.consume_keyword(Keyword::Imag) {
+            let location = self.last_location();
+            let expr = self.parse_cast()?;
+            return Ok(self.expr_at(
+                ExprKind::Unary {
+                    op: UnaryOp::Imag,
+                    expr: Box::new(expr),
+                },
+                location,
+            ));
+        }
+
         // ++i => i+=1
         if self.consume_punct(Punct::Inc) {
             let location = self.last_location();
@@ -2996,7 +3038,7 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Num { value, fval, ty } => {
                 self.pos += 1;
-                let expr_kind = if ty.is_flonum() {
+                let expr_kind = if ty.is_flonum() || ty.is_complex() {
                     ExprKind::Num { value: 0, fval }
                 } else {
                     ExprKind::Num { value, fval: 0.0 }
@@ -3074,6 +3116,17 @@ impl<'a> Parser<'a> {
         }
         if matches!(ty2, Type::Func { .. }) {
             return Type::Ptr(Box::new(ty2.clone()));
+        }
+
+        // Handle complex types
+        if matches!(ty1, Type::LDoubleComplex) || matches!(ty2, Type::LDoubleComplex) {
+            return Type::LDoubleComplex;
+        }
+        if matches!(ty1, Type::DoubleComplex) || matches!(ty2, Type::DoubleComplex) {
+            return Type::DoubleComplex;
+        }
+        if matches!(ty1, Type::FloatComplex) || matches!(ty2, Type::FloatComplex) {
+            return Type::FloatComplex;
         }
 
         if matches!(ty1, Type::LDouble) || matches!(ty2, Type::LDouble) {
@@ -5168,6 +5221,17 @@ impl<'a> Parser<'a> {
                         self.cast_expr_in_place(expr, ty.clone());
                         ty
                     }
+                    UnaryOp::Real | UnaryOp::Imag => {
+                        // __real__ and __imag__ return the base type of the complex
+                        let expr_ty = expr.ty.as_ref().unwrap_or(&Type::DoubleComplex);
+                        match expr_ty {
+                            Type::FloatComplex => Type::Float,
+                            Type::DoubleComplex => Type::Double,
+                            Type::LDoubleComplex => Type::LDouble,
+                            // For non-complex types, return the same type
+                            _ => expr_ty.clone(),
+                        }
+                    }
                 }
             }
             ExprKind::Addr(expr) => {
@@ -5344,6 +5408,10 @@ impl<'a> Parser<'a> {
                     UnaryOp::Neg => Ok(-val),
                     UnaryOp::Not => Ok(if val == 0 { 1 } else { 0 }),
                     UnaryOp::BitNot => Ok(!val),
+                    UnaryOp::Real | UnaryOp::Imag => {
+                        // Complex constants not fully supported, return the value
+                        Ok(val)
+                    }
                 }
             }
             ExprKind::Binary { op, lhs, rhs } => match op {
@@ -5585,8 +5653,10 @@ impl<'a> Parser<'a> {
             }
             ExprKind::Comma { rhs, .. } => self.is_const_expr(&mut rhs.clone())?,
             ExprKind::Unary { op, expr } => {
-                matches!(op, UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitNot)
-                    && self.is_const_expr(&mut expr.clone())?
+                matches!(
+                    op,
+                    UnaryOp::Neg | UnaryOp::Not | UnaryOp::BitNot | UnaryOp::Real | UnaryOp::Imag
+                ) && self.is_const_expr(&mut expr.clone())?
             }
             ExprKind::Cast { expr, .. } => self.is_const_expr(&mut expr.clone())?,
             ExprKind::Num { .. } => true,
