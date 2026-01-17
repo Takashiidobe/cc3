@@ -18,6 +18,11 @@ int main(void) {
   int hex = 0xFF'FF;
   ASSERT(1000000, dec);
   ASSERT(65535, hex);
+  int base = 7;
+  typeof(base) t1 = base + 1;
+  typeof_unqual(base) t2 = t1;
+  ASSERT(8, t1);
+  ASSERT(8, t2);
 
 #define FOO 1
 #define BAR 1

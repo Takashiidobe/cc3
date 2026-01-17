@@ -317,7 +317,10 @@ impl<'a> Parser<'a> {
                 token.kind,
                 TokenKind::Keyword(Keyword::Struct | Keyword::Union | Keyword::Enum)
             );
-            let is_typeof = matches!(token.kind, TokenKind::Keyword(Keyword::Typeof));
+            let is_typeof = matches!(
+                token.kind,
+                TokenKind::Keyword(Keyword::Typeof | Keyword::TypeofUnqual)
+            );
             if is_struct_union_enum || is_typeof || typedef_ty.is_some() {
                 if counter != 0 {
                     break;
@@ -329,7 +332,9 @@ impl<'a> Parser<'a> {
                     ty = self.parse_union_decl()?;
                 } else if self.consume_keyword(Keyword::Enum) {
                     ty = self.parse_enum_specifier()?;
-                } else if self.consume_keyword(Keyword::Typeof) {
+                } else if self.consume_keyword(Keyword::Typeof)
+                    || self.consume_keyword(Keyword::TypeofUnqual)
+                {
                     ty = self.parse_typeof_specifier()?;
                 } else if let Some(ty2) = typedef_ty {
                     self.pos += 1;
@@ -431,11 +436,12 @@ impl<'a> Parser<'a> {
                 | Keyword::Register
                 | Keyword::Restrict
                 | Keyword::Noreturn
-                | Keyword::Typeof
                 | Keyword::Inline
                 | Keyword::ThreadLocal
                 | Keyword::Atomic
-                | Keyword::Complex,
+                | Keyword::Complex
+                | Keyword::Typeof
+                | Keyword::TypeofUnqual,
             ) => true,
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
