@@ -2,5 +2,5 @@
 source: tests/codegen.rs
 expression: "&mine"
 ---
-stdout: "__STDC__ => 1\nOK\n"
+stdout: "__STDC__ => 1\n__STDC_HOSTED__ => 1\n__STDC_VERSION__ => 201112\n__STDC_UTF_16__ => 1\n__STDC_UTF_32__ => 1\n__STDC_IEC_559__ => 1\n__STDC_NO_COMPLEX__ => 1\n__STDC_NO_THREADS__ => 1\nOK\n"
 status: 0
