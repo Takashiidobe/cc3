@@ -2017,7 +2017,7 @@ impl Preprocessor {
         self.define_macro("__CHAR16_TYPE__", "unsigned short")?;
         self.define_macro("__CHAR32_TYPE__", "unsigned int")?;
         self.define_macro("__STDC_HOSTED__", "1")?;
-        self.define_macro("__STDC_VERSION__", "201112L")?;
+        self.define_macro("__STDC_VERSION__", "201710L")?;
         self.define_macro("__STDC__", "1")?;
         // Optional feature support macros
         self.define_macro("__STDC_UTF_16__", "1")?;

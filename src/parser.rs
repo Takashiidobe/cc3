@@ -2916,6 +2916,17 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 self.parse_generic_selection()
             }
+            TokenKind::Keyword(Keyword::True) | TokenKind::Keyword(Keyword::False) => {
+                let value = if matches!(token.kind, TokenKind::Keyword(Keyword::True)) {
+                    1
+                } else {
+                    0
+                };
+                let mut expr = self.expr_at(ExprKind::Num { value, fval: 0.0 }, token.location);
+                expr.ty = Some(Type::Bool);
+                self.pos += 1;
+                Ok(expr)
+            }
             TokenKind::Ident(ref name) if name == "__builtin_reg_class" => {
                 let location = token.location;
                 self.pos += 1;

@@ -209,6 +209,8 @@ fn parse_hex_float(s: &str) -> Option<f64> {
 pub enum Keyword {
     Void,
     Bool,
+    True,
+    False,
     Char,
     Short,
     Int,
@@ -261,7 +263,9 @@ impl std::fmt::Display for Keyword {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let text = match self {
             Keyword::Void => "void",
-            Keyword::Bool => "_Bool",
+            Keyword::Bool => "bool",
+            Keyword::True => "true",
+            Keyword::False => "false",
             Keyword::Char => "char",
             Keyword::Short => "short",
             Keyword::Int => "int",
@@ -1845,6 +1849,9 @@ fn keyword_map() -> &'static HashMap<&'static str, ()> {
         let keywords = [
             "void",
             "_Bool",
+            "bool",
+            "true",
+            "false",
             "char",
             "short",
             "int",
@@ -1910,7 +1917,9 @@ fn is_keyword(name: &str) -> bool {
 fn convert_keyword(tok: &mut Token, name: &str) {
     let keyword = match name {
         "void" => Keyword::Void,
-        "_Bool" => Keyword::Bool,
+        "_Bool" | "bool" => Keyword::Bool,
+        "true" => Keyword::True,
+        "false" => Keyword::False,
         "char" => Keyword::Char,
         "short" => Keyword::Short,
         "int" => Keyword::Int,

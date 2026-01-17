@@ -4,7 +4,7 @@ int main() {
   // Required C11 macros
   ASSERT(1, __STDC__);
   ASSERT(1, __STDC_HOSTED__);
-  ASSERT(201112, __STDC_VERSION__); // C11
+  ASSERT(201710, __STDC_VERSION__); // C17
 
   // Optional feature support
   ASSERT(1, __STDC_UTF_16__);
