@@ -8,5 +8,46 @@ int main(void) {
   int *p = nullptr;
   ASSERT(1, p == nullptr);
   ASSERT(0, p != nullptr);
+
+#define WARN_MSG "c23 warning"
+#warning WARN_MSG
+
+#define FOO 1
+#define BAR 1
+  int x = 0;
+#if 0
+  x = 1;
+#elifdef FOO
+  x = 2;
+#elifndef BAR
+  x = 3;
+#else
+  x = 4;
+#endif
+  ASSERT(2, x);
+
+#undef BAR
+#ifdef FOO
+  x = 5;
+#elifdef FOO
+  x = 6;
+#elifndef BAR
+  x = 7;
+#else
+  x = 8;
+#endif
+  ASSERT(5, x);
+
+#undef FOO
+#if 0
+  x = 9;
+#elifdef FOO
+  x = 10;
+#elifndef BAR
+  x = 11;
+#else
+  x = 12;
+#endif
+  ASSERT(11, x);
   return 0;
 }

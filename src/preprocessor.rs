@@ -513,7 +513,11 @@ impl Preprocessor {
             if is_hash(tok) && self.pos + 1 < self.tokens.len() {
                 let kind = &self.peek(1).kind;
                 if is_if_directive(kind)
-                    || matches!(kind, TokenKind::Ident(name) if name == "ifdef" || name == "ifndef")
+                    || matches!(
+                        kind,
+                        TokenKind::Ident(name)
+                            if name == "ifdef" || name == "ifndef"
+                    )
                 {
                     self.pos += 2;
                     self.skip_cond_incl2();
@@ -537,13 +541,24 @@ impl Preprocessor {
             if is_hash(tok) && self.pos + 1 < self.tokens.len() {
                 let kind = &self.peek(1).kind;
                 if is_if_directive(kind)
-                    || matches!(kind, TokenKind::Ident(name) if name == "ifdef" || name == "ifndef")
+                    || matches!(
+                        kind,
+                        TokenKind::Ident(name)
+                            if name == "ifdef" || name == "ifndef"
+                    )
                 {
                     self.pos += 2;
                     self.skip_cond_incl2();
                     continue;
                 }
-                if matches!(kind, TokenKind::Ident(name) if name == "elif" || name == "endif")
+                if matches!(
+                    kind,
+                    TokenKind::Ident(name)
+                        if name == "elif"
+                            || name == "elifdef"
+                            || name == "elifndef"
+                            || name == "endif"
+                )
                     || is_else_directive(kind)
                 {
                     break;
@@ -1506,6 +1521,34 @@ impl Preprocessor {
             }
 
             if let TokenKind::Ident(name) = &self.cur_tok().kind
+                && (name == "elifdef" || name == "elifndef")
+            {
+                let Some(last) = cond_incl.last_mut() else {
+                    self.error("stray #elif", start.location)?;
+                    unreachable!("expected error to return");
+                };
+                if last.ctx == CondCtx::Else {
+                    self.error("stray #elif", start.location)?;
+                    unreachable!("expected error to return");
+                }
+                last.ctx = CondCtx::Elif;
+
+                let is_elifdef = name == "elifdef";
+                self.pos += 1;
+                let defined = self.find_macro(self.cur_tok()).is_some();
+                let included = if is_elifdef { defined } else { !defined };
+                self.pos += 1;
+                self.skip_line();
+
+                if !last.included && included {
+                    last.included = true;
+                } else {
+                    self.skip_cond_incl();
+                }
+                continue;
+            }
+
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
                 && name == "endif"
             {
                 if cond_incl.is_empty() {
@@ -1544,6 +1587,19 @@ impl Preprocessor {
                 }
                 self.pos += 1;
                 self.skip_line();
+                continue;
+            }
+
+            if let TokenKind::Ident(name) = &self.cur_tok().kind
+                && name == "warning"
+            {
+                self.pos += 1;
+                let line_tokens = self.copy_line();
+                let tokens = self.expand_macros_only(line_tokens)?;
+                let message = join_tokens(&tokens);
+                let message = message.trim();
+                let msg = if message.is_empty() { "warning" } else { message };
+                warn_tok(&start, msg);
                 continue;
             }
 
