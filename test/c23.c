@@ -12,6 +12,13 @@ int main(void) {
 #define WARN_MSG "c23 warning"
 #warning WARN_MSG
 
+  int bin = 0b101010;
+  ASSERT(42, bin);
+  int dec = 1'000'000;
+  int hex = 0xFF'FF;
+  ASSERT(1000000, dec);
+  ASSERT(65535, hex);
+
 #define FOO 1
 #define BAR 1
   int x = 0;

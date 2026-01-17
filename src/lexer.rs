@@ -494,27 +494,42 @@ impl Token {
         };
 
         i += prefix_len;
-        let digits_start = i;
+        // Parse digits with optional separators.
+        let is_valid_digit = |ch: u8| match base {
+            2 => ch == b'0' || ch == b'1',
+            8 => (b'0'..=b'7').contains(&ch),
+            10 => ch.is_ascii_digit(),
+            16 => ch.is_ascii_hexdigit(),
+            _ => false,
+        };
 
-        // Parse digits
+        let mut digits = Vec::new();
+        let mut saw_digit = false;
         while i < bytes.len() {
             let ch = bytes[i];
-            let is_valid = match base {
-                2 => ch == b'0' || ch == b'1',
-                8 => (b'0'..=b'7').contains(&ch),
-                10 => ch.is_ascii_digit(),
-                16 => ch.is_ascii_hexdigit(),
-                _ => false,
-            };
-            if is_valid {
+            if ch == b'\'' {
+                let next = bytes.get(i + 1).copied();
+                let next_is_digit = next.is_some_and(is_valid_digit);
+                if !saw_digit || !next_is_digit {
+                    return Err(CompileError::at("invalid integer constant", self.location));
+                }
                 i += 1;
-            } else {
-                break;
+                continue;
             }
+            if is_valid_digit(ch) {
+                digits.push(ch);
+                saw_digit = true;
+                i += 1;
+                continue;
+            }
+            break;
+        }
+        if !saw_digit {
+            return Err(CompileError::at("invalid integer constant", self.location));
         }
 
-        let num_str = &input[digits_start..i];
-        let value = u128::from_str_radix(num_str, base)
+        let num_str = String::from_utf8(digits).expect("digit bytes");
+        let value = u128::from_str_radix(&num_str, base)
             .map_err(|_| CompileError::at("invalid integer constant", self.location))?;
         let value = value.min(u64::MAX as u128) as u64;
 
@@ -646,12 +661,15 @@ impl Token {
             base_ty
         };
 
-        let fval = if parse_str.starts_with("0x") || parse_str.starts_with("0X") {
-            parse_hex_float(parse_str).ok_or_else(|| {
+        let cleaned = parse_str.replace('\'', "");
+        let parse_clean = cleaned.as_str();
+
+        let fval = if parse_clean.starts_with("0x") || parse_clean.starts_with("0X") {
+            parse_hex_float(parse_clean).ok_or_else(|| {
                 CompileError::at("invalid numeric constant".to_string(), self.location)
             })?
         } else {
-            parse_str.parse::<f64>().map_err(|_| {
+            parse_clean.parse::<f64>().map_err(|_| {
                 CompileError::at("invalid numeric constant".to_string(), self.location)
             })?
         };
@@ -1005,7 +1023,8 @@ impl<'a> Lexer<'a> {
                         self.pos += 2;
                     } else if self.pos < self.input.len()
                         && (self.input[self.pos].is_ascii_alphanumeric()
-                            || self.input[self.pos] == b'.')
+                            || self.input[self.pos] == b'.'
+                            || self.input[self.pos] == b'\'')
                     {
                         self.pos += 1;
                     } else {
