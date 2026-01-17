@@ -2021,6 +2021,7 @@ impl Preprocessor {
         self.define_macro("__STDC__", "1")?;
         self.define_macro("__USER_LABEL_PREFIX__", "")?;
         self.define_macro("__alignof__", "_Alignof")?;
+        self.define_macro("static_assert", "_Static_assert")?;
         self.define_macro("__amd64", "1")?;
         self.define_macro("__amd64__", "1")?;
         self.define_macro("__chibicc__", "1")?;

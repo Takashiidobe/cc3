@@ -324,13 +324,14 @@ fn default_include_paths(argv0: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let base_dir = argv0.parent().unwrap_or(Path::new("."));
     let base_include = base_dir.join("include");
-    if base_include.is_dir() {
+    // Always include manifest include first for stdarg.h etc.
+    let manifest_include = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("include");
+    if manifest_include.is_dir() {
+        paths.push(manifest_include.clone());
+    }
+    // Also include base_include for generated headers (if different)
+    if base_include.is_dir() && base_include != manifest_include {
         paths.push(base_include);
-    } else {
-        let manifest_include = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("include");
-        if manifest_include.is_dir() {
-            paths.push(manifest_include);
-        }
     }
     paths.push(PathBuf::from("/usr/local/include"));
     paths.push(PathBuf::from("/usr/include/x86_64-linux-gnu"));

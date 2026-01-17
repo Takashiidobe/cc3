@@ -251,6 +251,7 @@ pub enum Keyword {
     ThreadLocal,
     Atomic,
     Attribute,
+    StaticAssert,
 }
 
 impl std::fmt::Display for Keyword {
@@ -300,6 +301,7 @@ impl std::fmt::Display for Keyword {
             Keyword::ThreadLocal => "_Thread_local",
             Keyword::Atomic => "_Atomic",
             Keyword::Attribute => "__attribute__",
+            Keyword::StaticAssert => "_Static_assert",
         };
         f.write_str(text)
     }
@@ -1864,6 +1866,7 @@ fn keyword_map() -> &'static HashMap<&'static str, ()> {
             "__thread",
             "_Atomic",
             "__attribute__",
+            "_Static_assert",
         ];
         let mut map = HashMap::with_capacity(keywords.len());
         for keyword in keywords {
@@ -1923,6 +1926,7 @@ fn convert_keyword(tok: &mut Token, name: &str) {
         "_Thread_local" | "__thread" => Keyword::ThreadLocal,
         "_Atomic" => Keyword::Atomic,
         "__attribute__" => Keyword::Attribute,
+        "_Static_assert" => Keyword::StaticAssert,
         _ => return,
     };
     tok.kind = TokenKind::Keyword(keyword);

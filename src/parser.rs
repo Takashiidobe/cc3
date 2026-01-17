@@ -149,6 +149,12 @@ impl<'a> Parser<'a> {
         self.declare_builtin_functions();
 
         while !self.check_eof() {
+            // Handle _Static_assert at file scope
+            if self.consume_keyword(Keyword::StaticAssert) {
+                self.parse_static_assert()?;
+                continue;
+            }
+
             let mut attr = VarAttr::default();
             let basety = self.parse_declspec(Some(&mut attr))?;
 
@@ -3020,6 +3026,44 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    /// Parse _Static_assert(constant-expression, string-literal);
+    /// C23 also allows _Static_assert(constant-expression); without the message
+    fn parse_static_assert(&mut self) -> CompileResult<()> {
+        let location = self.last_location();
+        self.expect_punct(Punct::LParen)?;
+
+        // Parse constant expression
+        let value = self.const_expr()?;
+
+        // Check for optional message (C11 requires it, C23 makes it optional)
+        let message = if self.consume_punct(Punct::Comma) {
+            // Parse string literal
+            match &self.peek().kind {
+                TokenKind::Str { bytes, .. } => {
+                    let msg = String::from_utf8_lossy(bytes).to_string();
+                    self.pos += 1;
+                    Some(msg)
+                }
+                _ => {
+                    return self.bail_here("expected string literal in _Static_assert");
+                }
+            }
+        } else {
+            None
+        };
+
+        self.expect_punct(Punct::RParen)?;
+        self.expect_punct(Punct::Semicolon)?;
+
+        // Check assertion at compile time
+        if value == 0 {
+            let msg = message.unwrap_or_else(|| "static assertion failed".to_string());
+            return Err(CompileError::at(msg, location));
+        }
+
+        Ok(())
+    }
+
     fn get_common_type(&self, ty1: &Type, ty2: &Type) -> Type {
         if let Some(base) = ty1.base() {
             return Type::Ptr(Box::new(base.clone()));
@@ -3662,6 +3706,12 @@ impl<'a> Parser<'a> {
         self.enter_scope();
         let mut stmts = Vec::new();
         while !self.check_punct(Punct::RBrace) {
+            // Handle _Static_assert in block scope
+            if self.consume_keyword(Keyword::StaticAssert) {
+                self.parse_static_assert()?;
+                continue;
+            }
+
             // Skip labels (e.g., "label:") when checking for typenames
             if self.is_typename() && !matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::Colon))
             {
