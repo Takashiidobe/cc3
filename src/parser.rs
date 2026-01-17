@@ -2927,6 +2927,18 @@ impl<'a> Parser<'a> {
                 self.pos += 1;
                 Ok(expr)
             }
+            TokenKind::Keyword(Keyword::NullPtr) => {
+                let mut expr = self.expr_at(
+                    ExprKind::Num {
+                        value: 0,
+                        fval: 0.0,
+                    },
+                    token.location,
+                );
+                expr.ty = Some(Type::NullPtr);
+                self.pos += 1;
+                Ok(expr)
+            }
             TokenKind::Ident(ref name) if name == "__builtin_reg_class" => {
                 let location = token.location;
                 self.pos += 1;
@@ -3127,6 +3139,13 @@ impl<'a> Parser<'a> {
         }
         if matches!(ty2, Type::Func { .. }) {
             return Type::Ptr(Box::new(ty2.clone()));
+        }
+
+        if matches!(ty1, Type::NullPtr) && ty2.base().is_some() {
+            return ty2.clone();
+        }
+        if matches!(ty2, Type::NullPtr) && ty1.base().is_some() {
+            return ty1.clone();
         }
 
         // Handle complex types

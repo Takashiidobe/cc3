@@ -285,6 +285,7 @@ pub enum Type {
     /// Complex long double - 32 bytes (2x long double)
     LDoubleComplex,
     Enum,
+    NullPtr,
     Ptr(Box<Type>),
     Atomic(Box<Type>),
     Func {
@@ -375,6 +376,7 @@ impl Type {
             Type::DoubleComplex => 16,
             Type::LDoubleComplex => 32,
             Type::Enum => 4,
+            Type::NullPtr => 8,
             Type::Ptr(_) => 8,
             Type::Func { .. } => 1,
             Type::Struct {
@@ -447,6 +449,7 @@ impl Type {
             Type::DoubleComplex => 8,
             Type::LDoubleComplex => 16,
             Type::Enum => 4,
+            Type::NullPtr => 8,
             Type::Ptr(_) => 8,
             Type::Func { .. } => 1,
             Type::Struct {
@@ -597,7 +600,8 @@ pub fn is_compatible(t1: &Type, t2: &Type) -> bool {
         | (FloatComplex, FloatComplex)
         | (DoubleComplex, DoubleComplex)
         | (LDoubleComplex, LDoubleComplex)
-        | (Enum, Enum) => true,
+        | (Enum, Enum)
+        | (NullPtr, NullPtr) => true,
         (Ptr(base1), Ptr(base2)) => is_compatible(base1, base2),
         (
             Func {

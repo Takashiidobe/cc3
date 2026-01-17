@@ -1837,6 +1837,23 @@ impl Codegen {
             return;
         }
 
+        if matches!(from, Type::NullPtr) {
+            match to {
+                Type::Ptr(_) | Type::NullPtr => {
+                    self.emit_line("  mov $0, %rax");
+                    return;
+                }
+                Type::Bool => {
+                    self.emit_line("  mov $0, %eax");
+                    return;
+                }
+                _ => {}
+            }
+        }
+        if matches!(to, Type::NullPtr) {
+            return;
+        }
+
         // Handle complex type conversions
         if from.is_complex() || to.is_complex() {
             self.cast_complex(from, to);

@@ -2,5 +2,5 @@
 source: tests/codegen.rs
 expression: "&mine"
 ---
-stdout: "t => 1\nf => 0\n"
+stdout: "t => 1\nf => 0\np == nullptr => 1\np != nullptr => 0\n"
 status: 0
