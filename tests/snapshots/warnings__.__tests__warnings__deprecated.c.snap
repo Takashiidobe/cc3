@@ -1,0 +1,6 @@
+---
+source: tests/warnings.rs
+expression: "&log"
+---
+stderr: "warning: 'old_func' is deprecated\n  --> ./tests/warnings/deprecated.c:4:10\n    |\n  4 |   return old_func();\n    |          ^\n"
+status: 0

@@ -2,5 +2,5 @@
 source: tests/codegen.rs
 expression: "&mine"
 ---
-stdout: "t => 1\nf => 0\np == nullptr => 1\np != nullptr => 0\nbin => 42\ndec => 1000000\nhex => 65535\nt1 => 8\nt2 => 8\nx => 2\nx => 5\nx => 11\n"
+stdout: "t => 1\nf => 0\np == nullptr => 1\np != nullptr => 0\nbin => 42\ndec => 1000000\nhex => 65535\nt1 => 8\nt2 => 8\nold_func() => 9\nold_func2() => 10\nx => 2\nx => 5\nx => 11\n"
 status: 0

@@ -1,6 +1,8 @@
 #include "test.h"
 
 [[noreturn]] void die(void) { for (;;) {} }
+[[deprecated("use new_func")]] int old_func(void) { return 9; }
+[[deprecated]] int old_func2(void) { return 10; }
 
 int main(void) {
   bool t = true;
@@ -25,6 +27,8 @@ int main(void) {
   typeof_unqual(base) t2 = t1;
   ASSERT(8, t1);
   ASSERT(8, t2);
+  ASSERT(9, old_func());
+  ASSERT(10, old_func2());
 
 #define FOO 1
 #define BAR 1

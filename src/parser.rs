@@ -67,6 +67,7 @@ struct VarAttr {
     is_inline: bool,
     is_tls: bool,
     is_noreturn: bool,
+    is_deprecated: bool,
     align: i32,
 }
 
@@ -490,6 +491,11 @@ impl<'a> Parser<'a> {
                         attr.is_noreturn = true;
                     }
                 }
+                if name == "deprecated" {
+                    if let Some(attr) = attr.as_deref_mut() {
+                        attr.is_deprecated = true;
+                    }
+                }
 
                 if self.consume_punct(Punct::LParen) {
                     let mut depth = 1i32;
@@ -577,6 +583,9 @@ impl<'a> Parser<'a> {
             // Update is_definition if this is a definition
             if is_definition {
                 self.globals[idx].is_definition = true;
+                if attr.is_deprecated {
+                    self.globals[idx].is_deprecated = true;
+                }
             }
         }
 
@@ -584,7 +593,9 @@ impl<'a> Parser<'a> {
             // Function declaration - no body
             let is_static = attr.is_static || (attr.is_inline && !attr.is_extern);
             if existing_fn_idx.is_none() {
-                self.new_function_decl(name, ty, is_static, attr.is_inline);
+                self.new_function_decl(name, ty, is_static, attr.is_inline, attr.is_deprecated);
+            } else if attr.is_deprecated {
+                self.globals[existing_fn_idx.unwrap()].is_deprecated = true;
             }
             return Ok(());
         }
@@ -620,7 +631,13 @@ impl<'a> Parser<'a> {
         // Ensure the function is visible for recursive calls.
         let is_static = attr.is_static || (attr.is_inline && !attr.is_extern);
         if existing_fn_idx.is_none() {
-            self.new_function_decl(name.clone(), ty.clone(), is_static, attr.is_inline);
+            self.new_function_decl(
+                name.clone(),
+                ty.clone(),
+                is_static,
+                attr.is_inline,
+                attr.is_deprecated,
+            );
         }
         self.fn_refs.entry(name.clone()).or_default();
         let prev_fn = self.current_fn.take();
@@ -685,6 +702,7 @@ impl<'a> Parser<'a> {
             stack_size,
             is_static,
             attr.is_inline,
+            attr.is_deprecated,
         );
         Ok(())
     }
@@ -724,6 +742,9 @@ impl<'a> Parser<'a> {
             self.globals[var_idx].is_definition = !attr.is_extern;
             self.globals[var_idx].is_static = attr.is_static;
             self.globals[var_idx].is_tls = attr.is_tls;
+            if attr.is_deprecated {
+                self.globals[var_idx].is_deprecated = true;
+            }
             if attr.align != 0 {
                 self.globals[var_idx].align = attr.align;
             }
@@ -1256,6 +1277,9 @@ impl<'a> Parser<'a> {
                 // but are scoped locally with the user-visible name.
                 let idx = self.new_anon_gvar(ty.clone());
                 self.globals[idx].is_static = true;
+                if attr.is_deprecated {
+                    self.globals[idx].is_deprecated = true;
+                }
                 self.push_scope_var_named(name.clone(), idx, false);
 
                 if self.consume_punct(Punct::Assign) {
@@ -1265,6 +1289,9 @@ impl<'a> Parser<'a> {
             }
 
             let idx = self.new_lvar(name, ty.clone());
+            if attr.is_deprecated {
+                self.locals[idx].is_deprecated = true;
+            }
             if attr.align != 0 {
                 self.locals[idx].align = attr.align;
             }
@@ -3069,6 +3096,17 @@ impl<'a> Parser<'a> {
                 let name = name.clone();
                 let expr = if let Some(scope) = self.find_var_scope(&name) {
                     if let Some(idx) = scope.idx {
+                        let obj = if scope.is_local {
+                            &self.locals[idx]
+                        } else {
+                            &self.globals[idx]
+                        };
+                        if obj.is_deprecated {
+                            self.warn_at(
+                                token.location,
+                                format!("'{}' is deprecated", obj.name),
+                            );
+                        }
                         self.expr_at(
                             ExprKind::Var {
                                 idx,
@@ -3090,8 +3128,17 @@ impl<'a> Parser<'a> {
                         self.bail_at(token.location, "undefined variable")?
                     }
                 } else if let Some((idx, obj)) = self.find_global_idx(&name) {
-                    if obj.is_function {
-                        self.record_function_ref(&obj.name.clone());
+                    let obj_name = obj.name.clone();
+                    let is_function = obj.is_function;
+                    let is_deprecated = obj.is_deprecated;
+                    if is_function {
+                        self.record_function_ref(&obj_name);
+                    }
+                    if is_deprecated {
+                        self.warn_at(
+                            token.location,
+                            format!("'{}' is deprecated", obj_name),
+                        );
                     }
                     self.expr_at(
                         ExprKind::Var {
@@ -3427,6 +3474,49 @@ impl<'a> Parser<'a> {
         CompileError::at(message, location)
     }
 
+    fn warn_at(&self, location: SourceLocation, message: impl Into<String>) {
+        let message = message.into();
+        eprintln!("warning: {message}");
+
+        let Some(file) = crate::lexer::get_input_file(location.file_no) else {
+            return;
+        };
+        let line_text = Self::line_at_byte(&file.contents, location.byte);
+        let width = location.line.to_string().len().max(3);
+
+        eprintln!(
+            "  --> {}:{}:{}",
+            file.display_name, location.line, location.column
+        );
+        eprintln!("{:>width$} |", "", width = width);
+        if let Some(text) = line_text {
+            eprintln!("{:>width$} | {}", location.line, text, width = width);
+            let caret_width =
+                crate::lexer::display_width(text, location.column.saturating_sub(1));
+            let caret_pad = " ".repeat(caret_width);
+            eprintln!("{:>width$} | {}^", "", caret_pad, width = width);
+        }
+    }
+
+    fn line_at_byte(contents: &str, byte: usize) -> Option<&str> {
+        if contents.is_empty() {
+            return None;
+        }
+        let bytes = contents.as_bytes();
+        let pos = byte.min(bytes.len());
+        let start = bytes[..pos]
+            .iter()
+            .rposition(|&b| b == b'\n')
+            .map(|idx| idx + 1)
+            .unwrap_or(0);
+        let end = bytes[pos..]
+            .iter()
+            .position(|&b| b == b'\n')
+            .map(|idx| pos + idx)
+            .unwrap_or(bytes.len());
+        Some(&contents[start..end])
+    }
+
     fn err_expected(&self, expected: impl Into<String> + fmt::Display) -> CompileError {
         let found = self.token_desc(self.peek());
         self.err_at(
@@ -3684,7 +3774,14 @@ impl<'a> Parser<'a> {
         idx
     }
 
-    fn new_function_decl(&mut self, name: String, ty: Type, is_static: bool, is_inline: bool) {
+    fn new_function_decl(
+        &mut self,
+        name: String,
+        ty: Type,
+        is_static: bool,
+        is_inline: bool,
+        is_deprecated: bool,
+    ) {
         // Extract params from function type
         let params = if let Type::Func { params, .. } = &ty {
             params
@@ -3707,6 +3804,7 @@ impl<'a> Parser<'a> {
             is_static,
             is_inline,
             is_root: !(is_static && is_inline),
+            is_deprecated,
             params,
             ..Default::default()
         });
@@ -3725,6 +3823,7 @@ impl<'a> Parser<'a> {
         stack_size: i32,
         is_static: bool,
         is_inline: bool,
+        is_deprecated: bool,
     ) {
         // Check if function already exists (as a declaration)
         if let Some(idx) = self.find_global_by_name(&name) {
@@ -3734,6 +3833,9 @@ impl<'a> Parser<'a> {
             existing.is_definition = true;
             existing.is_static = is_static;
             existing.is_inline = is_inline;
+            if is_deprecated {
+                existing.is_deprecated = true;
+            }
             existing.params = params;
             existing.body = body;
             existing.locals = locals;
@@ -3751,6 +3853,7 @@ impl<'a> Parser<'a> {
                 is_static,
                 is_inline,
                 is_root: !(is_static && is_inline),
+                is_deprecated,
                 params,
                 body,
                 locals,

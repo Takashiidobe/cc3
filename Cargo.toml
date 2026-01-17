@@ -25,4 +25,6 @@ harness = false
 name = "diagnostics"
 harness = false
 
-
+[[test]]
+name = "warnings"
+harness = false

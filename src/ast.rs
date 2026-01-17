@@ -231,6 +231,7 @@ pub struct Obj {
     pub is_live: bool,
     pub is_root: bool,
     pub is_readonly: bool,
+    pub is_deprecated: bool,
     pub refs: Vec<String>,
 
     // Global variable
