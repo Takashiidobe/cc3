@@ -66,6 +66,7 @@ struct VarAttr {
     is_extern: bool,
     is_inline: bool,
     is_tls: bool,
+    is_noreturn: bool,
     align: i32,
 }
 
@@ -228,7 +229,11 @@ impl<'a> Parser<'a> {
         let mut saw_typename = false;
         let mut is_atomic_qualifier = false;
 
-        while self.is_typename() {
+        while self.is_typename() || self.peek_is_attribute() {
+            if self.peek_is_attribute() {
+                self.parse_attributes(attr.as_deref_mut())?;
+                continue;
+            }
             saw_typename = true;
 
             // Handle storage class specifiers
@@ -446,6 +451,69 @@ impl<'a> Parser<'a> {
             TokenKind::Ident(_) => self.find_typedef(token).is_some(),
             _ => false,
         }
+    }
+
+    fn peek_is_attribute(&self) -> bool {
+        matches!(self.peek().kind, TokenKind::Punct(Punct::LBracket))
+            && matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::LBracket))
+    }
+
+    fn parse_attributes(&mut self, mut attr: Option<&mut VarAttr>) -> CompileResult<()> {
+        while self.peek_is_attribute() {
+            self.expect_punct(Punct::LBracket)?;
+            self.expect_punct(Punct::LBracket)?;
+
+            let mut first = true;
+            while !(matches!(self.peek().kind, TokenKind::Punct(Punct::RBracket))
+                && matches!(self.peek_n(1).kind, TokenKind::Punct(Punct::RBracket)))
+            {
+                if !first {
+                    self.expect_punct(Punct::Comma)?;
+                }
+                first = false;
+
+                let token = self.peek().clone();
+                let name = match token.kind {
+                    TokenKind::Ident(name) => {
+                        self.pos += 1;
+                        name
+                    }
+                    TokenKind::Keyword(keyword) => {
+                        self.pos += 1;
+                        keyword.to_string()
+                    }
+                    _ => self.bail_here("invalid attribute")?,
+                };
+
+                if name == "noreturn" {
+                    if let Some(attr) = attr.as_deref_mut() {
+                        attr.is_noreturn = true;
+                    }
+                }
+
+                if self.consume_punct(Punct::LParen) {
+                    let mut depth = 1i32;
+                    while depth > 0 {
+                        if matches!(self.peek().kind, TokenKind::Eof) {
+                            self.bail_here("unterminated attribute")?;
+                        }
+                        if self.consume_punct(Punct::LParen) {
+                            depth += 1;
+                            continue;
+                        }
+                        if self.consume_punct(Punct::RParen) {
+                            depth -= 1;
+                            continue;
+                        }
+                        self.pos += 1;
+                    }
+                }
+            }
+
+            self.expect_punct(Punct::RBracket)?;
+            self.expect_punct(Punct::RBracket)?;
+        }
+        Ok(())
     }
 
     fn consume_type_qualifier(&mut self) -> bool {

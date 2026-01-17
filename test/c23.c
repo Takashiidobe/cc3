@@ -1,5 +1,7 @@
 #include "test.h"
 
+[[noreturn]] void die(void) { for (;;) {} }
+
 int main(void) {
   bool t = true;
   bool f = false;
